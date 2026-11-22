@@ -21,6 +21,9 @@ import { once } from 'events';
 import { openBotRegistry, type BotRow } from './bot-registry';
 import { BotMirror, readBotMirrorHeader } from './bot-mirror';
 import { openBotModels, openBotRuntime, type BotRuntime, type HubApi, type SessionsPort } from './bot-runtime';
+import { IDLE_ROLLOVER_LOG, appendDecisionLog } from './bot-idle-rollover';
+import { listRoutines } from './routines';
+import { nextScheduledRun } from './routine-runner';
 import { claimBotRelayWhenFree } from './bot-supervisor';
 import { codeBuild } from './code-build';
 import { BOT_CAPABILITIES } from './session-capabilities';
@@ -73,6 +76,30 @@ const hubApi: HubApi = async (pathname, body) => {
   if (!response.ok) throw new Error(isRecord(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status} from ${pathname}`);
   return data;
 };
+
+/**
+ * The bot's next scheduled routine run from `from` on, read from pi-dish's routine store on this host as its scheduler
+ * reads it: a run owed this minute, a catch-up included, is due now. Null when none is.
+ */
+function nextRoutineRun(botId: string, from: number): number | null {
+  let next: number | null = null;
+  for (const routine of listRoutines()) {
+    if (routine.bot !== botId) continue;
+    const at = nextScheduledRun(routine, from);
+    if (at !== null && (next === null || at < next)) next = at;
+  }
+  return next;
+}
+
+/** What a change of `~/.pi/dish/settings.json` shows: its modification time and size. */
+function settingsStamp(): string {
+  try {
+    const stats = fs.statSync(path.join(dishDir(), 'settings.json'));
+    return `${stats.mtimeMs}:${stats.size}`;
+  } catch {
+    return 'missing';
+  }
+}
 
 async function main(): Promise<void> {
   // The code this process loaded, read before a deploy can change it further.
@@ -325,6 +352,11 @@ async function main(): Promise<void> {
     emit: broadcast,
     changed: writeClaim,
     log,
+    // Settings and cache TTL overrides are read from ~/.pi/dish/settings.json at each decision (the defaults).
+    idleRollover: {
+      nextRoutineAt: from => nextRoutineRun(bot.id, from),
+      record: entry => appendDecisionLog(path.join(botDir, IDLE_ROLLOVER_LOG), entry),
+    },
   });
 
   socketPath = relaySocketPath(bot.id);
@@ -343,12 +375,23 @@ async function main(): Promise<void> {
   socketReady = true;
   writeClaim();
   log(`bot ${bot.name} (${bot.id}) on ${bot.model}, build ${build}, relay listening on ${socketPath}`);
-  // A rename by the user, by a bot or by an undo shows in the session list and the transcript.
+  // A rename by the user, by a bot or by an undo shows in the session list and the transcript. A change of settings,
+  // or of the bot's status, model or name (per-bot settings may name it), plans the idle rollover again: a skip
+  // disarms its timer, and a pause or model change ends a draft in flight.
+  let settings = settingsStamp();
+  let row = `${bot.status}:${bot.model}:${bot.name}`;
   setInterval(() => {
-    let name: string;
-    try { name = loadBot().name; } catch { return; }
-    if (name === mirror.name) return;
-    mirror.appendName(mirror.lastEntryId, name);
+    let current: BotRow;
+    try { current = loadBot(); } catch { return; }
+    const nextSettings = settingsStamp();
+    const nextRow = `${current.status}:${current.model}:${current.name}`;
+    if (nextSettings !== settings || nextRow !== row) {
+      settings = nextSettings;
+      row = nextRow;
+      runtime?.reconsiderIdle();
+    }
+    if (current.name === mirror.name) return;
+    mirror.appendName(mirror.lastEntryId, current.name);
     writeClaim();
   }, 3_000).unref();
 }

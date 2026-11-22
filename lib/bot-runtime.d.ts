@@ -5,6 +5,7 @@ import type { BotPlace, BotRow } from './bot-registry';
 import type { BotMirror } from './bot-mirror';
 import { type KnowledgeScope } from './knowledge';
 import type { ProtocolRecord } from './wire-protocol';
+import { type CacheRetentionConfig } from './cache-retention';
 /** The notebook's cap, in UTF-8 bytes. */
 export declare const NOTEBOOK_MAX_BYTES: number;
 /** Total UTF-8 byte cap for injected `<knowledge-index>` content (shared + bot combined). */
@@ -70,6 +71,29 @@ export interface ClosedWindow {
     closedAt: string;
     forced: boolean;
     notebookUnsaved?: boolean;
+    /** Closed by the idle rollover, from a notebook drafted before the prompt cache expired. */
+    idle?: boolean;
+}
+/** The one idle rollover of a context window: its draft, and what came of it. */
+export interface IdleAttempt {
+    /** The context head (its head marker's entry id, 0 before the first) it was made in: the once-per-window key. */
+    head: number;
+    /** The newest entry when the draft started: the window is closed only if it is still the newest. */
+    latest: number;
+    /** The notebook the draft was shown (`notebookDigest`): it is applied only over that notebook. */
+    notebookDigest: string;
+    /** The window's number, for the log. */
+    window: number;
+    requestedAt: number;
+    expiresAt: number;
+    /** The fork the notebook is drafted in. */
+    fork: Durable.ConversationId;
+    result?: 'rolled-over' | 'not-rolled-over';
+    /** Why it did not roll over. */
+    reason?: string;
+    resultAt?: number;
+    /** The next real input after a rollover was logged. */
+    returned?: boolean;
 }
 export interface BotMemory {
     notebook: string;
@@ -77,6 +101,7 @@ export interface BotMemory {
     notebookSavedIn: number;
     /** Window index (`windows.length`) that already received its one 90%-limit rescue turn. */
     limitRescueIn?: number;
+    idleAttempt?: IdleAttempt;
     windows: ClosedWindow[];
     workers: Record<string, WorkerRecord>;
 }
@@ -113,13 +138,19 @@ export interface HandoffInput {
     forced: boolean;
     /** True when a forced rollover closed a window whose notebook was never saved during that window. */
     notebookUnsaved?: boolean;
+    /** True when pi-dish opened the window while the bot was idle, before the prompt cache expired. */
+    idle?: boolean;
 }
+/** An idle rollover's handoff quotes at most this much of the latest request; history has the rest. */
+export declare const IDLE_HANDOFF_REQUEST_CHARS = 1500;
+/** At most `chars` code units of `text`, never ending between the two halves of a surrogate pair. */
+export declare function cutText(text: string, chars: number): string;
 /**
  * The first message of a new window: what the bot needs that its notebook does not hold. The latest request is
  * shown with what became of it: a rollover the bot made while handling it is done, and must not be read as a request
- * to roll over again.
+ * to roll over again. An idle rollover quotes only the start of a long request, so the new window stays small.
  */
-export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved }: HandoffInput): string;
+export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved, idle }: HandoffInput): string;
 /** A sub-bot's start, written by its parent into the sub-bot's directory and read once by its first relay. */
 export declare const FORK_SEED = "fork.json";
 /** A sub-bot that starts from a copy of its parent's conversation. */
@@ -193,6 +224,26 @@ export interface BotRuntimeOptions {
     scriptTimeoutMs?: number;
     /** Where every bot's directory lives: a sub-bot's start is written into its own. */
     botsDir: string;
+    /** The pre-expiry idle rollover's inputs and its decision log; each has a default but `record`. */
+    idleRollover?: IdleRolloverPorts;
+}
+/** One line of the idle-rollover decision log. */
+export type IdleRolloverRecord = Record<string, string | number | boolean | null>;
+export interface IdleRolloverPorts {
+    /** `~/.pi/dish/settings.json`, read at each decision so a change applies from the next one. */
+    settings?(): unknown;
+    /** The cache TTL overrides from the same file. */
+    cacheRetention?(): CacheRetentionConfig;
+    /** When the bot's next scheduled routine run is due, from `from` on; null when none is. */
+    nextRoutineAt?(from: number): number | null;
+    /** Each decision: planned, triggered or skipped and why, the outcome, and how soon the user came back. */
+    record?(entry: IdleRolloverRecord): void;
+    /** The clock and timer the decisions run on; tests advance a fake one. */
+    clock?: {
+        now(): number;
+        setTimeout(callback: () => void, ms: number): unknown;
+        clearTimeout(handle: unknown): void;
+    };
 }
 export interface BotActivity {
     running: boolean;
@@ -212,10 +263,12 @@ export interface BotRuntime {
         contextWindow: number;
         percent: number;
     } | null;
-    /** `followUp` queues behind a busy run; `steer` joins it. */
+    /** `followUp` queues behind a busy run; `steer` joins it, except an idle-rollover run, which it queues behind. */
     prompt(message: string, mode: 'followUp' | 'steer'): Promise<void>;
     /** A room message, a question from another family or the answer to one, posted once per request id. */
     deliver(input: BotInput): Promise<void>;
+    /** Plans the idle rollover again: settings or the bot's registry row changed. */
+    reconsiderIdle(): void;
     abort(): Promise<void>;
     close(): Promise<void>;
 }

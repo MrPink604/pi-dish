@@ -3,7 +3,8 @@
  * bounce queue once it is idle. Each case boots server.js against a temp HOME and an isolated tmux server with bots
  * on; the relay in the pane is the real one, its model scripted by `fixtures/bot-scripted-models.js`
  * (`PI_DISH_BOT_MODELS`). A relay from before builds were recorded is made by removing the build from its lock and
- * its `relay-build` file, which is how the first deploy of this change finds the bots already running.
+ * its `relay-build` file, which is how the first deploy of this change finds the bots already running. The last case
+ * has the real relay ask an idle bot to roll its window over before its prompt cache expires.
  *
  * Run with: npm test
  */
@@ -246,3 +247,45 @@ test('a message sent while a bot\u2019s relay is down starts it and is delivered
   assert.equal(chat(home, before.id).filter(entry => entry.kind === 'user' && entry.text === 'Are you there?').length, 1, 'delivered once');
   await server.stop();
 });
+
+test('an idle bot\u2019s relay drafts its notebook in a fork before its cache expires, opens a new window, and logs each decision',
+  { timeout: 180_000 }, async () => {
+    const home = makeHome();
+    // A 1h cache for Claude Code, and a lead of the whole TTL with a low floor: due as soon as the bot is idle.
+    fs.writeFileSync(path.join(home, '.pi', 'dish', 'settings.json'), JSON.stringify({
+      bots: true,
+      cacheTtlOverrides: [{ provider: 'claude-code', ttl: '1h' }],
+      botIdleRollover: { minTokens: 1_000, leadPercent: 100 },
+    }));
+    const port = await freePort();
+    const server = await boot(home, port);
+    const fleet = await liveFleet(server, home);
+    await prompt(server.base, fleet.route, 'Remember the backups run on tycho.');
+    await until(() => chat(home, fleet.id).some(entry => entry.kind === 'bot-context-window'), 'the relay rolls the idle window over');
+    // The draft is a fork's: the chat holds the answer, then the new window's marker, and nothing of the draft.
+    const kinds = chat(home, fleet.id).map(entry => entry.kind === 'assistant' || entry.kind === 'user' ? `${entry.kind}: ${entry.text}` : entry.kind);
+    const marker = kinds.indexOf('bot-context-window');
+    assert.deepEqual(kinds.slice(marker - 2, marker + 1), [
+      'user: Remember the backups run on tycho.', 'assistant: echo 1: Remember the backups run on tycho.', 'bot-context-window',
+    ]);
+    assert.ok(!kinds.some(kind => kind.includes('opening a fresh window')), 'the draft request is not in the chat');
+
+    // The next message runs in the new window: its handoff and the message.
+    await prompt(server.base, fleet.route, 'What do you remember?');
+    await until(() => said(home, fleet.id, 'echo 2: What do you remember?') === 1, 'answered in the new window');
+
+    const log = path.join(botsDir(home), fleet.id, 'idle-rollover.jsonl');
+    const decisions = () => {
+      try { return fs.readFileSync(log, 'utf8').trim().split('\n').map(line => record(JSON.parse(line))); } catch { return []; }
+    };
+    await until(() => decisions().some(entry => entry.event === 'return'), 'the return is logged');
+    const sequence = decisions().filter(entry => ['triggered', 'rolled-over'].includes(String(entry.outcome)) || entry.event === 'return')
+      .map(entry => [entry.event, entry.outcome ?? null]).slice(0, 3);
+    assert.deepEqual(sequence, [['plan', 'triggered'], ['result', 'rolled-over'], ['return', null]]);
+    const triggered = decisions().find(entry => entry.outcome === 'triggered')!;
+    assert.equal(triggered.trigger, 'expiry');
+    assert.equal(triggered.retention, '1h');
+    assert.equal(decisions().find(entry => entry.outcome === 'rolled-over')?.notebookBytes, Buffer.byteLength('Notes kept over the rollover.'));
+    assert.equal(fs.statSync(log).mode & 0o777, 0o600, 'the log is owner-only');
+    await server.stop();
+  });

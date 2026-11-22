@@ -107,6 +107,43 @@ function closeGraceMs() {
   return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_CLOSE_GRACE_MS;
 }
 
+/**
+ * The run a scheduler tick at `minute` owes a routine, or null. It is the current minute when the schedule matches it;
+ * otherwise the newest slot since the routine last fired or was last edited that never ran, because pi-dish was down
+ * or asleep. Either way it is one run, which counts the slots missed before it.
+ */
+export function routineDueSlot(parsed: ParsedCron, routine: Routine, minute: number): ScheduledSlot | null {
+  const edited = routine.updatedAt ? Math.floor(routine.updatedAt / 60000) * 60000 : -Infinity;
+  const from = Math.max(routine.lastScheduledMinute ?? -Infinity, edited);
+  let late = 0;
+  let since: number | null = null;
+  let last: number | null = null;
+  if (Number.isFinite(from)) {
+    for (let next = nextCronMatch(parsed, new Date(from)); next && next.getTime() < minute && late < LATE_COUNT_CAP;
+      next = nextCronMatch(parsed, next)) {
+      late += 1;
+      since ??= next.getTime();
+      last = next.getTime();
+    }
+  }
+  if (cronMatches(parsed, new Date(minute))) return { at: minute, late, since };
+  return last === null ? null : { at: last, late, since };
+}
+
+/**
+ * When the scheduler next runs `routine` from `at` on: at once when a tick in this minute owes it a run (its minute
+ * matches, or it catches up a missed one), else at its next match. Null for a disabled, unscheduled or unparseable one.
+ */
+export function nextScheduledRun(routine: Routine, at: number): number | null {
+  const cron = routine.schedule?.cron;
+  if (!routine.enabled || !cron) return null;
+  let parsed: ParsedCron;
+  try { parsed = parseCron(cron); } catch { return null; }
+  const minute = Math.floor(at / 60000) * 60000;
+  if (routine.lastScheduledMinute !== minute && routineDueSlot(parsed, routine, minute)) return at;
+  return nextCronMatch(parsed, new Date(at))?.getTime() ?? null;
+}
+
 export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   const {
     createSession,
@@ -457,29 +494,6 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   }
 
   /**
-   * The run a tick owes a routine, or null. It is the current minute when the schedule matches it; otherwise the
-   * newest slot since the routine last fired or was last edited that never ran, because pi-dish was down or asleep.
-   * Either way it is one run, which counts the slots missed before it.
-   */
-  function dueSlot(parsed: ParsedCron, routine: Routine, minute: number): ScheduledSlot | null {
-    const edited = routine.updatedAt ? Math.floor(routine.updatedAt / 60000) * 60000 : -Infinity;
-    const from = Math.max(routine.lastScheduledMinute ?? -Infinity, edited);
-    let late = 0;
-    let since: number | null = null;
-    let last: number | null = null;
-    if (Number.isFinite(from)) {
-      for (let next = nextCronMatch(parsed, new Date(from)); next && next.getTime() < minute && late < LATE_COUNT_CAP;
-        next = nextCronMatch(parsed, next)) {
-        late += 1;
-        since ??= next.getTime();
-        last = next.getTime();
-      }
-    }
-    if (cronMatches(parsed, new Date(minute))) return { at: minute, late, since };
-    return last === null ? null : { at: last, late, since };
-  }
-
-  /**
    * Fires each routine its schedule owes a run, once: a run missed while pi-dish was down fires once when it is
    * back, however many slots it missed. `lastScheduledMinute` persists before the fire so a restart can't double-run.
    */
@@ -496,7 +510,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       } catch {
         continue;
       }
-      const slot = dueSlot(parsed, routine, minute);
+      const slot = routineDueSlot(parsed, routine, minute);
       if (!slot) continue;
       store.markScheduled(routine.id, minute);
       const source = slot.late

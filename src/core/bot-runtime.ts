@@ -38,6 +38,19 @@ import {
 } from './knowledge';
 import { sessionRefAliases } from './helper-refs';
 import type { ProtocolRecord } from './wire-protocol';
+import { loadCacheRetentionConfig, type CacheRetentionConfig } from './cache-retention';
+import { readDishSettings } from './dish-store';
+import {
+  composeIdleDraftRequest,
+  idleRolloverConfig,
+  notebookDigest,
+  notebookShrinkRefusal,
+  parseNotebookDraft,
+  planIdleRollover,
+  windowCacheExpiry,
+  type IdleRolloverConfig,
+  type IdleRolloverPlan,
+} from './bot-idle-rollover';
 
 /** The notebook's cap, in UTF-8 bytes. */
 export const NOTEBOOK_MAX_BYTES = 16 * 1024;
@@ -208,6 +221,30 @@ export interface ClosedWindow {
   closedAt: string;
   forced: boolean;
   notebookUnsaved?: boolean;
+  /** Closed by the idle rollover, from a notebook drafted before the prompt cache expired. */
+  idle?: boolean;
+}
+
+/** The one idle rollover of a context window: its draft, and what came of it. */
+export interface IdleAttempt {
+  /** The context head (its head marker's entry id, 0 before the first) it was made in: the once-per-window key. */
+  head: number;
+  /** The newest entry when the draft started: the window is closed only if it is still the newest. */
+  latest: number;
+  /** The notebook the draft was shown (`notebookDigest`): it is applied only over that notebook. */
+  notebookDigest: string;
+  /** The window's number, for the log. */
+  window: number;
+  requestedAt: number;
+  expiresAt: number;
+  /** The fork the notebook is drafted in. */
+  fork: Durable.ConversationId;
+  result?: 'rolled-over' | 'not-rolled-over';
+  /** Why it did not roll over. */
+  reason?: string;
+  resultAt?: number;
+  /** The next real input after a rollover was logged. */
+  returned?: boolean;
 }
 
 export interface BotMemory {
@@ -216,6 +253,7 @@ export interface BotMemory {
   notebookSavedIn: number;
   /** Window index (`windows.length`) that already received its one 90%-limit rescue turn. */
   limitRescueIn?: number;
+  idleAttempt?: IdleAttempt;
   windows: ClosedWindow[];
   workers: Record<string, WorkerRecord>;
 }
@@ -350,14 +388,26 @@ export interface HandoffInput {
   forced: boolean;
   /** True when a forced rollover closed a window whose notebook was never saved during that window. */
   notebookUnsaved?: boolean;
+  /** True when pi-dish opened the window while the bot was idle, before the prompt cache expired. */
+  idle?: boolean;
+}
+
+/** An idle rollover's handoff quotes at most this much of the latest request; history has the rest. */
+export const IDLE_HANDOFF_REQUEST_CHARS = 1_500;
+
+/** At most `chars` code units of `text`, never ending between the two halves of a surrogate pair. */
+export function cutText(text: string, chars: number): string {
+  if (text.length <= chars) return text;
+  const last = text.charCodeAt(chars - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? chars - 1 : chars);
 }
 
 /**
  * The first message of a new window: what the bot needs that its notebook does not hold. The latest request is
  * shown with what became of it: a rollover the bot made while handling it is done, and must not be read as a request
- * to roll over again.
+ * to roll over again. An idle rollover quotes only the start of a long request, so the new window stays small.
  */
-export function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved }: HandoffInput): string {
+export function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved, idle }: HandoffInput): string {
   const lines = [`[Context window ${windowNumber}. Your identity and notebook are in your instructions; earlier windows are readable with the history tool.]`];
   if (notebookUnsaved) {
     lines.push('', `WARNING: Window ${windowNumber - 1} was closed at the context limit without saving your notebook in that window. Before starting new work, check whether facts from window ${windowNumber - 1} are missing from <notebook> (use history read or search on window ${windowNumber - 1}) and save context_notes.`);
@@ -370,11 +420,17 @@ export function composeHandoff({ windowNumber, closed, tail, request, workers, f
     lines.push('', 'The end of the last window:');
     for (const message of tail) lines.push(`${message.role}: ${message.text}`);
   }
-  lines.push('', `Latest request: ${request ?? '(none)'}`);
+  const excerpt = request !== null && idle && request.length > IDLE_HANDOFF_REQUEST_CHARS ? cutText(request, IDLE_HANDOFF_REQUEST_CHARS) : null;
+  const quoted = excerpt !== null
+    ? `${excerpt}… [the first ${excerpt.length} of ${request!.length} characters; history read ${windowNumber - 1} has all of it]`
+    : request;
+  lines.push('', `Latest request: ${quoted ?? '(none)'}`);
   if (request !== null) {
     lines.push(forced
       ? 'It was answered in the last window, which was then closed at the context limit.'
-      : 'You opened this window with new_context while handling it, and that call is done: this is the new window. Do not call new_context again for it; carry on with whatever else it asks, or tell the user the new window is open.');
+      : idle
+        ? 'It was answered in the last window. While you were idle, pi-dish opened this window before the prompt cache expired, with the notebook you drafted for it: this is the new window. Do not call new_context for it; answer what comes next.'
+        : 'You opened this window with new_context while handling it, and that call is done: this is the new window. Do not call new_context again for it; carry on with whatever else it asks, or tell the user the new window is open.');
   }
   lines.push('', workers.length ? 'Workers you started that are still open (each new answer arrives as a report):' : 'No workers are open.');
   for (const worker of workers) lines.push(`- ${worker.name}: ${worker.ref} (${worker.harness}${worker.host ? ` on ${worker.host}` : ''}, started ${worker.startedAt}${worker.watchEndedAt ? ', no longer watched' : ''})`);
@@ -585,6 +641,28 @@ export interface BotRuntimeOptions {
   scriptTimeoutMs?: number;
   /** Where every bot's directory lives: a sub-bot's start is written into its own. */
   botsDir: string;
+  /** The pre-expiry idle rollover's inputs and its decision log; each has a default but `record`. */
+  idleRollover?: IdleRolloverPorts;
+}
+
+/** One line of the idle-rollover decision log. */
+export type IdleRolloverRecord = Record<string, string | number | boolean | null>;
+
+export interface IdleRolloverPorts {
+  /** `~/.pi/dish/settings.json`, read at each decision so a change applies from the next one. */
+  settings?(): unknown;
+  /** The cache TTL overrides from the same file. */
+  cacheRetention?(): CacheRetentionConfig;
+  /** When the bot's next scheduled routine run is due, from `from` on; null when none is. */
+  nextRoutineAt?(from: number): number | null;
+  /** Each decision: planned, triggered or skipped and why, the outcome, and how soon the user came back. */
+  record?(entry: IdleRolloverRecord): void;
+  /** The clock and timer the decisions run on; tests advance a fake one. */
+  clock?: {
+    now(): number;
+    setTimeout(callback: () => void, ms: number): unknown;
+    clearTimeout(handle: unknown): void;
+  };
 }
 
 export interface BotActivity {
@@ -602,10 +680,12 @@ export interface BotRuntime {
    */
   activity(): Promise<BotActivity>;
   contextUsage(): { tokens: number; contextWindow: number; percent: number } | null;
-  /** `followUp` queues behind a busy run; `steer` joins it. */
+  /** `followUp` queues behind a busy run; `steer` joins it, except an idle-rollover run, which it queues behind. */
   prompt(message: string, mode: 'followUp' | 'steer'): Promise<void>;
   /** A room message, a question from another family or the answer to one, posted once per request id. */
   deliver(input: BotInput): Promise<void>;
+  /** Plans the idle rollover again: settings or the bot's registry row changed. */
+  reconsiderIdle(): void;
   abort(): Promise<void>;
   close(): Promise<void>;
 }
@@ -671,6 +751,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     checkpointWhen: () => true,
   });
   const ReportEntry = 'bot.report';
+  const WorkerWatchTask = 'bot.worker-watch';
   /** Entries that start a run: what a change made in the run is attributed to. */
   const INPUT_KINDS: Readonly<Record<string, true>> = {
     'pi.user': true, [ReportEntry]: true, 'bot.room': true, 'bot.ask': true, 'bot.answer': true, 'bot.purpose': true, 'bot.routine': true, 'bot.ci': true, 'bot.limit': true,
@@ -710,14 +791,18 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     return found;
   }
 
-  /** Every entry, oldest first, split into windows at each reset. */
+  /**
+   * Every entry, oldest first, split into windows at each reset. A reset as the very first entry opens window 1: a
+   * forked sub-bot's transcript starts with its parent's reset, and its first window is the one it inherited, as its
+   * window counter (`memory.windows`) and its handoffs number it.
+   */
   async function allWindows(): Promise<Durable.EntryRecord[][]> {
     const windows: Durable.EntryRecord[][] = [[]];
     let cursor: Durable.Cursor | undefined;
     do {
       const page = await conversation().entries({ order: 'ascending' }, 500, cursor, ctx);
       for (const entry of page.items) {
-        if (entry.kind === 'pi.reset') windows.push([]);
+        if (entry.kind === 'pi.reset' && windows.at(-1)!.length) windows.push([]);
         windows.at(-1)!.push(entry);
       }
       cursor = page.next;
@@ -751,39 +836,71 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     return formatted.bot || formatted.shared ? formatted : null;
   }
 
-  /** Closes the current window and fixes the next one's instructions; returns its handoff. */
+  /** The committed context head: its head marker's entry id, or 0 before the first. */
+  async function contextHead(tx: Durable.Tx): Promise<number> {
+    return (await tx.latestHeadMarker(conversation().id))?.id ?? 0;
+  }
+
+  /** The `pi.reset` write that opens a window, as `Conversation.reset()` makes it; `data` says how it was opened. */
+  function resetWrite(handoff: string, data?: Durable.JsonObject): Durable.SubmissionDraft {
+    return {
+      type: 'write',
+      entry: { kind: 'pi.reset', head: 'self', model: [{ role: 'user', content: handoff, timestamp: Date.now() }], ...(data ? { data } : {}) },
+    };
+  }
+
+  /**
+   * Closes the current window and fixes the next one's instructions; returns its handoff. With `place`, the reset is
+   * admitted in this same commit before its first table write: the close, the notebook, the instructions and the new
+   * window land together or not at all. `notebook` replaces the notebook as part of the close.
+   */
   async function rollover(tx: Durable.Tx, conversationId: Durable.ConversationId, line: string, forced: boolean,
-    window: readonly Durable.EntryRecord[], knowledgeIndex: KnowledgeIndexes | null = null): Promise<string> {
+    window: readonly Durable.EntryRecord[], knowledgeIndex: KnowledgeIndexes | null = null,
+    close: { notebook?: string; idle?: boolean; place?: (handoff: string) => Promise<void> } = {}): Promise<string> {
     const memory = await tx.doc(MemoryDoc, conversationId);
+    if (close.notebook !== undefined) {
+      memory.notebook = close.notebook;
+      memory.notebookSavedIn = memory.windows.length;
+    }
     const notebookUnsaved = forced && memory.notebookSavedIn !== memory.windows.length;
     memory.windows.push({
       line: line.trim().slice(0, 300) || '(no summary)',
       closedAt: new Date().toISOString(),
       forced,
       ...(notebookUnsaved ? { notebookUnsaved: true } : {}),
+      ...(close.idle ? { idle: true } : {}),
     });
+    const request = window.find(entry => Object.hasOwn(INPUT_KINDS, entry.kind));
+    const requestText = request ? messageText(entryMessage(request)) : null;
+    // An idle handoff quotes the latest request once, as the latest request (its start, if long), not in the tail too.
+    const quotedBelow = close.idle && requestText !== null;
+    const tail = window
+      .filter(entry => Object.hasOwn(INPUT_KINDS, entry.kind) || entry.kind === 'pi.assistant')
+      .map(entry => ({
+        role: roleOf(entry.kind),
+        text: quotedBelow && entry === request ? '(the latest request, quoted below)' : messageText(entryMessage(entry)).trim(),
+      }))
+      .filter(message => message.text)
+      .slice(0, TAIL_MESSAGES)
+      .reverse()
+      .map(message => ({ ...message, text: message.text.length > TAIL_MESSAGE_CHARS ? `${cutText(message.text, TAIL_MESSAGE_CHARS)}…` : message.text }));
+    const handoff = composeHandoff({
+      windowNumber: memory.windows.length + 1,
+      closed: memory.windows,
+      tail,
+      request: requestText,
+      workers: Object.values(memory.workers).filter(worker => !worker.closedAt),
+      forced,
+      notebookUnsaved,
+      idle: close.idle,
+    });
+    await close.place?.(handoff);
     const current = options.loadBot();
     await durable.configure(tx, conversationId, {
       instructions: composeInstructions(current.identity, memory.notebook, current.places, knowledgeIndex),
       thinkingLevel: current.thinking ? current.thinking as Durable.AgentChange['thinkingLevel'] : null,
     });
-    const tail = window
-      .filter(entry => Object.hasOwn(INPUT_KINDS, entry.kind) || entry.kind === 'pi.assistant')
-      .map(entry => ({ role: roleOf(entry.kind), text: messageText(entryMessage(entry)).trim() }))
-      .filter(message => message.text)
-      .slice(0, TAIL_MESSAGES)
-      .reverse()
-      .map(message => ({ ...message, text: message.text.length > TAIL_MESSAGE_CHARS ? `${message.text.slice(0, TAIL_MESSAGE_CHARS)}…` : message.text }));
-    const request = window.find(entry => Object.hasOwn(INPUT_KINDS, entry.kind));
-    return composeHandoff({
-      windowNumber: memory.windows.length + 1,
-      closed: memory.windows,
-      tail,
-      request: request ? messageText(entryMessage(request)) : null,
-      workers: Object.values(memory.workers).filter(worker => !worker.closedAt),
-      forced,
-      notebookUnsaved,
-    });
+    return handoff;
   }
 
   // Workers -----------------------------------------------------------------
@@ -799,7 +916,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   };
   type WatchState = PollState | ReportState;
   const WorkerWatch = durable.defineTask<WatchInput, WatchState, null>({
-    name: 'bot.worker-watch',
+    name: WorkerWatchTask,
     version: 2,
     initial: (input) => ({ phase: 'poll', delayMs: pollMs.first, since: input.since, reports: 0 }),
     // Version 1 ended the watch at its one report, posted as `worker-report:<dispatch>`.
@@ -1280,7 +1397,9 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         const body = messageText(message).trim();
         if (!body || entry.kind === 'pi.system') return [];
         const role = entry.kind.startsWith('bot.') || entry.kind === 'pi.reset' ? roleOf(entry.kind) : String(message?.role ?? entry.kind);
-        return [{ role, text: body }];
+        // An idle rollover's reset keeps the notebook it replaced, so a bad draft can be undone with context_notes.
+        const before = entry.kind === 'pi.reset' && isRecord(entry.data) && typeof entry.data.notebookBefore === 'string' ? entry.data.notebookBefore : '';
+        return before ? [{ role, text: body }, { role: 'notebook before the idle rollover', text: before }] : [{ role, text: body }];
       });
       const line = (message: { role: string; text: string }) => `[${message.role}] ${message.text}`;
       if (args.action === 'windows') {
@@ -1878,22 +1997,56 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     },
   });
 
+  /**
+   * The reminder a request carries from 75% of the window on, after its last message: for that request only, never
+   * stored. Its timestamp is the last answer's, so the same messages always give the same reminder.
+   */
+  function reminderFor(messages: readonly Message[]): Message | null {
+    const lastMsg = messages.at(-1);
+    if (lastMsg?.role === 'user' && messageText(lastMsg).startsWith('[pi-dish: this context window is ')) return null;
+    const last = [...messages].reverse().find(message => message.role === 'assistant');
+    const used = usageTokens(last);
+    if (used < REMINDER_RATIO * windowLimit) return null;
+    const percent = Math.round(used / windowLimit * 100);
+    return {
+      role: 'user',
+      content: `[pi-dish: this context window is ${percent}% full. Save your notebook with context_notes and call new_context at the next natural break; at ${Math.round(FORCED_RATIO * 100)}% the window is closed for you.]`,
+      timestamp: isRecord(last) && typeof last.timestamp === 'number' ? last.timestamp : 0,
+    };
+  }
+
+  /**
+   * The draft in flight: its fork, the arrivals it was planned against, and its request exactly as submitted. Declared
+   * before the hooks, which read it on any request.
+   */
+  let draft: { fork: Durable.Conversation; ingress: number; input: string } | null = null;
+
   const reminder = durable.hook(durable.GenerationTask, {
-    beforeRequest: (request) => {
-      const lastMsg = request.messages.at(-1);
-      if (lastMsg?.role === 'user' && messageText(lastMsg).startsWith('[pi-dish: this context window is ')) return undefined;
-      const last = [...request.messages].reverse().find(message => message.role === 'assistant');
-      const used = usageTokens(last);
-      if (used < REMINDER_RATIO * windowLimit) return undefined;
-      const percent = Math.round(used / windowLimit * 100);
-      // For this request only: the stored transcript, and the cached prefix, are unchanged.
-      const note: Message = {
-        role: 'user',
-        content: `[pi-dish: this context window is ${percent}% full. Save your notebook with context_notes and call new_context at the next natural break; at ${Math.round(FORCED_RATIO * 100)}% the window is closed for you.]`,
-        timestamp: Date.now(),
-      };
-      return { messages: [...request.messages, note] };
+    beforeRequest: (request, api) => {
+      if (api.conversationId === durable.ROOT_CONVERSATION_ID) {
+        // For this request only: the stored transcript, and the cached prefix, are unchanged.
+        const note = reminderFor(request.messages);
+        return note ? { messages: [...request.messages, note] } : undefined;
+      }
+      // The draft's fork: the live conversation's last request, that request's answer, then the draft request. The
+      // live request carried its reminder after its last message, with the cache marker on it; the same reminder goes
+      // back in the same place, so the fork's prefix is that request exactly and reads its cache. The draft request is
+      // the one this relay submitted to this fork, found by its exact text: a live message quoting it is not it.
+      const input = draft?.fork.id === api.conversationId ? draft.input : null;
+      // The last match: the draft request comes after anything copied from the live conversation, even an identical one.
+      const draftAt = input === null ? -1 : request.messages.map(message => message.role === 'user' && messageText(message) === input).lastIndexOf(true);
+      if (draftAt < 1 || request.messages[draftAt - 1].role !== 'assistant') return undefined;
+      const note = reminderFor(request.messages.slice(0, draftAt - 1));
+      if (!note) return undefined;
+      return { messages: [...request.messages.slice(0, draftAt - 1), note, ...request.messages.slice(draftAt - 1)] };
     },
+  });
+
+  // The idle rollover drafts the notebook in a fork of the conversation: there the model may only answer. No tool runs,
+  // so a draft can neither act (spawn, post, change bots) nor change the bot's memory.
+  const draftGuard = durable.hook(durable.ToolTask, {
+    beforeTool: (_call, api) => api.conversationId === durable.ROOT_CONVERSATION_ID ? undefined
+      : { block: 'Tools are off while you draft your notebook: reply only in the Summary / <<<NOTEBOOK … NOTEBOOK>>> form.' },
   });
 
   const BotExtension = durable.defineExtension({
@@ -1901,7 +2054,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     sections: [durable.section('bot-rules', () => PREAMBLE, { tag: false })],
     tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite, botsTool, botUpdate, botCreate, roomPost, roomRead, askBot, scheduleTool],
     tasks: [WorkerWatch],
-    hooks: [reminder],
+    hooks: [reminder, draftGuard],
   });
   const registry = durable.createRegistry();
   registry.install(BotExtension);
@@ -1974,6 +2127,14 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   if (agent.model?.provider !== modelRef.provider || agent.model?.modelId !== modelRef.modelId) {
     await root.configure({ model: modelRef }, ctx);
   }
+  // A draft the last relay left running is abandoned as this one opens: only the relay that started a draft applies it.
+  const abandoned = await root.commit(async (tx) => {
+    const stored = (await tx.doc(MemoryDoc, root!.id)).idleAttempt;
+    return stored ? JSON.parse(JSON.stringify(stored)) as IdleAttempt : null;
+  }, ctx);
+  const leftFork = abandoned && !abandoned.result ? await harness.conversation(abandoned.fork, ctx) : undefined;
+  // `abort` resumes the scheduler itself; the fork's run is marked before it can take a turn.
+  await leftFork?.abort(ctx);
   harness.resume();
   if (seed) {
     // The request id makes the purpose arrive once, also when a crash comes before the start file is gone.
@@ -1995,6 +2156,25 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   let rescueSubmittedIn: number | null = null;
   const calls = new Map<string, { name: string; args: unknown }>();
   const running = new Map<string, { output: string; startedAt: number }>();
+  // Idle rollover: the timer, when the bot went idle, input arriving, the attempt of the current window and its draft.
+  const idlePorts = options.idleRollover ?? {};
+  const clock = idlePorts.clock ?? {
+    now: () => Date.now(),
+    setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms).unref(),
+    clearTimeout: (handle: unknown) => clearTimeout(handle as NodeJS.Timeout),
+  };
+  let idleTimer: unknown = null;
+  /** Bumped by each plan and each disarm, so a plan that finishes after a newer one or a new run does nothing. */
+  let idleGeneration = 0;
+  let idleSince: number | null = null;
+  /** Input being taken, and a count bumped synchronously by each arrival: a plan or draft made before one is void. */
+  let taking = 0;
+  let ingress = 0;
+  let closed = false;
+  /** The newest attempt, as stored in memory. */
+  let attempt: IdleAttempt | null = null;
+  /** Attempt bookkeeping and its log lines, in order. */
+  let idleBook: Promise<void> = Promise.resolve();
 
   function startTool(callId: string, name: string): { output: string; startedAt: number } {
     let slot = running.get(callId);
@@ -2010,6 +2190,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     processed = Math.max(processed, entry.id);
     const message = entryMessage(entry);
     if (!message) return;
+    if (Object.hasOwn(INPUT_KINDS, entry.kind)) noteInput(entry);
     if (entry.kind === 'pi.user') {
       mirror.appendMessage(entry.id, message);
       emit('message_start', { message });
@@ -2017,6 +2198,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     } else if (Object.hasOwn(CUSTOM_TYPES, entry.kind)) {
       if (entry.kind === 'pi.reset') lastUsage = 0;
       const customType = CUSTOM_TYPES[entry.kind];
+      // An idle rollover's reset carries `idleRollover` and the cache expiry it beat in its data.
       const details = isRecord(entry.data) ? entry.data : undefined;
       mirror.appendCustom(entry.id, customType, messageText(message), details);
       emit('message_end', { message: { role: 'custom', customType, content: [{ type: 'text', text: messageText(message) }], ...(details ? { details } : {}), display: true, timestamp: Date.now() } });
@@ -2086,7 +2268,18 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     } while (cursor);
   }
 
-  async function forceRolloverIfFull(opts: { failed?: boolean } = {}): Promise<void> {
+  /**
+   * Forced closes run one at a time: a run's end and a prompt may both find the window at the limit, and the second then
+   * finds it closed (its usage reset). The close itself also checks the head it decided on.
+   */
+  let forcing: Promise<void> = Promise.resolve();
+  function forceRolloverIfFull(opts: { failed?: boolean } = {}): Promise<void> {
+    const turn = forcing.then(() => forceRolloverOnce(opts));
+    forcing = turn.catch(() => {});
+    return turn;
+  }
+
+  async function forceRolloverOnce(opts: { failed?: boolean }): Promise<void> {
     if (lastUsage < FORCED_RATIO * windowLimit) return;
     const failed = opts.failed === true;
     const hardLimit = lastUsage >= HARD_FORCED_RATIO * windowLimit;
@@ -2099,7 +2292,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         memory.limitRescueIn = currentIndex;
         return { kind: 'rescue' as const, windowIndex: currentIndex };
       }
-      return { kind: 'rollover' as const };
+      return { kind: 'rollover' as const, head: await contextHead(tx) };
     }, ctx);
     if (decision.kind === 'pending') return;
     if (decision.kind === 'rescue') {
@@ -2123,14 +2316,396 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     }
     const knowledgeIndex = await readKnowledgeIndex();
     const window = await currentWindow(Number.MAX_SAFE_INTEGER);
-    const handoff = await conversation().commit(
-      tx => rollover(tx, conversation().id, 'Closed at the context limit.', true, window, knowledgeIndex),
-      ctx,
-    );
-    await conversation().reset(handoff, ctx);
+    // The close and its reset land in one commit, and only on the window decided on: when a prompt and a run's end
+    // both reach the limit, the second finds the head moved, or the first's reset queued, and closes nothing.
+    const closedNow = await conversation().commit(async (tx) => {
+      const conversationId = conversation().id;
+      if (await contextHead(tx) !== decision.head) return false;
+      const queued = (await tx.doc(durable.InboxDoc, conversationId)).items;
+      if (queued.some(item => item.mode === 'write' && isRecord(item.entry) && item.entry.kind === 'pi.reset')) return false;
+      await rollover(tx, conversationId, 'Closed at the context limit.', true, window, knowledgeIndex, {
+        place: async (handoff) => { await conversation().submit(tx, resetWrite(handoff)); },
+      });
+      return true;
+    }, ctx);
+    if (!closedNow) return;
     lastUsage = 0;
     rescueSubmittedIn = null;
     log('rolled the context window over at the limit');
+  }
+
+  // Idle rollover ----------------------------------------------------------------
+
+  /** A Node timer's longest delay; a longer wait wakes at it and plans again. */
+  const MAX_TIMER_MS = 2 ** 31 - 1;
+  const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+  async function inspectWork(): Promise<BotActivity & { reportPending: boolean }> {
+    const { tasks, submissions } = await harness.inspect(ctx);
+    type Task = Durable.HarnessInspection['tasks'][number]['record'];
+    const byId = new Map<number, Task>(tasks.map(task => [task.record.id, task.record]));
+    // A task a background task owns is part of that background work.
+    const background = (task: Task | undefined): boolean => !!task && (task.background || (task.owner !== undefined && background(byId.get(task.owner))));
+    return {
+      running: busy || tasks.some(task => !background(task.record)),
+      queued: submissions.some(submission => submission.status === 'queued'),
+      reportPending: tasks.some(({ record }) => isReporting(record)),
+    };
+  }
+
+  /** A worker watch about to post its report. */
+  function isReporting(record: Durable.TaskRecord<JsonValue, JsonValue, JsonValue>): boolean {
+    const checkpoint: unknown = 'checkpoint' in record.state ? record.state.checkpoint : undefined;
+    return record.kind === WorkerWatchTask && isRecord(checkpoint) && checkpoint.phase === 'report';
+  }
+
+  /** The same, read inside a commit: a watch that is due or running in its report phase. */
+  async function reportPendingIn(tx: Durable.Tx): Promise<boolean> {
+    for (const status of ['pending', 'running'] as const) {
+      let cursor: Durable.Cursor | undefined;
+      do {
+        const page = await tx.scanTasks({ conversationId: conversation().id, kind: WorkerWatchTask, status }, 100, cursor);
+        if (page.items.some(isReporting)) return true;
+        cursor = page.next;
+      } while (cursor);
+    }
+    return false;
+  }
+
+  /**
+   * Why the window's last request has no whole answer, read in a commit: its run failed, or the last answer stopped
+   * short (cut off at its output limit, aborted). A handoff would call that request answered. Null when answered.
+   */
+  async function unansweredIn(tx: Durable.Tx): Promise<string | null> {
+    const conversationId = conversation().id;
+    if ((await tx.doc(durable.LiveDoc, conversationId)).runFailure !== undefined) return 'the last run failed, so its request is unanswered';
+    let cursor: Durable.Cursor | undefined;
+    do {
+      const page = await tx.scanEntries({ conversationId, order: 'descending' }, 50, cursor);
+      for (const entry of page.items) {
+        if (entry.kind === 'pi.reset') return null;
+        if (entry.kind !== 'pi.assistant') continue;
+        const message = entryMessage(entry);
+        const stopReason = isRecord(message) ? String(message.stopReason) : 'missing';
+        return stopReason === 'stop' ? null : `the last answer stopped with ${stopReason}, so its request is unanswered`;
+      }
+      cursor = page.next;
+    } while (cursor);
+    return null;
+  }
+
+  function recordIdle(entry: IdleRolloverRecord): void {
+    const line = { at: new Date(clock.now()).toISOString(), bot: bot.id, ...entry };
+    log(`idle rollover ${JSON.stringify(line)}`);
+    try { idlePorts.record?.(line); } catch (error) { log(`idle rollover log failed: ${describe(error)}`); }
+  }
+
+  function planRecord(plan: IdleRolloverPlan): IdleRolloverRecord {
+    return {
+      tokens: plan.tokens, percent: plan.percent, expiresAt: plan.expiresAt === null ? null : new Date(plan.expiresAt).toISOString(),
+      retention: plan.retention, basis: plan.basis, idleMinutes: Math.round(plan.idleMs / 6_000) / 10,
+      ...(plan.action === 'skip' ? { reason: plan.reason } : { trigger: plan.trigger }),
+      ...(plan.action === 'wait' ? { dueAt: new Date(plan.at).toISOString() } : {}),
+    };
+  }
+
+  /** Writes `attempt` as it stands now to memory, in order with the other bookkeeping. */
+  function storeAttempt(): void {
+    if (!attempt) return;
+    const stored: IdleAttempt = { ...attempt };
+    idleBook = idleBook
+      .then(() => conversation().commit(async (tx) => {
+        const memory = await tx.doc(MemoryDoc, conversation().id);
+        // Only the attempt it describes: a newer one is never overwritten by a late update of an older one.
+        if (memory.idleAttempt?.fork !== stored.fork) return;
+        memory.idleAttempt = stored;
+      }, ctx))
+      .catch((error: unknown) => log(`idle rollover bookkeeping failed: ${describe(error)}`));
+  }
+
+  /**
+   * The draft did not become a window, once. Log lines are written before their bookkeeping commit, so a crash between
+   * them may repeat one after a restart; result and return lines carry a `key` to drop such repeats by.
+   */
+  function settleAttempt(reason: string, recovered = false): void {
+    if (!attempt || attempt.result) return;
+    attempt.result = 'not-rolled-over';
+    attempt.reason = reason;
+    attempt.resultAt = clock.now();
+    recordIdle({ event: 'result', key: `${attempt.head}:result`, window: attempt.window, head: attempt.head, outcome: 'not-rolled-over', reason,
+      ...(recovered ? { recovered: true } : {}) });
+    storeAttempt();
+  }
+
+  /** The user came back after a rollover: before the old cache expired, it was early; after, it saved a cold read. */
+  function noteReturn(input: string, at: number, recovered = false): void {
+    if (attempt?.result !== 'rolled-over' || attempt.returned) return;
+    attempt.returned = true;
+    recordIdle({ event: 'return', key: `${attempt.head}:return`, window: attempt.window, input,
+      minutesAfterRollover: Math.round((at - (attempt.resultAt ?? at)) / 6_000) / 10, beforeExpiry: at < attempt.expiresAt,
+      ...(recovered ? { recovered: true } : {}) });
+    storeAttempt();
+  }
+
+  /** Real input reached the transcript: a draft in flight is void, and a rollover learns how soon the user came back. */
+  function noteInput(entry: Durable.EntryRecord): void {
+    ingress++;
+    if (draft) endDraft('input arrived during the draft');
+    noteReturn(entry.kind, clock.now());
+  }
+
+  /** Ends the draft in flight without a window: its fork's run is aborted, and the attempt settles with `reason`. */
+  function endDraft(reason: string): void {
+    const ending = draft;
+    draft = null;
+    ending?.fork.abort(ctx).catch((error: unknown) => log(`idle rollover: aborting the draft failed: ${describe(error)}`));
+    settleAttempt(reason);
+  }
+
+  function disarmIdle(): void {
+    idleGeneration++;
+    if (idleTimer !== null) clock.clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+
+  /** Why this bot may not roll over whatever its window: its registry row, and the model this relay runs. */
+  function ineligibility(): string | null {
+    let row: BotRow;
+    try { row = options.loadBot(); } catch (error) { return `the registry is unreadable: ${describe(error)}`; }
+    if (row.status !== 'active') return `the bot is ${row.status}`;
+    if (row.model !== bot.model) return `the bot's model is now ${row.model}; this relay runs ${bot.model}`;
+    return null;
+  }
+
+  function currentConfig(): IdleRolloverConfig {
+    let row: BotRow = bot;
+    try { row = options.loadBot(); } catch {}
+    return idleRolloverConfig(idlePorts.settings ? idlePorts.settings() : readDishSettings(), row);
+  }
+
+  /** A plan, with what the draft's start checks again: the committed head and newest entry, and the arrivals seen. */
+  interface IdleSnapshot { plan: IdleRolloverPlan; window: number; head: number; latest: number; ingress: number }
+
+  async function planIdle(): Promise<IdleSnapshot> {
+    const seen = ingress;
+    const now = clock.now();
+    const config = currentConfig();
+    const state = await conversation().commit(async (tx) => {
+      const doc = await tx.doc(MemoryDoc, conversation().id);
+      const head = await contextHead(tx);
+      return {
+        window: doc.windows.length, head, latest: (await tx.latestEntryId(conversation().id)) ?? 0, attempted: doc.idleAttempt?.head === head,
+        unanswered: await unansweredIn(tx),
+      };
+    }, ctx);
+    const snapshot = (plan: IdleRolloverPlan): IdleSnapshot => ({ plan, window: state.window, head: state.head, latest: state.latest, ingress: seen });
+    const base = {
+      now, config, windowLimit, attempted: state.attempted, queued: false, reportPending: false, workSinceRollover: true, nextRoutineAt: null,
+    };
+    // Off or ineligible: decided without reading the window.
+    // An unanswered last request (a failed run, an answer cut short): a handoff would call it answered. The next run
+    // that answers clears it.
+    const ineligible = ineligibility() ?? state.unanswered;
+    if (!config.enabled || ineligible) return snapshot(planIdleRollover({ ...base, ineligible, cache: null, tokens: 0, idleSince: now, busy: false }));
+    const entries = (await currentWindow(Number.MAX_SAFE_INTEGER)).reverse();
+    const messages = entries.filter(entry => entry.kind === 'pi.assistant').map(entryMessage);
+    const last = messages.at(-1);
+    const work = await inspectWork();
+    let nextRoutineAt: number | null = null;
+    try { nextRoutineAt = idlePorts.nextRoutineAt?.(now) ?? null; } catch (error) {
+      log(`idle rollover: routines unreadable: ${describe(error)}`);
+    }
+    // The next request reads this model's cache: an answer from another model anchors nothing.
+    const anchored = !isRecord(last) || (last.provider === modelRef.provider && last.model === modelRef.modelId);
+    const lastAt = isRecord(last) && typeof last.timestamp === 'number' ? last.timestamp : now;
+    return snapshot(planIdleRollover({
+      ...base,
+      ineligible: anchored ? null : `the last answer is from ${String(last?.provider)}/${String(last?.model)}, not ${bot.model}`,
+      cache: windowCacheExpiry(messages, idlePorts.cacheRetention ? idlePorts.cacheRetention() : loadCacheRetentionConfig()),
+      tokens: usageTokens(last), idleSince: idleSince ?? lastAt,
+      busy: work.running || taking > 0 || draft !== null, queued: work.queued, reportPending: work.reportPending,
+      workSinceRollover: entries.some(isWork), nextRoutineAt,
+    }));
+  }
+
+  /**
+   * Starts the draft: in one commit, if the window, the transcript, the queue and the worker reports are as planned and
+   * nothing arrived, the attempt is recorded with a fork of the conversation at its newest entry. The fork is asked for
+   * the notebook; the live conversation is not touched. Returns why not, or null.
+   */
+  async function startDraft(snapshot: IdleSnapshot, plan: IdleRolloverPlan): Promise<string | null> {
+    const conversationId = conversation().id;
+    /** The plan still holds: the same window and newest entry, nothing running, queued, reporting or arriving. */
+    const stale = async (tx: Durable.Tx): Promise<string | null> => {
+      const memory = await tx.doc(MemoryDoc, conversationId);
+      if (await contextHead(tx) !== snapshot.head) return 'the window changed';
+      if (memory.idleAttempt?.head === snapshot.head) return 'already tried in this window';
+      if (((await tx.latestEntryId(conversationId)) ?? 0) !== snapshot.latest) return 'the transcript changed since the plan';
+      const unanswered = await unansweredIn(tx);
+      if (unanswered) return unanswered;
+      if ((await tx.doc(durable.LiveDoc, conversationId)).run !== undefined) return 'a turn is running';
+      if ((await tx.doc(durable.InboxDoc, conversationId)).items.length) return 'input is queued';
+      if (await reportPendingIn(tx)) return 'a worker report is being delivered';
+      if (ingress !== snapshot.ingress || taking > 0) return 'input arrived first';
+      return ineligibility() ?? (closed ? 'the relay is closing' : null);
+    };
+    // A fork's commit may not change its source's documents, so the fork and the attempt that names it are two commits;
+    // the second checks the plan again, and a fork it refuses is never asked anything.
+    const forked = await conversation().commit(async (tx) => {
+      const refused = await stale(tx);
+      if (refused) return refused;
+      return (await tx.forkConversation(conversationId, snapshot.latest as Durable.EntryId, { ownership: { kind: 'ownerless' } })).id;
+    }, ctx);
+    if (typeof forked === 'string') return forked;
+    const started = await conversation().commit(async (tx): Promise<{ next: IdleAttempt; notebook: string } | string> => {
+      const refused = await stale(tx);
+      if (refused) return refused;
+      const memory = await tx.doc(MemoryDoc, conversationId);
+      const notebook = String(memory.notebook);
+      const next: IdleAttempt = {
+        head: snapshot.head, latest: snapshot.latest, window: snapshot.window + 1, requestedAt: clock.now(),
+        expiresAt: plan.expiresAt ?? 0, fork: forked, notebookDigest: notebookDigest(notebook),
+      };
+      memory.idleAttempt = next;
+      return { next, notebook };
+    }, ctx);
+    if (typeof started === 'string') return started;
+    attempt = { ...started.next };
+    const fork = await harness.conversation(started.next.fork, ctx);
+    if (!fork) {
+      settleAttempt('the draft\'s fork is missing');
+      return null;
+    }
+    const input = composeIdleDraftRequest(plan, clock.now(), NOTEBOOK_MAX_BYTES, started.notebook);
+    draft = { fork, ingress: snapshot.ingress, input };
+    // Input that arrived since the plan voids the draft now; one arriving later voids it in `noteInput` or `prompt`.
+    if (ingress !== snapshot.ingress || taking > 0) {
+      endDraft('input arrived first');
+      return null;
+    }
+    const submission = await fork.submit({ type: 'input', requestId: 'idle-draft', content: input }, ctx);
+    awaitDraft(fork, submission).catch((error: unknown) => {
+      // A relay that closes leaves its draft to the next one, which abandons it.
+      if (!closed && draft?.fork === fork) endDraft(`the draft failed: ${describe(error)}`);
+    });
+    return null;
+  }
+
+  /** A draft runs at most this long: like a script, it holds the relay from a restart while it runs. */
+  const DRAFT_TIMEOUT_MS = 10 * 60_000;
+
+  async function awaitDraft(fork: Durable.Conversation, submission: Durable.Submission): Promise<void> {
+    // The lib target predates Promise.withResolvers.
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), DRAFT_TIMEOUT_MS).unref(); });
+    const settled = await Promise.race([submission.wait(ctx), timedOut]);
+    clearTimeout(timer);
+    if (draft?.fork !== fork) return;
+    if (settled === 'timeout') return endDraft('the draft took longer than 10 min');
+    if (settled.status !== 'done') return endDraft(`the draft ended ${settled.status}${settled.reason ? `: ${settled.reason}` : ''}`);
+    const answer = (await fork.entries({ minEntryId: settled.answer, maxEntryId: settled.answer }, 1, undefined, ctx)).items[0];
+    const message = answer ? entryMessage(answer) : null;
+    // Only a whole answer: one cut off at its output limit is a fragment of a notebook.
+    const stopReason = isRecord(message) ? String(message.stopReason) : 'missing';
+    if (stopReason !== 'stop') return endDraft(`the draft stopped with ${stopReason}, not a whole answer`);
+    await applyDraft(fork, messageText(message), isRecord(message) && isRecord(message.usage) ? message.usage : {});
+  }
+
+  /**
+   * Opens the new window from the draft, in one commit on the live conversation: only if the attempt is current, the head
+   * and newest entry are those the draft started from, nothing runs, is queued or arrived, and the bot may roll over. The
+   * reset (marked as the idle rollover's), the notebook, the closed window and the instructions land together.
+   */
+  async function applyDraft(fork: Durable.Conversation, text: string, usage: Record<string, unknown>): Promise<void> {
+    const parsed = parseNotebookDraft(text, NOTEBOOK_MAX_BYTES);
+    if ('error' in parsed) return endDraft(parsed.error);
+    const current = draft;
+    const knowledgeIndex = await readKnowledgeIndex();
+    const window = await currentWindow(Number.MAX_SAFE_INTEGER);
+    if (!current || draft !== current || current.fork !== fork) return;
+    const conversationId = conversation().id;
+    const refused = await conversation().commit(async (tx): Promise<string | null> => {
+      const memory = await tx.doc(MemoryDoc, conversationId);
+      const stored = memory.idleAttempt;
+      if (!stored || stored.fork !== fork.id || stored.result) return 'the attempt is no longer current';
+      if (await contextHead(tx) !== stored.head) return 'the window changed during the draft';
+      if (((await tx.latestEntryId(conversationId)) ?? 0) !== stored.latest) return 'input arrived during the draft';
+      if (notebookDigest(String(memory.notebook)) !== stored.notebookDigest) return 'the notebook changed during the draft';
+      const previous = String(memory.notebook);
+      const shrunk = notebookShrinkRefusal(previous, parsed.notebook);
+      if (shrunk) return shrunk;
+      if ((await tx.doc(durable.LiveDoc, conversationId)).run !== undefined) return 'a turn is running';
+      const unanswered = await unansweredIn(tx);
+      if (unanswered) return unanswered;
+      if ((await tx.doc(durable.InboxDoc, conversationId)).items.length) return 'input is queued';
+      if (await reportPendingIn(tx)) return 'a worker report is being delivered';
+      if (ingress !== current.ingress || taking > 0) return 'input arrived during the draft';
+      const ineligible = ineligibility();
+      if (ineligible) return ineligible;
+      if (!currentConfig().enabled) return 'turned off in settings';
+      if (closed) return 'the relay is closing';
+      const settledAttempt: IdleAttempt = { ...JSON.parse(JSON.stringify(stored)) as IdleAttempt, result: 'rolled-over', resultAt: clock.now() };
+      await rollover(tx, conversationId, parsed.summary, false, window, knowledgeIndex, {
+        notebook: parsed.notebook, idle: true,
+        place: async (handoff) => {
+          // The reset keeps the notebook it replaces: `history read` of the new window shows it.
+          const write = resetWrite(handoff, {
+            idleRollover: true, expiresAt: settledAttempt.expiresAt, ...(previous.trim() ? { notebookBefore: previous } : {}),
+          });
+          await conversation().submit(tx, { ...write, requestId: `idle-rollover:${settledAttempt.head}` });
+        },
+      });
+      memory.idleAttempt = settledAttempt;
+      attempt = settledAttempt;
+      return null;
+    }, ctx);
+    if (refused !== null) return endDraft(refused);
+    draft = null;
+    const count = (key: string) => typeof usage[key] === 'number' ? usage[key] : 0;
+    recordIdle({ event: 'result', key: `${attempt?.head}:result`, window: attempt?.window ?? null, head: attempt?.head ?? null,
+      outcome: 'rolled-over', draftCacheRead: count('cacheRead'), draftCacheWrite: count('cacheWrite'), draftInput: count('input'),
+      draftOutput: count('output'), notebookBytes: Buffer.byteLength(parsed.notebook, 'utf8') });
+  }
+
+  /**
+   * Decides at a run's end, at start, on a change of settings or registry row, and when the timer it set fires: arms
+   * the timer, starts a draft, or records why not. Every outcome is logged.
+   */
+  async function considerIdleRollover(source: 'run-end' | 'start' | 'timer' | 'change'): Promise<void> {
+    disarmIdle();
+    const generation = idleGeneration;
+    if (closed) return;
+    const snapshot = await planIdle();
+    if (closed) return;
+    const fields = { event: source === 'timer' ? 'fire' : 'plan', source, window: snapshot.window + 1, ...planRecord(snapshot.plan) };
+    if (generation !== idleGeneration) {
+      return recordIdle({ ...fields, outcome: 'superseded', reason: 'a run started or a newer plan replaced this one' });
+    }
+    const { plan } = snapshot;
+    if (plan.action === 'skip') return recordIdle({ ...fields, outcome: 'skipped' });
+    if (plan.action === 'wait') {
+      const delay = Math.min(MAX_TIMER_MS, Math.max(0, plan.at - clock.now()));
+      idleTimer = clock.setTimeout(() => {
+        idleTimer = null;
+        considerIdleRollover('timer').catch((error: unknown) => log(`idle rollover failed: ${describe(error)}`));
+      }, delay);
+      return recordIdle({ ...fields, outcome: 'armed', wakeAt: new Date(clock.now() + delay).toISOString() });
+    }
+    const refused = await startDraft(snapshot, plan);
+    recordIdle(refused === null ? { ...fields, outcome: 'triggered' } : { ...fields, outcome: 'skipped', reason: refused });
+  }
+
+  /** After the start abandoned any draft: settle it, and log a return this relay missed while it was down. */
+  async function recoverIdleState(stored: IdleAttempt | null): Promise<void> {
+    attempt = stored;
+    if (!attempt) return;
+    // A draft is only ever applied by the relay that started it.
+    if (!attempt.result) settleAttempt('the relay restarted during the draft', true);
+    if (attempt.result === 'rolled-over' && !attempt.returned) {
+      const first = (await currentWindow(Number.MAX_SAFE_INTEGER)).filter(entry => Object.hasOwn(INPUT_KINDS, entry.kind)).at(-1);
+      const sent = first ? entryMessage(first)?.timestamp : undefined;
+      if (first) noteReturn(first.kind, typeof sent === 'number' ? sent : clock.now(), true);
+    }
   }
 
   async function onView(view: Durable.ConversationView): Promise<void> {
@@ -2138,6 +2713,9 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     const busyNow = live.run !== undefined;
     if (busyNow && !busy) {
       busy = true;
+      disarmIdle();
+      // A worker report, routine or answer started a run: the draft's window is no longer the one it read.
+      if (draft) endDraft('a run started during the draft');
       emit('agent_start', {});
       emit('turn_start', {});
     }
@@ -2159,19 +2737,23 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       emit('turn_end', {});
       emit('agent_end', {});
       const through = processed;
-      try { await forceRolloverIfFull({ failed: Boolean(failure) }); } catch (error) { log(`forced rollover failed: ${error instanceof Error ? error.message : String(error)}`); }
-      try { await answerAsks(through); } catch (error) { log(`answer to another bot failed: ${error instanceof Error ? error.message : String(error)}`); }
+      try { await forceRolloverIfFull({ failed: Boolean(failure) }); } catch (error) { log(`forced rollover failed: ${describe(error)}`); }
+      try { await answerAsks(through); } catch (error) { log(`answer to another bot failed: ${describe(error)}`); }
+      idleSince = clock.now();
+      considerIdleRollover('run-end').catch((error: unknown) => log(`idle rollover failed: ${describe(error)}`));
     }
     options.changed();
   }
 
+  try { await recoverIdleState(abandoned); } catch (error) { log(`idle rollover recovery failed: ${describe(error)}`); }
   const watch = await root.watch(ctx, { from: (processed + 1) as Durable.EntryId, min: 50, max: 1000 });
   watch.start(async (call) => {
     if (call.kind !== 'value') return;
     try { await onView(call.value); } catch (error) {
-      log(`view mapping failed: ${error instanceof Error ? error.message : String(error)}`);
+      log(`view mapping failed: ${describe(error)}`);
     }
   });
+  if (!busy) considerIdleRollover('start').catch((error: unknown) => log(`idle rollover failed: ${describe(error)}`));
 
   return {
     get busy() { return busy; },
@@ -2181,28 +2763,43 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       return { tokens: lastUsage, contextWindow: windowLimit, percent: Math.round(lastUsage / windowLimit * 1000) / 10 };
     },
     async activity() {
-      const { tasks, submissions } = await harness.inspect(ctx);
-      type Task = Durable.HarnessInspection['tasks'][number]['record'];
-      const byId = new Map<number, Task>(tasks.map(task => [task.record.id, task.record]));
-      // A task a background task owns is part of that background work.
-      const background = (task: Task | undefined): boolean => !!task && (task.background || (task.owner !== undefined && background(byId.get(task.owner))));
-      return {
-        running: busy || tasks.some(task => !background(task.record)),
-        queued: submissions.some(submission => submission.status === 'queued'),
-      };
+      const { running: active, queued } = await inspectWork();
+      return { running: active, queued };
     },
     async prompt(message, mode) {
-      if (!busy) await forceRolloverIfFull();
-      await conversation().submit({ type: 'input', content: message, whenBusy: mode }, ctx);
+      ingress++;
+      taking++;
+      // The draft read a window this input changes: it is void, and never touches this input.
+      if (draft) endDraft('input arrived during the draft');
+      try {
+        if (!busy) await forceRolloverIfFull();
+        await conversation().submit({ type: 'input', content: message, whenBusy: mode }, ctx);
+      } finally { taking--; }
     },
     async deliver(input) {
-      await conversation().submit({
-        type: 'input', content: input.text, whenBusy: 'followUp', requestId: input.requestId,
-        entry: { kind: `bot.${input.kind}`, data: input.data },
-      }, ctx);
+      ingress++;
+      taking++;
+      if (draft) endDraft('input arrived during the draft');
+      try {
+        await conversation().submit({
+          type: 'input', content: input.text, whenBusy: 'followUp', requestId: input.requestId,
+          entry: { kind: `bot.${input.kind}`, data: input.data },
+        }, ctx);
+      } finally { taking--; }
+    },
+    reconsiderIdle() {
+      if (closed) return;
+      // A pause, retirement, model change or turned-off setting ends a draft in flight; its apply checks them again.
+      const stop = ineligibility() ?? (currentConfig().enabled ? null : 'turned off in settings');
+      if (draft && stop) endDraft(stop);
+      if (busy || draft) return;
+      considerIdleRollover('change').catch((error: unknown) => log(`idle rollover failed: ${describe(error)}`));
     },
     abort: () => conversation().abort(ctx),
     async close() {
+      closed = true;
+      disarmIdle();
+      await idleBook;
       await watch.stop();
       // The sandbox first: a script it stops is left unfinished, and resumes when the bot opens again.
       await sandbox.close();

@@ -7,11 +7,13 @@ export interface MessageUsage { readonly input?: number; readonly output?: numbe
 export interface AdvisorNote { readonly note: string; readonly severity?: string; readonly advisor?: string }
 /** A change a bot made to its own or a descendant's entry; an undo restores `fields` from the revision before. */
 export interface BotChange { readonly botId: string; readonly botName: string; readonly revision: number; readonly fields: readonly string[]; readonly lines: readonly string[] }
-/** Metadata attached to bot custom messages (worker report, room, answer, question, routine, purpose, restart). */
+/** Metadata attached to bot custom messages (worker report, room, answer, question, routine, purpose, restart, idle rollover). */
 export interface BotEventDetails {
   readonly ref?: string; readonly name?: string; readonly state?: string; readonly report?: number;
   readonly fromName?: string; readonly messageId?: number; readonly hop?: number; readonly question?: string;
   readonly routineName?: string; readonly parentName?: string; readonly to?: string;
+  /** An idle rollover's window marker: it opened before the prompt cache expired, at `expiresAt`. */
+  readonly expiresAt?: number; readonly idleRollover?: boolean;
 }
 export interface MessageDetails { readonly notes?: readonly AdvisorNote[]; readonly jobs?: readonly { readonly label?: string; readonly jobId?: string; readonly type?: string; readonly status?: string; readonly agentId?: string; readonly durationMs?: number }[]; readonly from?: string; readonly message?: string; readonly botChange?: BotChange; readonly botEvent?: BotEventDetails }
 export interface RenderMessage {
@@ -67,6 +69,7 @@ function decodeBotEvent(details: Record<string, unknown>): BotEventDetails | und
     ref: string(details.ref), name: string(details.name), state: string(details.state), report: number(details.report),
     fromName: string(details.fromName), messageId: number(details.messageId), hop: number(details.hop),
     question: string(details.question), routineName: string(details.routineName), parentName: string(details.parentName), to: string(details.to),
+    expiresAt: number(details.expiresAt), idleRollover: details.idleRollover === true ? true : undefined,
   };
   return Object.values(event).some(v => v !== undefined) ? event : undefined;
 }

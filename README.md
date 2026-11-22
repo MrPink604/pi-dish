@@ -1181,6 +1181,89 @@ old code. A message, routine run or room post that arrives while a relay is
 down starts the bot and is delivered once it is back. Bounce agents restarts a
 bot by hand in the same way.
 
+#### Idle rollover before the prompt cache expires
+
+A bot left idle with a large context window would make your next message
+re-read that whole window once its prompt cache expires (an hour on Claude
+Code's subscription route). Shortly before then, while a read is still cheap,
+its relay has the bot draft its notebook in a fork of its conversation (the
+same instructions, tools and messages, so the cached prefix is read), then
+opens a fresh window from that notebook, so your next message starts small.
+It is on by default and fires at most once per window:
+
+- **Before expiry:** the bot is idle (no run, no queued input, no worker
+  report being posted), its cache has a documented TTL (`fixed` or `minimum`,
+  including `cacheTtlOverrides`) of at least 30 minutes, the window holds at
+  least 100k tokens or half the window limit, whichever is lower, and the
+  cache expires within max(3 min, 10% of the TTL): 54 minutes into a 1h TTL.
+- **Early:** a window at least 75% full rolls over after 10 minutes idle while
+  the cache is warm.
+- **Skipped** when a routine for the bot is due before the cache expires (a
+  run owed this minute or a missed one it catches up counts as due now), when
+  the window has nothing in it since it opened, after a run that failed (its
+  request was never answered), within a minute of expiry, after the cache has
+  expired, while the bot is paused or retired, and when the window's last
+  answer came from another model than the one the bot now runs.
+
+The draft never enters the live conversation: tools are blocked in the fork,
+its request and answer are not in the chat, and a message, steer, worker
+report or routine run that arrives meanwhile simply runs and voids the draft.
+The draft's request is the live conversation's last request (above 75% of the
+window that includes its one-off reminder, put back in the same place), then
+that request's answer, so it reads the same cached prefix; it ends with the
+notebook as stored, which may be newer than the one in the window's
+instructions. The new window's handoff quotes at most 1,500 characters of the
+latest request, with a pointer to `history read` for the rest. The new window
+opens in one commit on the live conversation (reset, notebook, closed window
+and instructions together), and
+only if nothing ran, queued, reported or arrived since the draft started, the
+notebook is the one the draft was shown, the window's last request was answered
+in full (no failed run, no answer cut off at its output limit), and the bot is
+still active on the same model; otherwise nothing changes. The answer must be
+whole and exactly `Summary: <one line>`, then the notebook between a
+`<<<NOTEBOOK` and a `NOTEBOOK>>>` line, and nothing else; any other reply is a
+decline. A notebook of 1 KiB or more is not replaced by a draft under half its
+size. The notebook an idle rollover replaced is kept on the new window's reset:
+`history read <new window>` shows it as "notebook before the idle rollover",
+for the bot (or you) to restore with `context_notes`, and the window's card
+carries it as `notebookBefore`. A draft that fails, declines, shrinks the
+notebook, or is cut off by a relay restart or a pause leaves the window as it
+was, and the window is not tried again. Each attempt's fork stays in the bot's
+`durable.sqlite` (Durable has no way to delete a conversation): about 40–55 KB
+with a full 16 KiB notebook, mostly the draft's request and answer and the
+copied notebook.
+
+The next window's card in the chat reads "rolled over before cache expiry at
+HH:MM". Every decision (armed, triggered, skipped and why, the outcome with the
+draft's cache read and write, and how soon the next message came) is appended
+to `~/.pi/dish/bots/<id>/idle-rollover.jsonl` (owner-only, rotated to `.1` past
+1 MB) and the relay's log. The log is best-effort: a line is written before its
+bookkeeping commit, so a crash between them may repeat a result or return line
+after a restart; they carry a `key` to drop such repeats by. Tune it, or turn
+it off for all bots or one (by id or name), in `~/.pi/dish/settings.json`; the
+relay notices a change within seconds, and a pause, retirement or model change
+disarms a pending rollover or ends a draft the same way:
+
+```json
+{
+  "botIdleRollover": {
+    "enabled": true,
+    "minTokens": 100000,
+    "minPercent": 50,
+    "minRetentionMinutes": 30,
+    "leadMinutes": 3,
+    "leadPercent": 10,
+    "earlyPercent": 75,
+    "earlyIdleMinutes": 10,
+    "bots": { "Fleet": false, "pi-dish": { "minTokens": 60000 } }
+  }
+}
+```
+
+`"botIdleRollover": false` turns it off everywhere; a bot's entry may also turn
+it back on. Ordinary sessions do not do this: pi has no idle compaction, and
+OMP's own `compaction.idleEnabled` (off by default) is the harness's setting.
+
 ### GitHub Actions failure notifications
 
 The CI watcher is off by default. Enable it only on the bot hub (beelink

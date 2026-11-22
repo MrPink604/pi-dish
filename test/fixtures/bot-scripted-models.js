@@ -6,7 +6,8 @@ exports.openBotModels = openBotModels;
  * A bot relay's model in tests (`PI_DISH_BOT_MODELS` names this module): pi-ai's faux provider under the bot's own
  * selector. Every request is answered `echo <n>: <last user text>`, where n counts the user messages in its context,
  * so a test sees what the bot's conversation holds. While `hold` exists in `PI_DISH_BOT_FAUX_DIR` an answer waits
- * for it to go, and `holding` says one is waiting: a run a test keeps in progress.
+ * for it to go, and `holding` says one is waiting: a run a test keeps in progress. pi-dish's idle-rollover draft
+ * request is answered as a bot should: `Summary: <line>`, then the notebook between its markers.
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -33,6 +34,10 @@ async function openBotModels(selector) {
             while (fs.existsSync(path.join(dir, 'hold')))
                 await (0, promises_1.setTimeout)(50);
             fs.rmSync(path.join(dir, 'holding'), { force: true });
+        }
+        const last = context.messages.at(-1);
+        if (last?.role === 'user' && text(last).startsWith('[pi-dish: this context window is') && text(last).includes('opening a fresh window')) {
+            return faux.fauxAssistantMessage('Summary: Rolled over while idle\n<<<NOTEBOOK\nNotes kept over the rollover.\nNOTEBOOK>>>');
         }
         const users = context.messages.filter(message => message.role === 'user');
         return faux.fauxAssistantMessage(`echo ${users.length}: ${text(users.at(-1))}`);

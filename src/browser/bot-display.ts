@@ -296,15 +296,17 @@ export function parseInjectedBotMessage(customType: string | undefined, rawText:
     };
   }
 
-  // 7. Context window rollover
+  // 7. Context window rollover; one pi-dish asked for while the bot was idle says so, with the cache expiry it beat
   if (customType === 'bot-context-window') {
     const m = /^\[Context window (\d+)\.[^\]]*\]\s*([\s\S]*)$/.exec(text);
     const label = m ? `Context window ${m[1]}` : 'New context window';
     const body = (m ? m[2] : text).trim();
+    const expiry = ev?.idleRollover && ev.expiresAt ? formatTime(ev.expiresAt) : '';
     return {
       kind: 'context-window',
       icon: '↻',
       label,
+      meta: ev?.idleRollover ? (expiry ? `rolled over before cache expiry at ${expiry}` : 'rolled over while idle') : undefined,
       body,
       collapsible: !!body,
       defaultOpen: false,

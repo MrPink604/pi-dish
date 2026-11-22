@@ -123,6 +123,10 @@ test('parseInjectedBotMessage handles every injected bot kind (custom and user-r
     assert.equal(nudge.label, 'Nudge');
     const cw = parseInjectedBotMessage('bot-context-window', '[Context window 2. Your identity...]\n\nEarlier windows:\n1. Setup');
     assert.ok(cw && cw.kind === 'context-window' && cw.defaultOpen === false && cw.label === 'Context window 2');
+    assert.equal(cw.meta, undefined, 'an ordinary rollover has no idle line');
+    const expiresAt = Date.UTC(2026, 10, 22, 12, 0);
+    const idleWindow = parseInjectedBotMessage('bot-context-window', '[Context window 3. Your identity...]', { botEvent: { idleRollover: true, expiresAt } });
+    assert.match(idleWindow?.meta ?? '', /^rolled over before cache expiry at \S/);
     const restart = parseInjectedBotMessage('bot-restart', 'Restarted onto new pi-dish code.', { from: 'abc', botEvent: { to: 'def' } });
     assert.ok(restart && restart.kind === 'restart' && restart.quiet === true && restart.meta === 'build abc → def');
 });

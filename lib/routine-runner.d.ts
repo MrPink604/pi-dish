@@ -1,4 +1,5 @@
 // Generated from src/core/routine-runner.ts; edit that source and run npm run build:core.
+import { type ParsedCron } from './cron';
 import type { Routine, RoutineInvocation, RoutineTrigger } from './routines';
 import type { SessionOperations } from './session-operations';
 import type { LiveSession, SessionOwnership } from './session-ownership';
@@ -69,4 +70,15 @@ export interface RoutineRunnerPorts {
 export declare const DEFAULT_CLOSE_GRACE_MS = 10000;
 export declare const STARTING_WATCHDOG_MS: number;
 export declare const TICK_MS = 30000;
+/**
+ * The run a scheduler tick at `minute` owes a routine, or null. It is the current minute when the schedule matches it;
+ * otherwise the newest slot since the routine last fired or was last edited that never ran, because pi-dish was down
+ * or asleep. Either way it is one run, which counts the slots missed before it.
+ */
+export declare function routineDueSlot(parsed: ParsedCron, routine: Routine, minute: number): ScheduledSlot | null;
+/**
+ * When the scheduler next runs `routine` from `at` on: at once when a tick in this minute owes it a run (its minute
+ * matches, or it catches up a missed one), else at its next match. Null for a disabled, unscheduled or unparseable one.
+ */
+export declare function nextScheduledRun(routine: Routine, at: number): number | null;
 export declare function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner;

@@ -4,11 +4,14 @@ import test = require('node:test');
 import assert = require('node:assert');
 import fs = require('node:fs');
 import os = require('node:os');
+import nodeModule = require('node:module');
 import path = require('node:path');
+import url = require('node:url');
+import esbuild = require('esbuild');
 import type { BotRegistry, BotRow } from '../lib/bot-registry';
 import type { BotControl, BotHandlers } from '../lib/bot-handlers';
 import type { RouteHandler } from '../lib/http-boundary';
-import type { BotRuntime, HubApi, SessionsPort, WorkerRecord } from '../lib/bot-runtime';
+import type { BotRuntime, HubApi, IdleRolloverPorts, IdleRolloverRecord, SessionsPort, WorkerRecord } from '../lib/bot-runtime';
 const { BotMirror }: typeof import('../lib/bot-mirror') = require('../lib/bot-mirror');
 const runtimeModule: typeof import('../lib/bot-runtime') = require('../lib/bot-runtime');
 const {
@@ -21,6 +24,7 @@ const { createBotHandlers, changeLines, ROOM_HOP_CAP }: typeof import('../lib/bo
 type Faux = typeof import('@earendil-works/pi-ai/providers/faux');
 type Step = import('@earendil-works/pi-ai/providers/faux').FauxResponseStep;
 type Message = import('@earendil-works/pi-ai').Message;
+type TranscriptContext = import('@earendil-works/pi-ai').TranscriptContext;
 
 const BOT: BotRow = {
   id: '0b0c5a1e-0000-4000-8000-000000000001', parentId: null, name: 'Fleet', status: 'active', model: 'faux/faux-1',
@@ -32,6 +36,8 @@ interface Harness {
   runtime: BotRuntime;
   events: { event: string; data: Record<string, unknown> }[];
   requests: Message[][];
+  /** Each request's whole context (system, messages, tools), as the provider received it. */
+  contexts: TranscriptContext[];
   mirrorLines: () => Record<string, unknown>[];
   respond: (...steps: Step[]) => void;
   /** Closes the runtime, runs `between` while it is down, and opens it again on the same storage. */
@@ -62,10 +68,15 @@ interface TestBotOptions {
   scriptTimeoutMs?: number;
   /** A directory whose `durable.sqlite` and `mirror.jsonl` the bot starts from: state an earlier version stored. */
   from?: string;
+  /** The idle rollover's settings, cache TTLs, routines, log and clock; by default no cache TTL is known, so it never fires. */
+  idleRollover?: IdleRolloverPorts;
 }
 
+const noIdleRollover: IdleRolloverPorts = { settings: () => ({}), cacheRetention: () => ({ revision: 'none', rules: [] }) };
+
 async function openTestBot(t: test.TestContext, sessions: SessionsPort,
-  { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses, pollMs = { first: 20, max: 40 }, scriptTimeoutMs, from }: TestBotOptions = {}): Promise<Harness> {
+  { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses, pollMs = { first: 20, max: 40 }, scriptTimeoutMs, from,
+    idleRollover = noIdleRollover }: TestBotOptions = {}): Promise<Harness> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-'));
   const faux: Faux = await import('@earendil-works/pi-ai/providers/faux');
   const { createModels } = await import('@earendil-works/pi-ai/models');
@@ -74,6 +85,7 @@ async function openTestBot(t: test.TestContext, sessions: SessionsPort,
   const models = createModels();
   models.setProvider(provider.provider);
   const requests: Message[][] = [];
+  const contexts: TranscriptContext[] = [];
   const events: Harness['events'] = [];
   const bot = row();
   const mirrorFile = path.join(dir, 'sessions', `${bot.id}.jsonl`);
@@ -88,15 +100,16 @@ async function openTestBot(t: test.TestContext, sessions: SessionsPort,
     mirror: new BotMirror(mirrorFile, { id: bot.id, cwd: dir, name: bot.name }),
     models, sessions, api, loadBot: row,
     emit: (event, data) => events.push({ event, data }),
-    changed: () => {}, log: () => {}, pollMs, scriptTimeoutMs,
+    changed: () => {}, log: () => {}, pollMs, scriptTimeoutMs, idleRollover,
   });
   const recorded = (step: Step): Step => (context, ...rest) => {
     requests.push([...context.messages]);
+    contexts.push({ ...context, messages: [...context.messages] });
     return typeof step === 'function' ? step(context, ...rest) : step;
   };
   if (responses) provider.appendResponses(responses(faux).map(recorded));
   const harness: Harness = {
-    runtime: await open(), events, requests, faux,
+    runtime: await open(), events, requests, contexts, faux,
     mirrorLines: () => fs.readFileSync(mirrorFile, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>),
     respond: (...steps) => provider.appendResponses(steps.map(recorded)),
     async reopen(between) { await harness.runtime.close(); between?.(); harness.runtime = await open(); },
@@ -1576,4 +1589,711 @@ test('ignoring the 90% rescue turn force-closes after one turn with an unsaved-n
   assert.equal(customs(hardBot, 'bot-context-limit').length, 0, 'skips rescue turn at >=97%');
   const hardMarker = hardBot.mirrorLines().find(line => line.customType === 'bot-context-window');
   assert.match(textOf(hardMarker), /WARNING: Window 1 was closed at the context limit without saving your notebook in that window\./);
+});
+
+/** A clock and timer a test moves by hand: `advance` runs each timer that falls due. */
+function fakeClock() {
+  let now = Date.now();
+  let next = 0;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  return {
+    clock: {
+      now: () => now,
+      setTimeout(run: () => void, ms: number) { timers.set(++next, { at: now + ms, run }); return next; },
+      clearTimeout(handle: unknown) { timers.delete(handle as number); },
+    },
+    pending: () => [...timers.values()].map(timer => timer.at),
+    advance(ms: number) {
+      now += ms;
+      for (const [handle, timer] of [...timers]) {
+        if (timer.at > now) continue;
+        timers.delete(handle);
+        timer.run();
+      }
+    },
+  };
+}
+
+const MINUTE = 60_000;
+/** faux answers with a 1h fixed cache, as Claude Code's subscription route does; the floor is half of a 30k window. */
+function idlePorts(clock: ReturnType<typeof fakeClock>, records: IdleRolloverRecord[], settings: Record<string, unknown> = {},
+  retention = { retentionMs: 60 * MINUTE, retention: '1h' }, nextRoutineAt: number | null = null): IdleRolloverPorts {
+  return {
+    settings: () => settings,
+    cacheRetention: () => ({ revision: 'faux', rules: [{ provider: 'faux', model: '', basis: 'fixed', ...retention }] }),
+    nextRoutineAt: () => nextRoutineAt,
+    record: entry => records.push(entry),
+    clock: clock.clock,
+  };
+}
+
+/** Decisions after start: the plan at start races the first prompt, so tests that count decisions leave it out. */
+const decided = (records: IdleRolloverRecord[], event: string, outcome: string) =>
+  records.filter(entry => entry.source !== 'start' && entry.event === event && entry.outcome === outcome);
+/** About 60% of a 30k window: over the floor, under the early trigger. */
+const MID_WINDOW = `Remember that tycho runs the backups. ${'w'.repeat(40_000)}`;
+
+/**
+ * A bot past the floor on a 1h cache with its timer armed; `row` may be a mutable registry row. The last request is a
+ * short one, so the next window's handoff (which repeats it) stays under the floor.
+ */
+async function armedBot(t: test.TestContext, options: { row?: () => BotRow; sessions?: SessionsPort; settings?: Record<string, unknown>;
+  retention?: { retentionMs: number; retention: string } } = {}) {
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  const bot = await openTestBot(t, options.sessions ?? noSessions, {
+    contextWindow: 30_000, row: options.row, idleRollover: idlePorts(time, records, options.settings, options.retention),
+  });
+  bot.respond(bot.faux.fauxAssistantMessage('Noted.'), bot.faux.fauxAssistantMessage('Good.'));
+  await bot.runtime.prompt(MID_WINDOW, 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 1, 'armed');
+  await bot.runtime.prompt('That is all for now.', 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 2, 'armed after the last turn');
+  return { bot, time, records };
+}
+
+const requestHas = (messages: Message[], text: string) => messages.some(message => textOf(message).includes(text));
+/** The draft's request goes to a fork; every other request is the live conversation's. */
+const DRAFT_MARK = 'opening a fresh window';
+const liveRequests = (bot: Harness) => bot.requests.filter(request => !requestHas(request, DRAFT_MARK));
+const DRAFT = 'Summary: Backups on tycho\n<<<NOTEBOOK\ntycho runs the backups.\nNOTEBOOK>>>';
+
+/** Waits until the bot has no run and nothing queued: drafts in forks count as runs. */
+async function untilSettled(bot: Harness, message: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const { running, queued } = await bot.runtime.activity();
+    if (!running && !queued) return;
+    if (Date.now() > deadline) throw new Error(`timed out: ${message}`);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
+/** A response that waits until the test opens it: a draft kept in flight. */
+function held(step: () => Step) {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => { open = resolve; });
+  let started = false;
+  const response: Step = async (...args) => {
+    started = true;
+    await opened;
+    const value = step();
+    return typeof value === 'function' ? value(...args) : value;
+  };
+  return { response, open, started: () => started };
+}
+
+test('idle rollover: 6 min before a 1h cache expires, a fork drafts the notebook and the new window opens in one commit', async t => {
+  const spawned: string[][] = [];
+  const sessions: SessionsPort = async (args) => { spawned.push(args); throw new Error('no sessions here'); };
+  const { bot, time, records } = await armedBot(t, { sessions });
+  const armed = decided(records, 'plan', 'armed').at(-1)!;
+  assert.equal(armed.trigger, 'expiry');
+  assert.equal(armed.retention, '1h');
+  assert.ok(Number(armed.percent) >= 50 && Number(armed.percent) < 75, `window at ${armed.percent}%`);
+  assert.equal(Date.parse(String(armed.dueAt)), Date.parse(String(armed.expiresAt)) - 6 * MINUTE, 'due 6 min before expiry');
+  assert.deepEqual(time.pending(), [Date.parse(String(armed.dueAt))]);
+
+  // The draft tries a tool first: it is blocked, and the draft answers.
+  bot.respond(toolCall(bot, 'spawn_worker', { name: 'x', brief: 'do something' }), bot.faux.fauxAssistantMessage(DRAFT));
+  time.advance(53 * MINUTE);
+  assert.ok(!bot.requests.some(request => requestHas(request, DRAFT_MARK)), 'nothing before the due time');
+  time.advance(MINUTE + 1_000);
+  await until(() => decided(records, 'result', 'rolled-over').length === 1, 'the window is rolled over');
+  assert.deepEqual(spawned, [], 'no tool ran in the draft');
+
+  const drafts = bot.requests.filter(request => requestHas(request, DRAFT_MARK));
+  assert.ok(requestHas(drafts[0], 'Remember that tycho runs the backups.'), 'the draft reads the whole window');
+  // Anthropic's prompt cache is keyed by the request prefix, not a session: the fork's first request is the live
+  // conversation's last request, byte for byte (system, instructions, every message), then its answer and the draft
+  // request. (faux keys its simulated cache by provider session, which a fork does not share, so it reports no read.)
+  const lastLive = liveRequests(bot).filter(request => bot.requests.indexOf(request) < bot.requests.indexOf(drafts[0])).at(-1)!;
+  assert.deepEqual(drafts[0].slice(0, -2), lastLive, 'the same prefix');
+  assert.equal(textOf(drafts[0].at(-2)), 'Good.', 'then the last answer');
+  assert.match(textOf(drafts[0].at(-1)), /^\[pi-dish: this context window is/);
+  const marker = bot.mirrorLines().find(line => line.customType === 'bot-context-window');
+  const details = marker?.details as Record<string, unknown>;
+  assert.deepEqual({ idle: details.idleRollover, expiresAt: details.expiresAt }, { idle: true, expiresAt: Date.parse(String(armed.expiresAt)) });
+  const handoff = textOf(marker);
+  assert.match(handoff, /1\. Backups on tycho/);
+  assert.match(handoff, /Latest request: That is all for now\./);
+  assert.match(handoff, /While you were idle, pi-dish opened this window before the prompt cache expired/);
+  assert.ok(!bot.mirrorLines().some(line => JSON.stringify(line).includes(DRAFT_MARK)), 'the draft never reaches the transcript');
+  assert.deepEqual(records.filter(entry => entry.source !== 'start').map(entry => `${String(entry.event)}:${String(entry.outcome)}`),
+    ['plan:armed', 'plan:armed', 'fire:triggered', 'result:rolled-over']);
+
+  // The next message starts the small window: the handoff and the message, the drafted notebook in the instructions.
+  bot.respond(bot.faux.fauxAssistantMessage('Hello again.'));
+  await bot.runtime.prompt('Back again', 'followUp');
+  await until(() => said(bot, 'Hello again.'), 'answered');
+  const next = liveRequests(bot).at(-1)!;
+  assert.deepEqual(next.filter(message => message.role !== 'system').map(message => message.role), ['user', 'user']);
+  assert.match(textOf(next.find(message => message.role === 'user')), /^\[Context window 2\./);
+  assert.match(instructionsText(next), /tycho runs the backups\./);
+  await until(() => records.some(entry => entry.event === 'return'), 'the return is logged');
+  const back = records.find(entry => entry.event === 'return')!;
+  assert.deepEqual([back.input, back.beforeExpiry, back.key], ['pi.user', true, `${String(decided(records, 'result', 'rolled-over')[0].head)}:return`]);
+});
+
+test('idle rollover: a draft that is not a notebook changes nothing, and the window gets one attempt', async t => {
+  const { bot, time, records } = await armedBot(t);
+  bot.respond(bot.faux.fauxAssistantMessage('I will keep this window.'));
+  time.advance(55 * MINUTE);
+  await until(() => decided(records, 'result', 'not-rolled-over').length === 1, 'the draft is refused');
+  assert.match(String(decided(records, 'result', 'not-rolled-over')[0].reason), /not in the Summary/);
+  assert.ok(!bot.mirrorLines().some(line => line.customType === 'bot-context-window'));
+
+  bot.respond(bot.faux.fauxAssistantMessage('Sure.'));
+  await bot.runtime.prompt('One more thing', 'followUp');
+  await until(() => decided(records, 'plan', 'skipped').length === 1, 'planned after the next turn');
+  assert.equal(decided(records, 'plan', 'skipped')[0].reason, 'already tried in this window');
+  assert.ok(!liveRequests(bot).some(request => requestHas(request, 'I will keep this window.')), 'the declined draft is not in the live context');
+  assert.deepEqual(time.pending(), []);
+});
+
+test('idle rollover: off per bot, a 5m cache, a small window or a routine due arm nothing; input before the due time cancels the timer', async t => {
+  const cases: [string, Partial<{ settings: Record<string, unknown>; retention: { retentionMs: number; retention: string }; routine: boolean; prompt: string }>, RegExp][] = [
+    ['off for this bot', { settings: { botIdleRollover: { bots: { Fleet: { enabled: false } } } } }, /^turned off in settings$/],
+    ['5m cache', { retention: { retentionMs: 5 * MINUTE, retention: '5m' } }, /the 5m cache is shorter than 30 min/],
+    ['small window', { prompt: 'Hi' }, /k tokens is under the 15k floor/],
+    ['routine due', { routine: true }, /^a routine runs at .* before the cache expires$/],
+  ];
+  for (const [name, options, reason] of cases) {
+    const time = fakeClock();
+    const records: IdleRolloverRecord[] = [];
+    const bot = await openTestBot(t, noSessions, { contextWindow: 30_000, idleRollover: idlePorts(time, records, options.settings,
+      options.retention, options.routine ? time.clock.now() + 30 * MINUTE : null) });
+    bot.respond(bot.faux.fauxAssistantMessage('Noted.'));
+    await bot.runtime.prompt(options.prompt ?? MID_WINDOW, 'followUp');
+    await until(() => decided(records, 'plan', 'skipped').length === 1, `${name}: planned`);
+    assert.match(String(decided(records, 'plan', 'skipped')[0].reason), reason, name);
+    assert.deepEqual(time.pending(), [], `${name}: no timer`);
+  }
+
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  const bot = await openTestBot(t, noSessions, { contextWindow: 30_000, idleRollover: idlePorts(time, records) });
+  bot.respond(bot.faux.fauxAssistantMessage('Noted.'), bot.faux.fauxAssistantMessage('Answered.'));
+  await bot.runtime.prompt(MID_WINDOW, 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 1, 'armed');
+  time.advance(20 * MINUTE);
+  await bot.runtime.prompt('A question', 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 2, 'the next run end arms again');
+  assert.equal(time.pending().length, 1, 'the first timer was cleared');
+  assert.ok(!bot.requests.some(request => requestHas(request, DRAFT_MARK)));
+});
+
+// Regressions from the reviews: each reproduces the reviewer's scenario.
+
+test('idle rollover regression: input that enters the relay after the plan, before the draft starts, wins', async t => {
+  const { bot, time, records } = await armedBot(t);
+  bot.respond(bot.faux.fauxAssistantMessage('Answered the question.'), bot.faux.fauxAssistantMessage(DRAFT));
+  // The timer fires and plans synchronously up to its first read; the prompt enters before the draft's commit.
+  time.advance(55 * MINUTE);
+  await bot.runtime.prompt('A real question', 'steer');
+  await until(() => said(bot, 'Answered the question.'), 'the question is answered');
+  await until(() => records.some(entry => entry.event === 'fire'), 'the fire is logged');
+  const fire = records.find(entry => entry.event === 'fire')!;
+  const settled = fire.outcome === 'triggered' ? decided(records, 'result', 'not-rolled-over')[0]?.reason : fire.reason;
+  assert.match(String(settled), /^(input arrived first|input arrived during the draft|a turn is running|the transcript changed since the plan|a run started or a newer plan replaced this one)$/);
+  // The clock runs 55 min ahead of the answers' timestamps, so a later plan may roll over: only after the question.
+  const lines = bot.mirrorLines();
+  const marker = lines.findIndex(line => line.customType === 'bot-context-window');
+  const answered = lines.findIndex(line => line.type === 'message' && textOf(line.message) === 'Answered the question.');
+  assert.ok(marker === -1 || marker > answered, 'no window opened over the question');
+  assert.ok(!requestHas(liveRequests(bot).find(request => requestHas(request, 'A real question'))!, '[Context window 2'));
+});
+
+test('idle rollover regression 1: ending a draft never withdraws input: a steer and a room message sent during it both run', async t => {
+  const { bot, time, records } = await armedBot(t);
+  const draft = held(() => bot.faux.fauxAssistantMessage(DRAFT));
+  const echo: Step = context => bot.faux.fauxAssistantMessage(`echo: ${textOf(context.messages.filter(message => message.role === 'user').at(-1))}`);
+  bot.respond(draft.response, echo, echo, echo);
+  time.advance(55 * MINUTE);
+  await until(draft.started, 'the draft is in flight');
+  await bot.runtime.deliver({ kind: 'room', requestId: 'room:1', text: '[room] Ops to Fleet: the disk on tycho is full.', data: { messageId: 1, hop: 1 } });
+  await bot.runtime.prompt('Urgent question', 'steer');
+  draft.open();
+  await until(() => liveRequests(bot).some(request => requestHas(request, 'Urgent question')) && liveRequests(bot).some(request => requestHas(request, 'the disk on tycho is full')), 'both reach the model');
+  await untilSettled(bot, 'nothing is left running or queued');
+  assert.equal(decided(records, 'result', 'not-rolled-over')[0]?.reason, 'input arrived during the draft');
+  assert.ok(!bot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'the voided draft opens no window');
+  assert.ok(!bot.requests.filter(request => requestHas(request, DRAFT_MARK)).some(request => requestHas(request, 'Urgent question')), 'the draft never sees live input');
+  assert.ok(!instructionsText(liveRequests(bot).at(-1)!).includes('tycho runs the backups.'), 'the instructions keep the old notebook');
+});
+
+test('idle rollover regression 2: a failed draft, a restart during one and a declined one leave the live conversation untouched', async t => {
+  // A provider error: nothing in the live conversation, nothing queued.
+  const failed = await armedBot(t);
+  failed.bot.respond(failed.bot.faux.fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'provider down' }));
+  failed.time.advance(55 * MINUTE);
+  await until(() => decided(failed.records, 'result', 'not-rolled-over').length === 1, 'the failed draft settles');
+  assert.match(String(decided(failed.records, 'result', 'not-rolled-over')[0].reason), /^the draft ended unanswered/);
+  assert.deepEqual(await failed.bot.runtime.activity(), { running: false, queued: false });
+  failed.bot.respond(failed.bot.faux.fauxAssistantMessage('Still here.'));
+  await failed.bot.runtime.prompt('Hello?', 'followUp');
+  await until(() => said(failed.bot, 'Still here.'), 'the next message runs');
+  assert.ok(!requestHas(liveRequests(failed.bot).at(-1)!, 'pi-dish: this context window'), 'no rollover instruction in the live context');
+
+  // A restart while the draft is in flight: the new relay abandons it; nothing is left running or queued.
+  const restarted = await armedBot(t);
+  const draft = held(() => restarted.bot.faux.fauxAssistantMessage(DRAFT));
+  restarted.bot.respond(draft.response);
+  restarted.time.advance(55 * MINUTE);
+  await until(draft.started, 'the draft is in flight');
+  const closing = restarted.bot.reopen();
+  draft.open();
+  await closing;
+  await until(() => restarted.records.some(entry => entry.event === 'result' && entry.recovered === true), 'the new relay settles the draft');
+  assert.equal(restarted.records.find(entry => entry.event === 'result')?.reason, 'the relay restarted during the draft');
+  assert.deepEqual(await restarted.bot.runtime.activity(), { running: false, queued: false });
+  assert.ok(!restarted.bot.mirrorLines().some(line => line.customType === 'bot-context-window'));
+  restarted.bot.respond(restarted.bot.faux.fauxAssistantMessage('Back.'));
+  await restarted.bot.runtime.prompt('After the restart', 'followUp');
+  await until(() => said(restarted.bot, 'Back.'), 'answered');
+  assert.ok(!requestHas(liveRequests(restarted.bot).at(-1)!, 'pi-dish: this context window'));
+});
+
+test('idle rollover regression 3: after a restart that follows the new window, a steer starts its own run in it', async t => {
+  const { bot, time, records } = await armedBot(t);
+  bot.respond(bot.faux.fauxAssistantMessage(DRAFT));
+  time.advance(55 * MINUTE);
+  await until(() => decided(records, 'result', 'rolled-over').length === 1, 'rolled over');
+  await bot.reopen();
+  assert.deepEqual(await bot.runtime.activity(), { running: false, queued: false }, 'no rollover run exists to join');
+  bot.respond(bot.faux.fauxAssistantMessage('Answering the urgent question.'));
+  await bot.runtime.prompt('Urgent question', 'steer');
+  await until(() => said(bot, 'Answering the urgent question.'), 'the steer is answered');
+  const answering = liveRequests(bot).at(-1)!;
+  assert.match(textOf(answering.find(message => message.role === 'user')), /^\[Context window 2\./);
+  assert.equal(textOf(answering.at(-1)), 'Urgent question');
+  assert.ok(!requestHas(answering, 'pi-dish: this context window'));
+  assert.equal(records.filter(entry => entry.event === 'result').length, 1, 'the restart does not log the result again');
+});
+
+test('idle rollover regression 4: two forced closes at the hard limit close one window, with the notebook and the reset together', async t => {
+  const bot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
+  let raced = false;
+  const push = bot.events.push.bind(bot.events);
+  bot.events.push = (...items) => {
+    // The run's end and a prompt both find the window at the hard limit.
+    if (!raced && items.some(item => item.event === 'agent_end')) {
+      raced = true;
+      void bot.runtime.prompt('Next question', 'followUp');
+    }
+    return push(...items);
+  };
+  bot.respond(
+    bot.faux.fauxAssistantMessage('Spiked past 97%.'),
+    bot.faux.fauxAssistantMessage('Next answered.'),
+    toolCall(bot, 'history', { action: 'windows' }),
+    bot.faux.fauxAssistantMessage('Listed.'),
+  );
+  await bot.runtime.prompt(`Huge spike ${'w'.repeat(380_000)}`, 'followUp');
+  await until(() => said(bot, 'Next answered.'), 'the next question is answered');
+  await bot.runtime.prompt('Which windows are there?', 'followUp');
+  await until(() => said(bot, 'Listed.'), 'history answers');
+  // Memory agrees with the transcript: one closed window per marker, and one current window, the last. (The handoff
+  // repeats the huge latest request, so the next window may legitimately close at the limit too.)
+  const listed = textOf(toolResults(bot).at(-1)).split('\n');
+  const closes = bot.mirrorLines().filter(line => line.customType === 'bot-context-window').length;
+  assert.equal(listed.length, closes + 1, listed.join('\n'));
+  assert.equal(listed.filter(line => line.includes('(current window)')).length, 1, 'one current window');
+  assert.match(listed.at(-1)!, /^\d+\. \(current window\)/);
+  assert.match(listed[0], /^1\. Closed at the context limit\./);
+  // The race closed window 1 once: the prompt's request is in window 2, after exactly one marker.
+  const asked = liveRequests(bot).find(request => requestHas(request, 'Next question'))!;
+  assert.match(textOf(asked.find(message => message.role === 'user')), /^\[Context window 2\./);
+});
+
+test('idle rollover regression 5: a pause or a model change ends a draft in flight, and the new relay abandons it', async t => {
+  let row: BotRow = { ...BOT };
+  const paused = await armedBot(t, { row: () => row });
+  const first = held(() => paused.bot.faux.fauxAssistantMessage(DRAFT));
+  paused.bot.respond(first.response);
+  paused.time.advance(55 * MINUTE);
+  await until(first.started, 'the draft is in flight');
+  row = { ...row, status: 'paused' };
+  paused.bot.runtime.reconsiderIdle();
+  first.open();
+  await until(() => decided(paused.records, 'result', 'not-rolled-over').length === 1, 'the pause ends the draft');
+  assert.equal(decided(paused.records, 'result', 'not-rolled-over')[0].reason, 'the bot is paused');
+  await untilSettled(paused.bot, 'the draft\u2019s fork stops');
+  assert.ok(!paused.bot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'no window opens for a paused bot');
+
+  // The model changes and pi-dish restarts the relay on faux-2 while the draft runs: it is abandoned, never applied.
+  let other: BotRow = { ...BOT };
+  const switched = await armedBot(t, { row: () => other });
+  const second = held(() => switched.bot.faux.fauxAssistantMessage(DRAFT));
+  switched.bot.respond(second.response);
+  switched.time.advance(55 * MINUTE);
+  await until(second.started, 'the draft is in flight');
+  other = { ...other, model: 'faux/faux-2' };
+  const reopening = switched.bot.reopen();
+  second.open();
+  await reopening;
+  await until(() => switched.records.some(entry => entry.event === 'result'), 'the draft settles');
+  assert.match(String(switched.records.find(entry => entry.event === 'result')?.reason), /^(the bot's model is now faux\/faux-2; this relay runs faux\/faux-1|the relay restarted during the draft)$/);
+  assert.ok(!switched.bot.mirrorLines().some(line => line.customType === 'bot-context-window'));
+  switched.bot.respond(switched.bot.faux.fauxAssistantMessage('On faux-2.'));
+  await switched.bot.runtime.prompt('Which model?', 'followUp');
+  await until(() => said(switched.bot, 'On faux-2.'), 'answered on the new model');
+  const answering = liveRequests(switched.bot).at(-1)!;
+  assert.ok(requestHas(answering, 'Remember that tycho runs the backups.'), 'the old window is still the live one');
+  assert.ok(!requestHas(answering, 'pi-dish: this context window') && !instructionsText(answering).includes('tycho runs the backups.'));
+});
+
+test('idle rollover regression: a 30-day TTL waits in bounded timer steps and plans again at each wake', async t => {
+  const { time, records } = await armedBot(t, { retention: { retentionMs: 30 * 24 * 60 * MINUTE, retention: '30d' } });
+  const MAX = 2 ** 31 - 1;
+  const [due] = time.pending();
+  assert.ok(due - time.clock.now() <= MAX, 'never longer than a Node timer can wait');
+  time.advance(MAX);
+  await until(() => records.some(entry => entry.event === 'fire'), 'the bounded wake plans again');
+  const fire = records.find(entry => entry.event === 'fire')!;
+  assert.equal(fire.outcome, 'armed');
+  assert.equal(time.pending().length, 1);
+  assert.equal(records.filter(entry => entry.event === 'fire').length, 1, 'one wake, no tight loop');
+});
+
+test('idle rollover regression: a pause disarms the timer and is refused when the timer fires; another model\u2019s answer anchors nothing', async t => {
+  let row: BotRow = { ...BOT };
+  const { bot, time, records } = await armedBot(t, { row: () => row });
+  row = { ...row, status: 'paused' };
+  bot.runtime.reconsiderIdle();
+  await until(() => decided(records, 'plan', 'skipped').length === 1, 'the change is planned');
+  assert.equal(decided(records, 'plan', 'skipped')[0].reason, 'the bot is paused');
+  assert.deepEqual(time.pending(), [], 'disarmed');
+  row = { ...row, status: 'active' };
+  bot.runtime.reconsiderIdle();
+  await until(() => decided(records, 'plan', 'armed').length === 3, 're-armed');
+  row = { ...row, status: 'paused' };
+  time.advance(55 * MINUTE);
+  await until(() => records.some(entry => entry.event === 'fire'), 'fired');
+  assert.equal(records.find(entry => entry.event === 'fire')?.reason, 'the bot is paused');
+  assert.ok(!bot.requests.some(request => requestHas(request, DRAFT_MARK)));
+  row = { ...row, status: 'active', model: 'faux/faux-2' };
+  await bot.reopen();
+  await until(() => records.filter(entry => entry.source === 'start').length === 2, 'the new relay plans');
+  assert.equal(records.filter(entry => entry.source === 'start').at(-1)?.reason, 'the last answer is from faux/faux-1, not faux/faux-2');
+  assert.deepEqual(time.pending(), []);
+});
+
+test('idle rollover regression: the result and the return survive a relay restart, once each', async t => {
+  const { bot, time, records } = await armedBot(t);
+  bot.respond(bot.faux.fauxAssistantMessage(DRAFT));
+  time.advance(55 * MINUTE);
+  await until(() => decided(records, 'result', 'rolled-over').length === 1, 'rolled over');
+  await bot.reopen();
+  await until(() => records.filter(entry => entry.source === 'start').length === 2, 'the new relay plans');
+  bot.respond(bot.faux.fauxAssistantMessage('Welcome back.'));
+  await bot.runtime.prompt('Back again', 'followUp');
+  await until(() => records.some(entry => entry.event === 'return'), 'the return is logged after the restart');
+  await until(() => said(bot, 'Welcome back.'), 'answered');
+  assert.equal(records.filter(entry => entry.event === 'result').length, 1, 'the result is not logged again');
+  await bot.reopen();
+  await until(() => records.filter(entry => entry.source === 'start').length === 3, 'planned again');
+  assert.equal(records.filter(entry => entry.event === 'return').length, 1, 'nor the return');
+});
+
+// Regressions from the third review: the apply step.
+
+test('idle rollover regression 6: a draft cut off at its output limit, or a refusal shaped like a draft, never replaces the notebook', async t => {
+  for (const [name, reason] of [['truncated', /^the draft (stopped with length|ended unanswered)/], ['refusal', /^the draft is not in the Summary/]] as const) {
+    const { bot, time, records } = await armedBot(t);
+    bot.respond(name === 'truncated'
+      ? bot.faux.fauxAssistantMessage('Summary: Backups on tycho\n<<<NOTEBOOK\ntycho runs the back', { stopReason: 'length' })
+      // The fourth review's case: a normal stop, a separator, and no notebook.
+      : bot.faux.fauxAssistantMessage('I could not draft a notebook.\n---\nPlease try again later.'));
+    time.advance(55 * MINUTE);
+    await until(() => decided(records, 'result', 'not-rolled-over').length === 1, `${name}: the draft is refused`);
+    assert.match(String(decided(records, 'result', 'not-rolled-over')[0].reason), reason, name);
+    assert.ok(!bot.mirrorLines().some(line => line.customType === 'bot-context-window'), `${name}: no window opens`);
+    bot.respond(bot.faux.fauxAssistantMessage('Still here.'));
+    await bot.runtime.prompt('Hello?', 'followUp');
+    await until(() => said(bot, 'Still here.'), `${name}: answered`);
+    const instructions = instructionsText(liveRequests(bot).at(-1)!);
+    assert.ok(!instructions.includes('tycho runs the back') && !instructions.includes('Please try again later.'), `${name}: the notebook is unchanged`);
+  }
+});
+
+test('idle rollover regression 7: the draft is shown the notebook as stored, newer than the window\u2019s instructions', async t => {
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  const bot = await openTestBot(t, noSessions, { contextWindow: 30_000, idleRollover: idlePorts(time, records) });
+  bot.respond(
+    toolCall(bot, 'context_notes', { action: 'write', text: 'Fresh fact: tycho has the GPU.' }),
+    bot.faux.fauxAssistantMessage('Noted.'),
+    bot.faux.fauxAssistantMessage('Good.'),
+  );
+  await bot.runtime.prompt(MID_WINDOW, 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 1, 'armed');
+  await bot.runtime.prompt('That is all for now.', 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 2, 'armed after the last turn');
+  bot.respond(bot.faux.fauxAssistantMessage('Summary: GPU notes\n<<<NOTEBOOK\nFresh fact: tycho has the GPU.\ntycho runs the backups.\nNOTEBOOK>>>'));
+  time.advance(55 * MINUTE);
+  await until(() => decided(records, 'result', 'rolled-over').length === 1, 'rolled over');
+  const draft = bot.requests.find(request => requestHas(request, DRAFT_MARK))!;
+  assert.ok(!instructionsText(draft).includes('Fresh fact'), 'the window\u2019s instructions predate the write');
+  assert.match(textOf(draft.at(-1)), /<notebook>\nFresh fact: tycho has the GPU\.\n<\/notebook>$/, 'the request ends with the stored notebook');
+  assert.equal(textOf(draft.at(-2)), 'Good.', 'after the cached prefix');
+});
+
+test('idle rollover regression 8: after a failed run, no window opens over its unanswered request', async t => {
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  const bot = await openTestBot(t, noSessions, { contextWindow: 30_000, idleRollover: idlePorts(time, records) });
+  bot.respond(bot.faux.fauxAssistantMessage('Noted.'), bot.faux.fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'provider down' }));
+  await bot.runtime.prompt(MID_WINDOW, 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 1, 'armed');
+  await bot.runtime.prompt('Check the backups', 'followUp');
+  await until(() => decided(records, 'plan', 'skipped').length === 1, 'the failed run plans');
+  assert.equal(decided(records, 'plan', 'skipped')[0].reason, 'the last run failed, so its request is unanswered');
+  assert.deepEqual(time.pending(), [], 'no timer');
+  time.advance(55 * MINUTE);
+  assert.ok(!bot.requests.some(request => requestHas(request, DRAFT_MARK)), 'no draft');
+
+  // A run that answers clears it: the window may roll over again, and the handoff's request was answered.
+  bot.respond(bot.faux.fauxAssistantMessage('Backups are fine.'), bot.faux.fauxAssistantMessage(DRAFT));
+  await bot.runtime.prompt('Check the backups again', 'followUp');
+  await until(() => decided(records, 'result', 'rolled-over').length === 1, 'rolled over after an answered run');
+  assert.match(textOf(bot.mirrorLines().find(line => line.customType === 'bot-context-window')), /Latest request: Check the backups again\nIt was answered in the last window\./);
+});
+
+// Regressions from the fourth review.
+
+/** A bot whose window wrote `notebook` with context_notes, then went idle with its timer armed. */
+async function armedWithNotebook(t: test.TestContext, notebook: string) {
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  const bot = await openTestBot(t, noSessions, { contextWindow: 30_000, idleRollover: idlePorts(time, records) });
+  bot.respond(toolCall(bot, 'context_notes', { action: 'write', text: notebook }), bot.faux.fauxAssistantMessage('Noted.'), bot.faux.fauxAssistantMessage('Good.'));
+  await bot.runtime.prompt(MID_WINDOW, 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 1, 'armed');
+  await bot.runtime.prompt('That is all for now.', 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 2, 'armed after the last turn');
+  return { bot, time, records };
+}
+
+test('idle rollover regression 9: a draft that drops more than half of a 1 KiB+ notebook is refused; an applied one keeps the old notebook for history', async t => {
+  const facts = Array.from({ length: 40 }, (_, index) => `- fact ${index}: tycho serves backup set ${index}.`).join('\n');
+  const shrunk = await armedWithNotebook(t, facts);
+  shrunk.bot.respond(shrunk.bot.faux.fauxAssistantMessage('Summary: Backups\n<<<NOTEBOOK\n- tycho runs the backups.\nNOTEBOOK>>>'));
+  shrunk.time.advance(55 * MINUTE);
+  await until(() => decided(shrunk.records, 'result', 'not-rolled-over').length === 1, 'the shrunk draft is refused');
+  assert.match(String(decided(shrunk.records, 'result', 'not-rolled-over')[0].reason),
+    new RegExp(`^the drafted notebook is \\d+ bytes, under half of the ${Buffer.byteLength(facts)}-byte notebook it would replace$`));
+  assert.ok(!shrunk.bot.mirrorLines().some(line => line.customType === 'bot-context-window'));
+
+  const kept = await armedWithNotebook(t, 'Old fact: tycho runs the backups.');
+  kept.bot.respond(kept.bot.faux.fauxAssistantMessage(DRAFT));
+  kept.time.advance(55 * MINUTE);
+  await until(() => decided(kept.records, 'result', 'rolled-over').length === 1, 'rolled over');
+  const marker = kept.bot.mirrorLines().find(line => line.customType === 'bot-context-window');
+  assert.equal((marker?.details as Record<string, unknown>).notebookBefore, 'Old fact: tycho runs the backups.');
+  kept.bot.respond(kept.bot.faux.fauxAssistantMessage([kept.bot.faux.fauxToolCall('history', { action: 'read', window: 2 })], { stopReason: 'toolUse' }),
+    kept.bot.faux.fauxAssistantMessage('Read.'));
+  await kept.bot.runtime.prompt('What was in the notebook before?', 'followUp');
+  await until(() => said(kept.bot, 'Read.'), 'history answers');
+  assert.match(textOf(toolResults(kept.bot).at(-1)), /\[notebook before the idle rollover\] Old fact: tycho runs the backups\./);
+});
+
+test('idle rollover regression 10: after an answer cut off at its output limit, no window opens over its request', async t => {
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  const bot = await openTestBot(t, noSessions, { contextWindow: 30_000, idleRollover: idlePorts(time, records) });
+  bot.respond(bot.faux.fauxAssistantMessage('Noted.'), bot.faux.fauxAssistantMessage('The backups are', { stopReason: 'length' }));
+  await bot.runtime.prompt(MID_WINDOW, 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 1, 'armed');
+  await bot.runtime.prompt('Check the backups', 'followUp');
+  await until(() => decided(records, 'plan', 'skipped').length === 1, 'the cut-off run plans');
+  assert.match(String(decided(records, 'plan', 'skipped')[0].reason), /^the (last answer stopped with length|last run failed), so its request is unanswered$/);
+  assert.deepEqual(time.pending(), [], 'no timer');
+  time.advance(55 * MINUTE);
+  assert.ok(!bot.requests.some(request => requestHas(request, DRAFT_MARK)), 'no draft');
+});
+
+// Regressions from the fifth review: the draft's provider payload above 75%, and the handoff's size.
+
+/** pi-ai's Anthropic Messages request for `context`, captured before it is sent. */
+async function anthropicPayload(context: TranscriptContext): Promise<{ system: unknown; tools: unknown; messages: unknown[] }> {
+  // pi-ai is ESM-only: this CommonJS test loads it dynamically, as openTestBot loads its faux provider.
+  const api = await import('@earendil-works/pi-ai/api/anthropic-messages');
+  const model = {
+    id: 'claude-opus-4-5', name: 'Claude Opus', api: 'anthropic-messages', provider: 'anthropic', baseUrl: 'https://api.anthropic.com',
+    reasoning: false, input: ['text'], cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, contextWindow: 200_000, maxTokens: 64_000,
+  } as const;
+  let payload: { system: unknown; tools: unknown; messages: unknown[] } | undefined;
+  const client = { beta: { messages: { create: () => { throw new Error('captured, not sent'); } } } };
+  const stream = api.stream(model as never, context, {
+    client, onPayload: (params: unknown) => { payload = params as typeof payload; return params; },
+  } as never);
+  await stream.result();
+  return payload!;
+}
+
+/** pi-claude-code's replay of `context` to the Claude Code CLI: the frames it feeds, which the CLI turns into its request. */
+async function claudeCodeFrames(messages: readonly Message[]): Promise<unknown[]> {
+  const root = path.dirname(require.resolve('@earendil-works/pi-claude-code/package.json'));
+  const sources = url.pathToFileURL(path.join(root, 'src') + path.sep).href;
+  // As bot-runtime loads the package: its TypeScript sources, transpiled on load.
+  nodeModule.registerHooks({
+    load(specifier, context, nextLoad) {
+      if (!specifier.startsWith(sources) || !specifier.endsWith('.ts')) return nextLoad(specifier, context);
+      const file = url.fileURLToPath(specifier);
+      const { code } = esbuild.transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'esm', target: 'node22', sourcefile: file });
+      return { format: 'module', source: code, shortCircuit: true };
+    },
+  });
+  const transcript = await import(`${sources}transcript.ts`) as {
+    prepareMessages(messages: readonly Message[], model: unknown): Message[];
+    prepareFrames(messages: readonly Message[]): { shouldQuery?: boolean }[];
+  };
+  const model = { id: 'claude-opus-4-5', api: 'claude-code', provider: 'claude-code' };
+  // `shouldQuery` only says which frame is the newest.
+  return transcript.prepareFrames(transcript.prepareMessages(messages, model)).map(({ shouldQuery: _query, ...frame }) => frame);
+}
+
+/** What Anthropic's prefix cache compares: the content, without cache markers, a string as its one text block. */
+function cacheContent(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value, (key, field: unknown) => {
+    if (key === 'cache_control' || key === 'shouldQuery') return undefined;
+    if (key === 'content' && typeof field === 'string') return [{ type: 'text', text: field }];
+    return field;
+  }));
+}
+
+test('idle rollover regression 11: above 75% the draft\u2019s prefix is the live request with its reminder, in pi-ai\u2019s Anthropic payload and the Claude Code replay', async t => {
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  const bot = await openTestBot(t, noSessions, { contextWindow: 30_000, idleRollover: idlePorts(time, records) });
+  bot.respond(bot.faux.fauxAssistantMessage('Noted.'), bot.faux.fauxAssistantMessage('Good.'), bot.faux.fauxAssistantMessage(DRAFT));
+  await bot.runtime.prompt(`Remember that tycho runs the backups. ${'w'.repeat(64_000)}`, 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 1, 'armed');
+  await bot.runtime.prompt('That is all for now.', 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length === 2, 'armed after the last turn');
+  assert.equal(decided(records, 'plan', 'armed')[1].trigger, 'early', 'the window is over 75%');
+  const live = bot.contexts.at(-1)!;
+  assert.match(textOf(live.messages.at(-1)), /^\[pi-dish: this context window is \d+% full\. Save your notebook/, 'the live request carries the reminder');
+  time.advance(11 * MINUTE);
+  await until(() => decided(records, 'result', 'rolled-over').length === 1, 'rolled over');
+  const fork = bot.contexts.find(context => requestHas(context.messages, DRAFT_MARK))!;
+  // A short latest request is quoted whole, once: the tail refers to it.
+  const handoff = textOf(bot.mirrorLines().find(line => line.customType === 'bot-context-window'));
+  assert.ok(handoff.includes('\nuser: (the latest request, quoted below)\n') && handoff.includes('\nLatest request: That is all for now.\n'));
+  assert.equal(handoff.split('That is all for now.').length, 2, 'quoted once');
+
+  // The messages the provider gets: the live request exactly, its reminder included, then the answer and the draft request.
+  assert.deepEqual(fork.messages.slice(0, -2), live.messages);
+  assert.equal(textOf(fork.messages.at(-2)), 'Good.');
+
+  // pi-ai's Anthropic payload: the live request's cache marker sits on its reminder, and the fork carries that exact
+  // prefix, a few blocks before its own marker, within Anthropic's lookback.
+  const [livePayload, forkPayload] = [await anthropicPayload(live), await anthropicPayload(fork)];
+  assert.match(JSON.stringify(livePayload.messages.at(-1)), /this context window is \d+% full\..*"cache_control"/, 'the live marker is on the reminder');
+  assert.deepEqual(cacheContent(forkPayload.system), cacheContent(livePayload.system));
+  assert.deepEqual(cacheContent(forkPayload.tools), cacheContent(livePayload.tools));
+  assert.deepEqual(cacheContent(forkPayload.messages.slice(0, livePayload.messages.length)), cacheContent(livePayload.messages), 'the same prefix');
+  // Anthropic looks back about 20 blocks from a breakpoint: from the fork's marker, the live prefix's last block is
+  // within that, counting every serialized content block up to and including the marked one.
+  const blocks = (messages: unknown[]) => messages.flatMap(message => {
+    const content = (message as { content: unknown }).content;
+    return Array.isArray(content) ? content as Record<string, unknown>[] : [{ type: 'text', text: content }];
+  });
+  const forkBlocks = blocks(forkPayload.messages);
+  const marked = forkBlocks.map((block, index) => block.cache_control ? index : -1).filter(index => index >= 0);
+  assert.equal(marked.length, 1, 'one marker in the fork\u2019s messages');
+  const prefixEnd = blocks(livePayload.messages).length - 1;
+  assert.ok(marked[0] > prefixEnd && marked[0] - prefixEnd <= 20, `the marker is ${marked[0] - prefixEnd} blocks after the prefix`);
+
+  // The Claude Code replay: the frames up to the live request's are the live request's frames.
+  const [liveFrames, forkFrames] = [await claudeCodeFrames(live.messages), await claudeCodeFrames(fork.messages)];
+  assert.deepEqual(forkFrames.slice(0, liveFrames.length), liveFrames, 'the same frames');
+
+  // Without the reminder put back, neither prefix matches: the cost the review found.
+  const bare = fork.messages.filter(message => !(message.role === 'user' && /^\[pi-dish: this context window is \d+% full\. Save/.test(textOf(message))));
+  assert.notDeepEqual(cacheContent((await anthropicPayload({ ...fork, messages: bare })).messages.slice(0, livePayload.messages.length)), cacheContent(livePayload.messages));
+  assert.notDeepEqual((await claudeCodeFrames(bare)).slice(0, liveFrames.length), liveFrames);
+});
+
+/** Sends `request` and lets the bot roll over while idle; then follows the handoff's pointer with history read. */
+async function rollOverAndFollow(bot: Harness, time: ReturnType<typeof fakeClock>, records: IdleRolloverRecord[], request: string) {
+  const [armed, rolled] = [decided(records, 'plan', 'armed').length, decided(records, 'result', 'rolled-over').length];
+  bot.respond(bot.faux.fauxAssistantMessage('Noted.'), bot.faux.fauxAssistantMessage(DRAFT));
+  await bot.runtime.prompt(request, 'followUp');
+  await until(() => decided(records, 'plan', 'armed').length > armed, 'armed');
+  time.advance(55 * MINUTE);
+  await until(() => decided(records, 'result', 'rolled-over').length > rolled, 'rolled over');
+  const handoff = textOf(bot.mirrorLines().filter(line => line.customType === 'bot-context-window').at(-1));
+  const window = Number(/history read (\d+) has all of it\]/.exec(handoff)?.[1]);
+  bot.respond(bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('history', { action: 'read', window })], { stopReason: 'toolUse' }),
+    bot.faux.fauxAssistantMessage('Read.'));
+  await bot.runtime.prompt('What did that request say after the quote?', 'followUp');
+  await until(() => said(bot, 'Read.'), 'history answers');
+  return { handoff, window, read: textOf(toolResults(bot).at(-1)) };
+}
+
+/** A request over the idle quote's length whose end, past the quote, is unique. */
+const LONG_REQUEST = `Remember that tycho runs the backups. ${'w'.repeat(40_000)} The restore key is in the blue binder.`;
+
+test('idle rollover regression 12: an idle rollover quotes at most 1,500 characters of the latest request once, and its history pointer has the rest', async t => {
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  const bot = await openTestBot(t, noSessions, { contextWindow: 30_000, idleRollover: idlePorts(time, records) });
+  const { handoff, window, read } = await rollOverAndFollow(bot, time, records, LONG_REQUEST);
+  assert.equal(window, 1);
+  assert.ok(handoff.includes(`\nLatest request: ${LONG_REQUEST.slice(0, 1_500)}… [the first 1500 of ${LONG_REQUEST.length} characters; history read 1 has all of it]`));
+  // The tail does not quote it again.
+  assert.ok(handoff.includes('\nuser: (the latest request, quoted below)\n'));
+  assert.equal(handoff.split(LONG_REQUEST.slice(0, 200)).length, 2, 'quoted once');
+  assert.ok(handoff.length < 5_000, `the handoff is ${handoff.length} characters`);
+  assert.match(read, /The restore key is in the blue binder\./, 'history read 1 has the text past the quote');
+});
+
+test('idle rollover regression 13: a forked sub-bot\u2019s inherited window is its window 1, so its handoff\u2019s history pointer finds the request', async t => {
+  const registry = tempRegistry(t);
+  const botsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-dir-'));
+  t.after(() => fs.rmSync(botsDir, { recursive: true, force: true }));
+  const personal = registry.create({ name: 'Personal', identity: 'You are Personal, the contact for personal matters.', model: 'faux/faux-1' }, { actor: 'user' });
+  const time = fakeClock();
+  const records: IdleRolloverRecord[] = [];
+  let child: Harness | undefined;
+  const hub: HubApi = (pathname, body) => routes(pathname, body);
+  const routes = hubOf(createBotHandlers(() => registry, botControl(new Map(), [], async row => {
+    child = await openTestBot(t, noSessions, {
+      botsDir, row: () => registry.get(row.id)!, api: hub, contextWindow: 30_000, idleRollover: idlePorts(time, records),
+      responses: faux => [faux.fauxAssistantMessage('On it.')],
+    });
+  })));
+  const parent = await openTestBot(t, noSessions, { botsDir, row: () => registry.get(personal.id)!, api: hub });
+  parent.respond(
+    // The parent forks from its second window: the child's copy starts with the parent's reset.
+    toolCall(parent, 'context_notes', { action: 'write', text: 'The dentist is on Friday.' }),
+    toolCall(parent, 'new_context', { summary: 'Noted the dentist' }),
+    toolCall(parent, 'bot_create', { name: 'Medical', purpose: 'Keep track of appointments.', identity: 'You are Medical, the contact for appointments.' }),
+    parent.faux.fauxAssistantMessage('Created Medical.'),
+  );
+  await parent.runtime.prompt('Note the dentist, then make a sub-bot for medical things', 'followUp');
+  await until(() => !!child && said(child, 'On it.') && said(parent, 'Created Medical.'), 'the sub-bot answers its purpose');
+  const sub = child!;
+  const { handoff, window, read } = await rollOverAndFollow(sub, time, records, LONG_REQUEST);
+  assert.match(handoff, /^\[Context window 2\./, 'the child\u2019s second window');
+  assert.equal(window, 1);
+  assert.match(read, /^Window 1, /);
+  assert.match(read, /The restore key is in the blue binder\./, 'history read 1 has the text past the quote');
+  assert.match(read, /\[handoff\] \[Context window 2\. /, 'and starts at the inherited window\u2019s handoff');
+
+  // The list agrees: two windows, the first with the summary the child gave it.
+  sub.respond(toolCall(sub, 'history', { action: 'windows' }), sub.faux.fauxAssistantMessage('Listed.'));
+  await sub.runtime.prompt('List your windows', 'followUp');
+  await until(() => said(sub, 'Listed.'), 'history lists');
+  assert.match(textOf(toolResults(sub).at(-1)), /^1\. Backups on tycho — \d+ messages\n2\. \(current window\) — \d+ messages$/);
+});
+
+test('an idle handoff\u2019s quote never ends inside a surrogate pair', () => {
+  const request = `${'a'.repeat(1_499)}\u{1F600}${'b'.repeat(100)}`;
+  const handoff = composeHandoff({ windowNumber: 3, closed: [], tail: [], request, workers: [], forced: false, idle: true });
+  assert.ok(handoff.includes(`Latest request: ${'a'.repeat(1_499)}… [the first 1499 of ${request.length} characters; history read 2 has all of it]`));
+  assert.doesNotMatch(handoff, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  assert.ok(composeHandoff({ windowNumber: 2, closed: [], tail: [], request, workers: [], forced: true }).includes(request), 'other rollovers quote it whole');
 });
