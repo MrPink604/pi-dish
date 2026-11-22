@@ -110,10 +110,10 @@ function cleanupError(error: unknown, remainingProcesses: ProcessIdentity[]): Pa
   return Object.assign(error instanceof Error ? error : new Error(String(error)), { remainingProcesses });
 }
 
-function runFile(file: string, args: readonly unknown[], timeout: number): Promise<string> {
+function runFile(file: string, args: readonly unknown[], timeout: number, cwd?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     // No shell quoting: execFile owns argv coercion/rejection.
-    execFile(file, args as readonly string[], { timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
+    execFile(file, args as readonly string[], { cwd, timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
       if (err) { err.stderr = stderr; return reject(err); }
       resolve(stdout);
     });
@@ -165,16 +165,19 @@ export function tmuxServerScopeArgv(socket: string, env: NodeJS.ProcessEnv = pro
 /** Run tmux `args`, which may start the server on `socket`; a new server gets its own scope. */
 async function runTmuxStartingServer(socket: string, args: readonly unknown[], timeout: number): Promise<string> {
   const scope = await tmuxServerRunning(socket) ? null : tmuxServerScopeArgv(socket);
-  if (!scope) return runTmux(args, { timeout });
-  try {
-    return await runFile(scope[0], [...scope.slice(1), ...args], timeout);
-  } catch (error) {
-    // A running server means tmux itself ran and failed. Otherwise the scope
-    // could not be created (bus refused, policy): start tmux unscoped.
-    if (await tmuxServerRunning(socket)) throw error;
-    console.error(`tmux: no systemd scope for ${socket}, starting the server unscoped:`, error instanceof Error ? error.message : error);
-    return runTmux(args, { timeout });
+  // tmux keeps its launching client's cwd for the lifetime of the server.
+  // A staged update can unlink pi-dish's cwd; -c sets the pane cwd, not the server's.
+  if (scope) {
+    try {
+      return await runFile(scope[0], [...scope.slice(1), ...args], timeout, '/');
+    } catch (error) {
+      // A running server means tmux itself ran and failed. Otherwise the scope
+      // could not be created (bus refused, policy): start tmux unscoped.
+      if (await tmuxServerRunning(socket)) throw error;
+      console.error(`tmux: no systemd scope for ${socket}, starting the server unscoped:`, error instanceof Error ? error.message : error);
+    }
   }
+  return runFile('tmux', args, timeout, '/');
 }
 
 let tmuxAvailable: boolean | null = null;
@@ -254,7 +257,8 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
   } else {
     throw new Error('tmuxSession or newTmuxSessionName required');
   }
-  if (cwd) args.push('-c', cwd);
+  if (newTmuxSessionName) args.push('-c', path.resolve(String(cwd || '.')));
+  else if (cwd) args.push('-c', cwd);
   args.push(...envFlags, '-P', '-F', '#{pane_id}', '--', ...command);
 
   const out = newTmuxSessionName

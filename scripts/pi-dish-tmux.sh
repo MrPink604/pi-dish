@@ -160,7 +160,8 @@ start_service() {
   # one-time restore settles, then reconcile the managed window afterward.
   if ! tmux list-sessions >/dev/null 2>&1; then
     bootstrap_session="${session}-bootstrap-$$"
-    start_tmux_server new-session -d -s "$bootstrap_session" -n bootstrap 'sleep 30'
+    # The tmux server can outlive the deployment tree that started it.
+    (cd / && start_tmux_server new-session -d -s "$bootstrap_session" -n bootstrap 'sleep 30')
     sleep "${PI_DISH_TMUX_STARTUP_DELAY:-2}"
   fi
 
@@ -173,8 +174,9 @@ start_service() {
       tmux new-window -d -t "=$session:" -n "$window" -c "$root" \
         -e "PI_DISH_ENV_FILE=$env_file" "$runner"
     else
-      tmux new-session -d -s "$session" -n "$window" -c "$root" \
-        -e "PI_DISH_ENV_FILE=$env_file" "$runner"
+      # The last session may have disappeared during stop_service.
+      (cd / && tmux new-session -d -s "$session" -n "$window" -c "$root" \
+        -e "PI_DISH_ENV_FILE=$env_file" "$runner")
     fi
     wait_until_healthy || rc=$?
   fi

@@ -395,6 +395,31 @@ test('OMP launch uses its wrapper descriptor and encoded cross-harness identity'
   assert.match(text(tree.body.error), /does not advertise live tree reads/i);
 });
 
+test('a tmux server can launch another harness after its starting release is removed', { skip: !tmuxOk }, async t => {
+  const socket = path.join(tmuxTmp, 'rollout');
+  const release = fs.mkdtempSync(path.join(tmpHome, 'release-'));
+  const callerCwd = process.cwd();
+  t.after(() => { try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore' }); } catch {} });
+  process.chdir(release);
+  try {
+    await tmux.spawnInTmux({ socket, newTmuxSessionName: 'first', cwd: tmpHome, command: ['sleep', '60'] });
+  } finally {
+    process.chdir(callerCwd);
+  }
+  fs.rmdirSync(release);
+  const pid = execFileSync('tmux', ['-S', socket, 'display-message', '-p', '#{pid}'], { encoding: 'utf8' }).trim();
+  assert.ok(fs.statSync(`/proc/${pid}/cwd`).nlink > 0, 'tmux must not retain the deleted deployment directory');
+
+  const { status, body } = await post('/api/sessions/new', {
+    harness: 'omp', cwd: tmpHome, target: { type: 'tmux', socket, newTmuxSession: 'after-rollout' },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  const spawn = present(tmux.getSpawn(text(body.id)));
+  assert.equal((await tmux.paneLocation(socket, spawn.paneId))?.tmuxSession, 'after-rollout');
+  assert.equal(execFileSync('tmux', ['-S', socket, 'display-message', '-p', '-t', spawn.paneId, '#{pane_current_path}'],
+    { encoding: 'utf8' }).trim(), tmpHome);
+});
+
 test('OMP close kills and verifies only its exact pi-dish-owned pane process tree', { skip: !tmuxOk }, async () => {
   const created = await post('/api/sessions/new', {
     harness: 'omp',

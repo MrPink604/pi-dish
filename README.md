@@ -820,6 +820,10 @@ cgroup would lose every pane when the service stops. Stopping the service
 still removes the pi-dish server window and processes through `stop`; other
 panes survive. Without systemd, or with `PI_DISH_TMUX_SCOPE=0`, tmux starts
 directly in the caller's cgroup, as does a server whose scope systemd refuses.
+Both launch paths start new tmux servers from `/`, not the deployment directory;
+`-c` still sets the pane's working directory. If `/proc/<tmux-server-pid>/cwd`
+already ends in ` (deleted)`, a pi-dish restart won't repair that server. Drain
+its sessions before retiring that socket's server and letting pi-dish recreate it.
 When scanning for old server processes, it silently skips processes that have already exited.
 `scripts/pi-dish-tmux.sh status` probes `http://127.0.0.1:$PORT/api/host`
 (`PORT` defaults to `3333`), regardless of the tmux session or window name.
