@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const code_build_js_1 = require("../lib/code-build.js");
 const { setTimeout: delay } = require('node:timers/promises');
 const { sanitizeTestEnv } = require('./test-env');
 async function bind(t, host = '127.0.0.1', port = 0) {
@@ -117,6 +118,29 @@ async function settledReadiness(port) {
     } while (Date.now() < deadline);
     return assert.fail('codemode readiness check did not settle');
 }
+test('deployment fingerprint tracks nested shipped files without a Git checkout', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-listener-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const files = ['lib/nested/types.d.ts', 'lib/nested/main.js', 'public/vendor/app.js',
+        'scripts/nested/setup.sh', 'package.json', 'package-lock.json'];
+    for (const file of files) {
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        fs.writeFileSync(path.join(root, file), 'original');
+    }
+    const original = await (0, code_build_js_1.deployedBuild)(root);
+    assert.equal(original.commit, null);
+    assert.match(original.sha, /^[a-f0-9]{12}$/);
+    for (const file of files) {
+        const filename = path.join(root, file);
+        fs.writeFileSync(filename, 'modified');
+        assert.notEqual((await (0, code_build_js_1.deployedBuild)(root)).sha, original.sha, file);
+        fs.rmSync(filename);
+        fs.writeFileSync(filename, 'original');
+    }
+    assert.deepEqual(await (0, code_build_js_1.deployedBuild)(root), original);
+    fs.renameSync(path.join(root, files[0]), path.join(root, 'lib/nested/renamed.d.ts'));
+    assert.notEqual((await (0, code_build_js_1.deployedBuild)(root)).sha, original.sha);
+});
 test('HTTP readiness is unauthenticated and waits for the real WASM load', { timeout: 15000 }, async (t) => {
     const server = boot(t, { PI_DISH_TOKEN: 'ready-fixture-token', PI_DISH_TEST_WASM: 'hold' });
     const { address: { port } } = await server.wait(event => event.type === 'listening');
@@ -127,11 +151,16 @@ test('HTTP readiness is unauthenticated and waits for the real WASM load', { tim
     assert.deepEqual(pending.body.checks, { startup: { status: 'ok' }, nodePty: { status: 'ok' }, codemode: { status: 'pending' } });
     assert.equal(pending.body.version, (await descriptor('127.0.0.1', port)).version);
     assert.match(String(pending.body.sha), /^[a-f0-9]{12}$/);
+    const root = path.join(__dirname, '..');
+    const commit = fs.existsSync(path.join(root, '.git'))
+        ? (0, node_child_process_1.execFileSync)('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+        : null;
+    assert.equal(pending.body.commit, commit);
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/config`)).status, 401);
     server.child.send({ releaseWasm: true });
     assert.deepEqual(await settledReadiness(port), {
         status: 200,
-        body: { ready: true, version: pending.body.version, sha: pending.body.sha,
+        body: { ready: true, version: pending.body.version, sha: pending.body.sha, commit,
             checks: { startup: { status: 'ok' }, nodePty: { status: 'ok' }, codemode: { status: 'ok' } } },
     });
 });

@@ -801,6 +801,7 @@ The response has this shape:
   "ready": true,
   "version": "1.0.0",
   "sha": "0123456789ab",
+  "commit": "66b56a3286346c540957c06e8a938aef9e6fea45",
   "checks": {
     "startup": { "status": "ok" },
     "nodePty": { "status": "ok" },
@@ -809,7 +810,11 @@ The response has this shape:
 }
 ```
 
-`sha` is the server's 12-hex-digit SHA-256 build fingerprint, not a Git ref.
+`commit` is the install directory's full Git HEAD at startup, or `null` for a
+Git-less install. `sha` is a 12-hex-digit SHA-256 fingerprint of file paths and
+contents under `lib/`, `public/`, and `scripts/` (recursively), plus
+`package.json` and `package-lock.json`. It is not a Git ref and works without
+Git. Both identifiers are computed once at startup.
 Each check has `status: "pending"`, `"ok"`, or `"failed"`; a failed dependency
 also has an `error` string. The server logs the underlying loader error.
 `nodePty` checks the native binary even when the terminal UI is disabled;

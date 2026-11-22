@@ -61,7 +61,7 @@ import { createBotHandlers, type BotControl } from './bot-handlers';
 import { BOTS_SETTING, botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
 import { botRoute, deliverStartingBot, deliverToBot, liveBotRelay, startBot, startBots } from './bot-supervisor';
 import { lastBotTurn } from './bot-mirror';
-import { codeBuild } from './code-build';
+import { codeBuild, deployedBuild } from './code-build';
 import { createKnowledgeHandlers } from './knowledge-handlers';
 import { KNOWLEDGE_SETTING, openKnowledgeBase, type KnowledgeBase } from './knowledge';
 import { canonicalSessionId } from './session-key';
@@ -95,7 +95,8 @@ export function startServer(rootDirectory: string): Server {
   // reaches the port can drive agents with shell access.
   const HOST = process.env.HOST || '127.0.0.1';
   const packageVersion: string = require(path.join(rootDirectory, 'package.json')).version;
-  const sha = codeBuild(rootDirectory);
+  const buildIdentity = deployedBuild(rootDirectory);
+  void buildIdentity.catch(error => console.error(`[readiness] deployment identity: ${errorMessage(error)}`));
   const checks: Record<'startup' | 'nodePty' | 'codemode', ReadinessCheck> = {
     startup: { status: 'pending' },
     nodePty: { status: 'pending' },
@@ -151,9 +152,11 @@ export function startServer(rootDirectory: string): Server {
   app.use('/api/page-comments', accessHandlers.pageCommentTransport);
   app.use('/api', accessHandlers.apiGate);
   app.get('/api/host', accessHandlers.host);
-  app.get('/api/ready', (_req: ApplicationRequest, res: ApplicationResponse) => {
-    const ready = checks.startup.status === 'ok' && checks.nodePty.status === 'ok' && checks.codemode.status === 'ok';
-    res.set('Cache-Control', 'no-store').status(ready ? 200 : 503).json({ ready, version: packageVersion, sha, checks });
+  app.get('/api/ready', (_req: ApplicationRequest, res: ApplicationResponse, next: NextFunction) => {
+    void buildIdentity.then(({ sha, commit }) => {
+      const ready = checks.startup.status === 'ok' && checks.nodePty.status === 'ok' && checks.codemode.status === 'ok';
+      res.set('Cache-Control', 'no-store').status(ready ? 200 : 503).json({ ready, version: packageVersion, sha, commit, checks });
+    }).catch(next);
   });
   app.post('/api/auth/ticket', accessHandlers.ticket);
   app.get('/api/vault', vaultHandlers.overview);
