@@ -35,7 +35,7 @@ service_pids() {
 
   for proc_dir in /proc/[0-9]*; do
     argv=()
-    mapfile -d '' -t argv < "$proc_dir/cmdline" 2>/dev/null || true
+    mapfile -d '' -t argv 2>/dev/null < "$proc_dir/cmdline" || true
     ((${#argv[@]} >= 2)) || continue
     # A supervisor is identified by the script it runs, which is already
     # root-scoped; its cwd is not load-bearing. Matching argv[1] exactly also

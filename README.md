@@ -772,6 +772,7 @@ server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the
 `pi-dish` session and `server` window by default.
 The manager always targets the default tmux server, even when invoked from
 inside a pane attached to another socket.
+When scanning for old server processes, it silently skips processes that have already exited.
 `scripts/pi-dish-tmux.sh status` probes `http://127.0.0.1:$PORT/api/host`
 (`PORT` defaults to `3333`), regardless of the tmux session or window name.
 It exits `0` if the probe succeeds and `1` otherwise; it does not need Tailscale
