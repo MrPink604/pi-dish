@@ -1866,6 +1866,9 @@ test('published file pages and transcript video attachments serve video with Ran
   const html = await pageRes.text();
   assert.match(html, /<video[^>]+controls[^>]+playsinline[^>]+preload="metadata"/);
   assert.doesNotMatch(html, /\bautoplay\b/i);
+  const videoScript = present(present(html.match(/<script>([\s\S]*?)<\/script>/))[1]);
+  const scriptHash = crypto.createHash('sha256').update(videoScript).digest('base64');
+  assert.ok(pageRes.headers.get('content-security-policy')?.includes(`script-src 'sha256-${scriptHash}';`));
   const videoSrc = present(present(html.match(/<video[^>]+src="([^"]+)"/))[1]).replace(/&amp;/g, '&');
   const ranged = await rawGet(videoSrc, { Range: 'bytes=4-9' });
   assert.equal(ranged.status, 206);
@@ -2122,7 +2125,7 @@ test('file-viewer pages render as standalone read-only documents', async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type') ?? '', /text\/html/);
   assert.match(response.headers.get('content-security-policy') ?? '', /default-src 'none'/);
-  assertOpaqueOrigin(response, 'the file renderer, whose own policy above still forbids scripts');
+  assertOpaqueOrigin(response, 'the file renderer, which only permits the fixed video control script');
   const html = await response.text();
   assert.match(html, /<body class="standalone-file-page">/);
   assert.match(html, /<h1>Rendered file<\/h1>/);
@@ -2131,6 +2134,7 @@ test('file-viewer pages render as standalone read-only documents', async () => {
   assert.match(html, /&lt;script&gt;globalThis\.pwned = true&lt;\/script&gt;/);
   assert.match(html, /href="#"/);
   assert.match(html, /<td>one<br>two &lt;br onclick=x&gt;<\/td>/);
+  assert.doesNotMatch(html, /<script\b/);
   assert.doesNotMatch(html, /artifact-comments|commentBubble|app\.js/,
     'the standalone renderer has no app or commenting UI');
 

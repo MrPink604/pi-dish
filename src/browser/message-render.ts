@@ -14,13 +14,14 @@ import {
 import { extractImageBlocks, extractVideoBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { mediaFileName } from '../core/helper-media';
 import { splitSessionRefContext } from '../core/helper-refs';
-import { renderVideoPlayerHtml } from './video-player';
+import type { RenderVideoPreview } from './video-player';
 export function createMessageRenderer(options: {
   document: Document; sessionState: SessionState; details: ReturnType<typeof createResponseDetails>;
   // Peek renders another session's trace: main-session share/details buttons
-  // stay out; image host and model context come from the peeked session.
-  peek?: () => { host: string | null; model: string | null } | null;
+  // stay out; media host and model context come from the peeked session.
+  peek?: () => { id: string; host: string | null; model: string | null } | null;
   markdown: (text: string) => string; assetUrl: (host: string | null | undefined, path: string) => string;
+  video: RenderVideoPreview;
   matchRef: (ref: string) => { name?: string | null; isActive?: boolean } | null | undefined;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void;
 }) {
@@ -63,7 +64,8 @@ function imageBlocksHtml(content: unknown, alt = 'image') {
 function videoBlocksHtml(content: unknown) {
   const videos = extractVideoBlocks(content);
   if (!videos.length) return '';
-  const sessionId = options.sessionState.currentSession?.id || null;
+  const peek = options.peek?.();
+  const sessionId = peek?.id ?? options.sessionState.currentSession?.id;
   const players = videos.flatMap(video => {
     let src = '';
     if (video.url) {
@@ -74,13 +76,13 @@ function videoBlocksHtml(content: unknown) {
       src = `data:${video.mimeType};base64,${video.data}`;
     }
     if (!src) return [];
-    return [renderVideoPlayerHtml({
+    return [options.video({
       src,
       name: video.name || mediaFileName(video.path || video.url || '', 'video'),
       mimeType: video.mimeType,
       variant: 'inline',
       filePath: video.path ?? null,
-    })];
+    }, { host: renderHost(), sessionId })];
   }).join('');
   return players ? `<div class="msg-videos">${players}</div>` : '';
 }

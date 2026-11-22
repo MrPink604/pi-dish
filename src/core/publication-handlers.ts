@@ -10,7 +10,7 @@ import { canonicalSessionId } from './session-key';
 import { registryIdentity, routeIdentity, routeSessionId } from './session-ownership';
 import { asRecord } from './wire-protocol';
 import { readFileForViewer } from './file-mention';
-import { renderFilePage } from './file-page';
+import { FILE_PAGE_VIDEO_SCRIPT_HASH, renderFilePage } from './file-page';
 import { sendRangedFile } from './range-response';
 import { readOmpExportData } from './omp-export';
 import { isolateArtifact } from './artifact-isolation';
@@ -604,7 +604,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     }
     res.setHeader('Cache-Control', 'public, no-cache');
     // Appended to the sandbox servePage already set: both policies apply.
-    res.append('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self' http: https:; media-src 'self' http: https:; base-uri 'none'; form-action 'none'");
+    res.append('Content-Security-Policy', `default-src 'none'; script-src 'sha256-${FILE_PAGE_VIDEO_SCRIPT_HASH}'; style-src 'self'; img-src 'self' http: https:; media-src 'self' http: https:; base-uri 'none'; form-action 'none'`);
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.type('html').send(renderFilePage({

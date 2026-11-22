@@ -391,5 +391,5 @@ function linkifyFilePaths(root: ParentNode) {
     ]).then(() => { const runtime = options.highlight(); if (!runtime) throw new Error('Syntax highlighter did not load'); return runtime; })
       .catch(error => { highlightAssetsPromise = null; throw error; });
   }
-  return { format: formatMarkdown, stream: streamMarkdown, highlight: applyHighlight, dispose() { disposed = true; events.abort(); tables.dispose(); videos.dispose(); copies = new WeakMap(); for (const timer of copyTimers) clearTimeout(timer); copyTimers.clear(); } };
+  return { format: formatMarkdown, stream: streamMarkdown, highlight: applyHighlight, video: videos.render, dispose() { disposed = true; events.abort(); tables.dispose(); videos.dispose(); copies = new WeakMap(); for (const timer of copyTimers) clearTimeout(timer); copyTimers.clear(); } };
 }

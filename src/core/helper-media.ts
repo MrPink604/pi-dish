@@ -1,4 +1,5 @@
 /** Portable media extension and MIME helpers shared by server and browser. */
+import { escapeHtml } from './helper-format';
 
 export const IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
   '.png': 'image/png',
@@ -50,4 +51,18 @@ export function mediaFileName(rawPath: unknown, fallback = 'video'): string {
   const base = slash >= 0 ? clean.slice(slash + 1) : clean;
   if (!base) return fallback;
   try { return decodeURIComponent(base); } catch { return base; }
+}
+
+/** Shared native disclosure for app and standalone file previews. */
+export function renderVideoSummary(fileName: string, detail = ''): string {
+  const label = escapeHtml(fileName);
+  return `<summary class="video-summary"><span class="video-icon" aria-hidden="true">🎞</span>`
+    + `<span class="video-meta"><span class="video-filename" title="${label}">${label}</span>`
+    + ` <span class="video-detail">${escapeHtml(detail)}</span> <span class="video-resolution"></span></span>`
+    + `<span class="video-chevron" aria-hidden="true">▶</span></summary>`;
+}
+
+export function formatMediaSize(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : bytes >= 10240 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
 }

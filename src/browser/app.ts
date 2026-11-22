@@ -812,6 +812,7 @@ const sessionInfo: ReturnType<typeof createSessionInfo> = createSessionInfo({
 const fileViews: ReturnType<typeof createFileViews> = createFileViews({
   document, sessionState, request, host: hostEntryFor, assetUrl: hostAssetUrl,
   markdown: text => richText.format(text), highlight: (root, context) => richText.highlight(root, context), copy: copyTextToClipboard,
+  video: (player, context) => richText.video(player, context),
   status: setStatus, refreshArtifacts: owner => sessionInfo.refreshArtifacts(owner),
   closeComments: () => anchoredCommentController.close(), clearComments: () => anchoredCommentController.set([]),
   refreshComments: () => anchoredCommentController.refresh(), markComments: () => anchoredCommentController.applyMarks(),
@@ -833,6 +834,7 @@ const transcriptController: ReturnType<typeof createTranscript> = createTranscri
 
 const messageRenderer: ReturnType<typeof createMessageRenderer> = createMessageRenderer({
   document, sessionState, details: responseDetailsController, markdown: text => richText.format(text),
+  video: (player, context) => richText.video(player, context),
   assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), ...chromeScroll, follow: () => appChrome.following,
 });
 
@@ -842,6 +844,7 @@ const subagentsController: ReturnType<typeof createSubagentsView> = createSubage
   loadPrevious,
   selectSession, status: setStatus, copy: copyTextToClipboard, confirm: text => confirm(text),
   markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
+  video: (player, context) => richText.video(player, context),
 });
 
 

@@ -2,12 +2,13 @@
  * Lightweight first-party video enhancement layered directly over native HTML5
  * `<video controls playsinline preload="metadata">`.
  *
- * State lives in the DOM and events are delegated on `document`, so retained
- * transcript fragments restore cleanly without rebinding.
+ * Playback stays in the DOM; the controller remembers collapsed previews
+ * across rebuilds of the same session's transcript and file views.
  */
 import { escapeHtml } from '../core/helper-format';
-import { mediaFileName, videoMimeForPath } from '../core/helper-media';
+import { mediaFileName, renderVideoSummary, videoMimeForPath } from '../core/helper-media';
 import { findPathTokens } from './helper-markdown';
+import { sessionRefKey } from './helper-identity';
 import type { SessionState } from './session-state';
 
 export const VIDEO_PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -24,6 +25,7 @@ export interface VideoPlayerRenderOptions {
   readonly filePath?: string | null;
   readonly inferred?: boolean;
   readonly title?: string | null;
+  readonly sizeLabel?: string;
 }
 
 export interface VideoEnhanceContext {
@@ -31,6 +33,8 @@ export interface VideoEnhanceContext {
   readonly sessionId?: string | null;
   readonly baseFilePath?: string | null;
 }
+
+export type RenderVideoPreview = (player: VideoPlayerRenderOptions, context?: VideoEnhanceContext) => string;
 
 function sanitizeMediaSrc(raw: string): string {
   const trimmed = String(raw || '').trim();
@@ -69,9 +73,12 @@ function fallbackReason(code: number | undefined): string {
   return 'Unable to play this video in this browser.';
 }
 
-export function renderVideoPlayerHtml(options: VideoPlayerRenderOptions): string {
+export function renderVideoPlayerHtml(options: VideoPlayerRenderOptions, state?: {
+  scope: string; collapsed: boolean; detail: string;
+}): string {
   const src = sanitizeMediaSrc(options.src);
   const name = (options.name || '').trim() || mediaFileName(options.filePath || src, 'video');
+  const fileName = options.filePath || videoMimeForPath(src) ? mediaFileName(options.filePath || src, name) : name;
   const mime = (options.mimeType || videoMimeForPath(options.filePath || src) || '').trim();
   const isViewer = options.variant === 'viewer';
   const figureClass = isViewer ? 'video-player file-view-video-player' : 'video-player msg-video-player';
@@ -83,10 +90,13 @@ export function renderVideoPlayerHtml(options: VideoPlayerRenderOptions): string
     : '';
   const titleAttr = options.title ? ` title="${escapeHtml(options.title)}"` : '';
   const fileAttr = options.filePath ? ` data-video-file-path="${escapeHtml(options.filePath)}"` : '';
+  const scopeAttr = state?.scope ? ` data-video-scope="${escapeHtml(state.scope)}"` : '';
   const inferredAttr = options.inferred ? ' data-video-inferred="1"' : '';
   const mimeDetail = mime ? `${name} (${mime})` : name;
 
-  return `<figure class="${figureClass}" data-video-src="${escapeHtml(src)}" data-video-mime="${escapeHtml(mime)}" data-video-name="${escapeHtml(name)}"${fileAttr}${inferredAttr}>`
+  return `<figure class="${figureClass}" data-video-src="${escapeHtml(src)}" data-video-mime="${escapeHtml(mime)}" data-video-name="${escapeHtml(name)}"${fileAttr}${scopeAttr}${inferredAttr}>`
+    + `<details class="video-disclosure"${state?.collapsed ? '' : ' open'}>`
+    + renderVideoSummary(fileName, state?.detail || options.sizeLabel)
     + `<div class="video-stage">`
     + `<video class="${videoClass}" controls playsinline preload="metadata" src="${escapeHtml(src)}"${titleAttr}>`
     + `<a href="${escapeHtml(src)}" target="_blank" rel="noopener">Open ${escapeHtml(name)}</a>`
@@ -98,21 +108,14 @@ export function renderVideoPlayerHtml(options: VideoPlayerRenderOptions): string
     + `<a class="btn-small video-fallback-open" href="${escapeHtml(src)}" target="_blank" rel="noopener">Open</a>`
     + `<a class="btn-small video-fallback-download" href="${escapeHtml(src)}" download="${escapeHtml(name)}">Download</a>`
     + `</div></div></div>`
-    + `<figcaption class="video-toolbar">`
-    + `<span class="video-meta" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`
+    + `<div class="video-toolbar">`
     + `<div class="video-controls">`
     + `<button type="button" class="video-btn video-step-back" title="Previous frame (,)" aria-label="Previous frame">-1f</button>`
     + `<button type="button" class="video-btn video-step-fwd" title="Next frame (.)" aria-label="Next frame">+1f</button>`
     + `<select class="video-speed" title="Playback speed" aria-label="Playback speed">${speedOptions}</select>`
     + openViewerBtn
     + `<a class="video-btn video-download" href="${escapeHtml(src)}" download="${escapeHtml(name)}" title="Download video" aria-label="Download video">↓</a>`
-    + `</div></figcaption></figure>`;
-}
-
-export function buildVideoPlayerElement(document: Document, options: VideoPlayerRenderOptions): HTMLElement {
-  const template = document.createElement('template');
-  template.innerHTML = renderVideoPlayerHtml(options);
-  return template.content.firstElementChild as HTMLElement;
+    + `</div></div></details></figure>`;
 }
 
 /** Pause active playback (and optionally abort/unload streams when closing a viewer). */
@@ -159,6 +162,25 @@ export function createVideoControls(options: {
   const events = new AbortController();
   const { signal } = events;
   let disposed = false;
+  // Only explicitly collapsed previews need state. Paths survive cache-busting
+  // changes in file-viewer URLs; external URLs are scoped to the owning host/session.
+  const collapsed = new Map<string, string>();
+  const identity = (scope: string, source: string) => JSON.stringify([scope, source]);
+  function playerKey(player: HTMLElement): string {
+    return identity(player.dataset.videoScope || '', player.dataset.videoFilePath || player.dataset.videoSrc || '');
+  }
+  function render(player: VideoPlayerRenderOptions, context?: VideoEnhanceContext): string {
+    const scope = sessionRefKey(context?.sessionId
+      ? { id: context.sessionId, host: context.host ?? null }
+      : options.sessionState?.currentSession);
+    const detail = collapsed.get(identity(scope, player.filePath || sanitizeMediaSrc(player.src)));
+    return renderVideoPlayerHtml(player, { scope, collapsed: detail !== undefined, detail: detail || '' });
+  }
+  function buildPlayer(player: VideoPlayerRenderOptions, context?: VideoEnhanceContext): HTMLElement {
+    const template = document.createElement('template');
+    template.innerHTML = render(player, context);
+    return template.content.firstElementChild as HTMLElement;
+  }
 
   function sessionContentUrl(targetPath: string, context?: VideoEnhanceContext): string | null {
     const sessionId = context?.sessionId ?? options.sessionState?.currentSession?.id ?? null;
@@ -217,14 +239,14 @@ export function createVideoControls(options: {
       const resolved = resolveSource(token.token, context);
       if (!resolved || seen.has(resolved.src)) continue;
       seen.add(resolved.src);
-      cards.push(buildVideoPlayerElement(document, {
+      cards.push(buildPlayer({
         src: resolved.src,
         name: mediaFileName(token.token),
         mimeType,
         variant: 'inline',
         filePath: resolved.filePath,
         inferred: true,
-      }));
+      }, context));
     }
     appendStrip(parent, cards);
   }
@@ -246,7 +268,7 @@ export function createVideoControls(options: {
           : resolveSource(fileHint, context);
         if (!resolved) continue;
         seen.add(resolved.src);
-        const player = buildVideoPlayerElement(document, {
+        const player = buildPlayer({
           src: resolved.src,
           name: img.alt.trim() || mediaFileName(resolved.filePath || rawSrc),
           mimeType,
@@ -254,7 +276,7 @@ export function createVideoControls(options: {
           filePath: resolved.filePath,
           inferred: false,
           title: img.title || null,
-        });
+        }, context);
         img.replaceWith(player);
       }
 
@@ -267,14 +289,14 @@ export function createVideoControls(options: {
         const resolved = resolveSource(rawTarget, context);
         if (!resolved || seen.has(resolved.src)) return;
         seen.add(resolved.src);
-        cards.push(buildVideoPlayerElement(document, {
+        cards.push(buildPlayer({
           src: resolved.src,
           name: label || mediaFileName(rawTarget),
           mimeType,
           variant: 'inline',
           filePath: resolved.filePath,
           inferred,
-        }));
+        }, context));
       };
 
       body.querySelectorAll<HTMLElement>('.file-link').forEach(link => {
@@ -318,6 +340,23 @@ export function createVideoControls(options: {
 
   document.addEventListener('click', event => {
     if (disposed || !(event.target instanceof Element)) return;
+    const summary = event.target.closest('.video-summary');
+    const disclosure = summary?.parentElement;
+    const player = disclosure?.parentElement;
+    if (disclosure instanceof HTMLDetailsElement && player?.classList.contains('video-player')) {
+      // Commit the preference in the same event as the interaction, before a
+      // streaming update can replace the disclosure and lose its toggle event.
+      event.preventDefault();
+      disclosure.open = !disclosure.open;
+      const key = playerKey(player);
+      if (disclosure.open) collapsed.delete(key);
+      else {
+        const video = disclosure.querySelector('video');
+        if (video && !video.paused) video.pause();
+        collapsed.set(key, video ? formatVideoDuration(video.duration) : '');
+      }
+      return;
+    }
     const back = event.target.closest<HTMLButtonElement>('.video-step-back');
     const fwd = back ? null : event.target.closest<HTMLButtonElement>('.video-step-fwd');
     if (back || fwd) {
@@ -347,7 +386,7 @@ export function createVideoControls(options: {
     const player = target.closest('.video-player');
     if (!player) return;
     const video = player.querySelector<HTMLVideoElement>('video.video-el');
-    if (!video || video.hidden) return;
+    if (!video || video.hidden || !video.closest<HTMLDetailsElement>('.video-disclosure')?.open) return;
     event.preventDefault();
     stepVideoFrame(video, event.key === ',' ? -1 : 1);
   }, { signal });
@@ -363,13 +402,18 @@ export function createVideoControls(options: {
     if (fallback) fallback.hidden = true;
     player.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.video-step-back, .video-step-fwd, .video-speed')
       .forEach(control => { control.disabled = false; });
-    const meta = player.querySelector<HTMLElement>('.video-meta');
-    if (meta) {
-      const parts = [player.dataset.videoName || 'video'];
-      const dur = formatVideoDuration(video.duration);
-      if (dur) parts.push(dur);
-      if (video.videoWidth > 0 && video.videoHeight > 0) parts.push(`${video.videoWidth}×${video.videoHeight}`);
-      meta.textContent = parts.join(' · ');
+    const duration = formatVideoDuration(video.duration);
+    const detail = player.querySelector('.video-detail');
+    if (detail && duration) {
+      detail.textContent = duration;
+      if (!video.closest<HTMLDetailsElement>('.video-disclosure')?.open) {
+        const key = playerKey(player);
+        if (collapsed.has(key)) collapsed.set(key, duration);
+      }
+    }
+    const resolution = player.querySelector('.video-resolution');
+    if (resolution && video.videoWidth > 0 && video.videoHeight > 0) {
+      resolution.textContent = `${video.videoWidth}×${video.videoHeight}`;
     }
   }, { capture: true, signal });
 
@@ -412,9 +456,11 @@ export function createVideoControls(options: {
 
   return {
     enhance,
+    render,
     dispose() {
       disposed = true;
       events.abort();
+      collapsed.clear();
     },
   };
 }

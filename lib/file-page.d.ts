@@ -6,4 +6,5 @@ export interface FilePageOptions {
     title?: unknown;
     file: FileViewerFile;
 }
+export declare const FILE_PAGE_VIDEO_SCRIPT_HASH: string;
 export declare function renderFilePage({ token, root, title, file }: FilePageOptions): string;

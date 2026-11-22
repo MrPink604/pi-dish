@@ -1037,6 +1037,11 @@ only serves existing tokens (`/page/<token>` is available there alongside
 file mention in a transcript) has a 🌐 button, and the stats modal lists a
 session's pages with revoke.
 
+Tap or click a video preview's filename row to collapse it, or focus the row
+and press Enter or Space. Collapsing pauses playback; expanding does not resume
+it. The transcript and file viewer remember collapsed videos across live
+updates for the current app load. Standalone published previews also collapse.
+
 Published pages and share links are sandboxed: pi-dish serves them with a
 `Content-Security-Policy: sandbox` that omits `allow-same-origin`, so each
 document runs in an opaque origin of its own even though it shares the UI's

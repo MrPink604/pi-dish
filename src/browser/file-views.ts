@@ -7,8 +7,9 @@ import { decodeFilePreview, decodeDiffView, decodeDiffPatch } from './file-view-
 import { renderDiffViewHtml } from './file-view-render';
 import { renderDiffHtml } from './helper-markdown';
 import { escapeHtml } from '../core/helper-format';
+import { formatMediaSize } from '../core/helper-media';
 import { shortCwd } from './helper-format';
-import { pauseAndUnloadVideos, renderVideoPlayerHtml, type VideoEnhanceContext } from './video-player';
+import { pauseAndUnloadVideos, type RenderVideoPreview, type VideoEnhanceContext } from './video-player';
 function resolveRelativePosixPath(baseFilePath: string, rel: string): string {
   const dir = baseFilePath.includes('/') ? baseFilePath.slice(0, baseFilePath.lastIndexOf('/')) : '';
   const combined = rel.startsWith('/') ? rel : `${dir}/${rel}`;
@@ -25,6 +26,7 @@ export function createFileViews(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
   assetUrl?: (host: string | null | undefined, path: string) => string;
   markdown: (text: string) => string; highlight: (root: HTMLElement, context?: VideoEnhanceContext) => void; copy: (text: string) => Promise<unknown>;
+  video: RenderVideoPreview;
   status: (message: string, type?: string) => void; refreshArtifacts: (owner: SelectionOwner) => void;
   closeComments: () => void; clearComments: () => void; refreshComments: () => void; markComments: () => void;
 }) {
@@ -142,8 +144,7 @@ export function createFileViews(options: {
         if (!ownsFile(id, generation) || file.path !== data.path || sequence !== pageSequence) return;
         const page = decodePublishedPages(value).find(page => page.root === data.path); if (page) renderPage(page, id, generation);
       }).catch(() => {});
-      const size = data.size >= 1024 * 1024 ? `${(data.size / (1024 * 1024)).toFixed(1)} MB`
-        : data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
+      const size = formatMediaSize(data.size);
       path.textContent = `${shortCwd(data.path)} · ${size}${data.truncated ? ' · truncated preview' : ''}`; path.title = data.path;
       const proceedBtn = document.getElementById('fileViewProceed') as HTMLButtonElement | null;
       if (proceedBtn && data.artifact?.requestFeedback && sessionState.currentSession?.isActive) {
@@ -179,12 +180,14 @@ export function createFileViews(options: {
         const src = data.video.url
           ? (options.assetUrl ? options.assetUrl(owner.host, data.video.url) : endpoint.base + data.video.url)
           : rawLink.href;
-        body.innerHTML = renderVideoPlayerHtml({
+        body.innerHTML = options.video({
           src,
           name: data.path.split('/').pop() || 'video',
           mimeType: data.video.mimeType,
           variant: 'viewer',
-        });
+          filePath: data.path,
+          sizeLabel: size,
+        }, { host: owner.host, sessionId: id });
         return;
       }
       file.raw = data.content;

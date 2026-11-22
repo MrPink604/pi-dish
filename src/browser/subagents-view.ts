@@ -9,6 +9,7 @@ import { decodeRenderMessage } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { decodeSessionLineage } from './session-relations';
 import type { LineageNode, LineageSession, SessionLineage } from './session-relations';
+import type { RenderVideoPreview } from './video-player';
 import {
   EMPTY_SWARM,
   EMPTY_TASKS,
@@ -102,6 +103,7 @@ export function createSubagentsView(options: {
   copy?: (text: string) => Promise<void>;
   confirm?: (message: string) => boolean;
   markdown: (text: string) => string;
+  video: RenderVideoPreview;
   assetUrl: (host: string | null | undefined, path: string) => string;
   matchRef: (ref: string) => { name?: string | null; isActive?: boolean } | null | undefined;
   details: ReturnType<typeof createResponseDetails>;
@@ -164,11 +166,12 @@ export function createSubagentsView(options: {
   const renderer = createMessageRenderer({
     document, sessionState, details: options.details,
     markdown: text => options.markdown(text), assetUrl: options.assetUrl, matchRef: options.matchRef,
+    video: options.video,
     pinned: container => container.scrollHeight - container.scrollTop - container.clientHeight < 40,
     follow: () => true,
     scroll: container => { container.scrollTop = container.scrollHeight; },
     jump: () => {},
-    peek: () => peekTarget ? { host: viewOwner?.host ?? null, model: peekTarget.model || null } : null,
+    peek: () => peekTarget ? { id: peekTarget.id, host: viewOwner?.host ?? null, model: peekTarget.model || null } : null,
   });
 
   const owns = () => !disposed && !!viewOwner && sessionState.ownsSelection(viewOwner) && sameEndpoint(options.endpoint(viewOwner.host), viewEndpoint);

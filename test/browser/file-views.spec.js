@@ -1,6 +1,8 @@
 // Generated test/tool from test/browser/file-views.spec.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const node_fs_1 = require("node:fs");
+const node_path_1 = require("node:path");
 const fixtures_js_1 = require("./fixtures.js");
 const preview = (path) => ({ path: '/fixture/' + path, relPath: path, content: 'contents of ' + path, size: 24, mtime: 4 });
 const published = (token, root = '/fixture/a.txt') => ({ token, root, path: '/p/' + token, url: 'https://pages.example/' + token });
@@ -9,6 +11,19 @@ const patchText = '@@ -1 +1 @@\n-old\n+new';
 async function fileRoutes(page) {
     await page.route('**/api/sessions/*/file?*', (route) => route.fulfill({ json: preview(new URL(route.request().url()).searchParams.get('path') ?? '') }));
 }
+// A fixed, seekable VP8 clip: recording a canvas in headless Chromium can
+// finish before it delivers any frames, leaving only a WebM header.
+// ffmpeg -f lavfi -i color=c=blue:s=64x36:r=30:d=0.3 -an -c:v libvpx -threads 1 -fflags +bitexact -flags:v +bitexact demo.webm
+const webmBytes = Buffer.from('GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAKJEU2bdLpNu4tTq4QVSalmU6yBoU27i1Or' +
+    'hBZUrmtTrIHGTbuMU6uEElTDZ1OsggETTbuMU6uEHFO7a1OsggJz7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmoCrX' +
+    'sYMPQkBNgIRMYXZmV0GETGF2ZkSJiEBywAAAAAAAFlSua8iuAQAAAAAAAD/XgQFzxYgAAAAAAAAAAZyBACK1nIN1bmSIgQCG' +
+    'hVZfVlA4g4EBI+ODhAH8oFXgkLCBQLqBJJqBAlWwhFW5gQESVMNn0HNzzWPAi2PFiAAAAAAAAAABZ8iYRaOHRU5DT0RFUkSH' +
+    'i0xhdmMgbGlidnB4Z8ihRaOIRFVSQVRJT05Eh5MwMDowMDowMC4zMDAwMDAwMDAAH0O2dUEF54EAo8GBAACAUAMAnQEqQAAk' +
+    'AABHCIWFiIWEiAICAnWqA/gCBwjVZ5mPN9IA/v9NEv/8WFfxYV/FhX/xYV/8/M7txfzmAKOWgQAhANEBAAUQrAAYABhYL/QA' +
+    'CIwAAKOWgQBDANEBAAUQrAAYABhYL/QACIwAAKOWgQBkANEBAAUQrAAYABhYL/QACIwAAKOWgQCFANEBAAUQrAAYABhYL/QA' +
+    'CIwAAKOWgQCnANEBAAUQrAAYABhYL/QACIwAAKOWgQDIANEBAAUQrAAYABhYL/QACIwAAKOVgQDpALEBAAUQEBRgAGFgv9AA' +
+    'IjAAo5aBAQsA0QEABRCsABgAGFgv9AAIjAAAHFO7a5G7j7OBALeK94EB8YIBaPCBAw==', 'base64');
 (0, fixtures_js_1.test)('late file response cannot replace a newer file or cross a same-id host selection', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
     let held;
@@ -130,19 +145,6 @@ async function fileRoutes(page) {
 });
 (0, fixtures_js_1.test)('file view plays videos with speed/frame controls, shows codec fallback on error, and upgrades markdown video embeds', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
-    // A fixed, seekable VP8 clip: recording a canvas in headless Chromium can
-    // finish before it delivers any frames, leaving only a WebM header.
-    // ffmpeg -f lavfi -i color=c=blue:s=64x36:r=30:d=0.3 -an -c:v libvpx -threads 1 -fflags +bitexact -flags:v +bitexact demo.webm
-    const webmBytes = Buffer.from('GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAKJEU2bdLpNu4tTq4QVSalmU6yBoU27i1Or' +
-        'hBZUrmtTrIHGTbuMU6uEElTDZ1OsggETTbuMU6uEHFO7a1OsggJz7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
-        'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmoCrX' +
-        'sYMPQkBNgIRMYXZmV0GETGF2ZkSJiEBywAAAAAAAFlSua8iuAQAAAAAAAD/XgQFzxYgAAAAAAAAAAZyBACK1nIN1bmSIgQCG' +
-        'hVZfVlA4g4EBI+ODhAH8oFXgkLCBQLqBJJqBAlWwhFW5gQESVMNn0HNzzWPAi2PFiAAAAAAAAAABZ8iYRaOHRU5DT0RFUkSH' +
-        'i0xhdmMgbGlidnB4Z8ihRaOIRFVSQVRJT05Eh5MwMDowMDowMC4zMDAwMDAwMDAAH0O2dUEF54EAo8GBAACAUAMAnQEqQAAk' +
-        'AABHCIWFiIWEiAICAnWqA/gCBwjVZ5mPN9IA/v9NEv/8WFfxYV/FhX/xYV/8/M7txfzmAKOWgQAhANEBAAUQrAAYABhYL/QA' +
-        'CIwAAKOWgQBDANEBAAUQrAAYABhYL/QACIwAAKOWgQBkANEBAAUQrAAYABhYL/QACIwAAKOWgQCFANEBAAUQrAAYABhYL/QA' +
-        'CIwAAKOWgQCnANEBAAUQrAAYABhYL/QACIwAAKOWgQDIANEBAAUQrAAYABhYL/QACIwAAKOVgQDpALEBAAUQEBRgAGFgv9AA' +
-        'IjAAo5aBAQsA0QEABRCsABgAGFgv9AAIjAAAHFO7a5G7j7OBALeK94EB8YIBaPCBAw==', 'base64');
     await page.route('**/api/sessions/*/file?*', route => {
         const reqPath = new URL(route.request().url()).searchParams.get('path') ?? '';
         if (reqPath === 'demo.webm') {
@@ -216,6 +218,11 @@ async function fileRoutes(page) {
     await (0, fixtures_js_1.expect)(badPlayer.locator('video.file-view-video')).toBeHidden();
     await (0, fixtures_js_1.expect)(badPlayer.locator('.video-fallback-open')).toHaveAttribute('href', `${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/file/content?path=unsupported.mkv&v=12-128`);
     await (0, fixtures_js_1.expect)(badPlayer.locator('.video-fallback-download')).toHaveAttribute('download', 'unsupported.mkv');
+    await badPlayer.locator('.video-summary').click();
+    await (0, fixtures_js_1.expect)(badPlayer.locator('.video-summary')).toHaveAccessibleName('unsupported.mkv 128 B');
+    await (0, fixtures_js_1.expect)(badPlayer.locator('.video-fallback')).toBeHidden();
+    await page.evaluate(() => fixtureApp.features.fileViews.openFile('unsupported.mkv'));
+    await (0, fixtures_js_1.expect)(badPlayer.locator('details')).toHaveJSProperty('open', false);
     // Closing the viewer unloads the video cleanly.
     await page.evaluate(() => fixtureApp.features.fileViews.closeFile());
     await (0, fixtures_js_1.expect)(page.locator('#fileViewBody video')).toHaveCount(0);
@@ -225,6 +232,94 @@ async function fileRoutes(page) {
     await (0, fixtures_js_1.expect)(mdVideo).toHaveCount(1);
     (0, fixtures_js_1.expect)(await mdVideo.getAttribute('src')).toBe(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/file/content?path=${encodeURIComponent('/fixture/clips/demo.webm')}`);
     await (0, fixtures_js_1.expect)(page.locator('#fileViewBody img')).toHaveCount(0);
+    await page.locator('#fileViewBody .msg-video-player .video-summary').click();
+    await (0, fixtures_js_1.expect)(mdVideo).toBeHidden();
+});
+(0, fixtures_js_1.test)('transcript video collapses at phone width, pauses, and stays collapsed when remounted', async ({ page, fleet }) => {
+    await page.route('**/api/sessions/*/file/content?*', route => route.fulfill({ contentType: 'video/webm', body: webmBytes }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/messages?**`, route => route.fulfill({
+        json: { messages: [{ role: 'assistant', index: 0, content: [
+                        { type: 'video', path: 'demo.webm' },
+                        { type: 'video', path: 'other.webm' },
+                    ] }], session: {} },
+    }));
+    await fleet.select(fleet.peer);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const player = page.locator('#messages .msg-video-player').filter({ hasText: 'demo.webm' });
+    const video = player.locator('video');
+    const row = player.locator('.video-summary');
+    const disclosure = player.locator('details');
+    await (0, fixtures_js_1.expect)(player).toHaveAttribute('data-video-state', 'ready');
+    await (0, fixtures_js_1.expect)(row).toHaveAccessibleName(/demo\.webm.*0:00/);
+    const accessibility = await page.context().newCDPSession(page);
+    const { root } = await accessibility.send('DOM.getDocument');
+    const { nodeId } = await accessibility.send('DOM.querySelector', {
+        nodeId: root.nodeId, selector: '#messages [data-video-file-path="demo.webm"] summary',
+    });
+    const expanded = async () => {
+        const { nodes } = await accessibility.send('Accessibility.getPartialAXTree', { nodeId, fetchRelatives: false });
+        return nodes[0]?.properties?.find(property => property.name === 'expanded')?.value.value;
+    };
+    (0, fixtures_js_1.expect)(await expanded()).toBe(true);
+    const bounds = await row.boundingBox();
+    (0, fixtures_js_1.expect)(bounds?.width).toBeGreaterThanOrEqual(44);
+    (0, fixtures_js_1.expect)(bounds?.height).toBeGreaterThanOrEqual(44);
+    const original = await video.elementHandle();
+    // Loop the short fixture so a natural end can't masquerade as a pause.
+    await video.evaluate(async (node) => {
+        const clip = node;
+        clip.loop = true;
+        clip.muted = true;
+        await clip.play();
+    });
+    (0, fixtures_js_1.expect)(await video.evaluate(node => node.paused)).toBe(false);
+    await row.click();
+    (0, fixtures_js_1.expect)(await expanded()).toBe(false);
+    await accessibility.detach();
+    await (0, fixtures_js_1.expect)(row.locator('.video-icon')).toBeVisible();
+    await (0, fixtures_js_1.expect)(video).toBeHidden();
+    await (0, fixtures_js_1.expect)(player.locator('.video-toolbar')).toBeHidden();
+    (0, fixtures_js_1.expect)(await video.evaluate(node => node.paused)).toBe(true);
+    await (0, fixtures_js_1.expect)(page.locator('#messages .msg-video-player').filter({ hasText: 'other.webm' }).locator('details')).toHaveJSProperty('open', true);
+    await page.evaluate(() => fixtureApp.features.transcriptController.load());
+    (0, fixtures_js_1.expect)(await original?.evaluate(node => node.isConnected)).toBe(false);
+    await (0, fixtures_js_1.expect)(disclosure).toHaveJSProperty('open', false);
+    await (0, fixtures_js_1.expect)(row).toHaveAccessibleName(/demo\.webm.*0:00/);
+    await (0, fixtures_js_1.expect)(video).toBeHidden();
+    await row.press('Enter');
+    await (0, fixtures_js_1.expect)(disclosure).toHaveJSProperty('open', true);
+    await (0, fixtures_js_1.expect)(video).toBeVisible();
+    (0, fixtures_js_1.expect)(await video.evaluate(node => node.paused)).toBe(true);
+    await row.press('Space');
+    await (0, fixtures_js_1.expect)(disclosure).toHaveJSProperty('open', false);
+    await fleet.select(fleet.self);
+    await (0, fixtures_js_1.expect)(disclosure).toHaveJSProperty('open', true);
+});
+(0, fixtures_js_1.test)('a standalone published video pauses on collapse without relaxing the sandbox', async ({ page, fleet, request }) => {
+    const path = (0, node_path_1.join)(fleet.self.home, 'demo.webm');
+    (0, node_fs_1.writeFileSync)(path, webmBytes);
+    const published = await request.post(`${fleet.self.base}/api/pages`, { data: { path, renderer: 'file' } });
+    await (0, fixtures_js_1.expect)(published).toBeOK();
+    const { path: url } = await published.json();
+    await page.goto(`${fleet.self.base}${url}`);
+    const player = page.locator('.video-player');
+    const row = player.locator('.video-summary');
+    const video = player.locator('video');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => self.origin)).toBe('null');
+    await (0, fixtures_js_1.expect)(row).toHaveAccessibleName(`demo.webm ${webmBytes.length} B`);
+    await video.evaluate(async (node) => {
+        const clip = node;
+        clip.loop = true;
+        clip.muted = true;
+        await clip.play();
+    });
+    await row.press('Space');
+    await (0, fixtures_js_1.expect)(player.locator('details')).toHaveJSProperty('open', false);
+    await (0, fixtures_js_1.expect)(video).toBeHidden();
+    await fixtures_js_1.expect.poll(() => video.evaluate(node => node.paused)).toBe(true);
+    await row.press('Enter');
+    await (0, fixtures_js_1.expect)(video).toBeVisible();
+    (0, fixtures_js_1.expect)(await video.evaluate(node => node.paused)).toBe(true);
 });
 (0, fixtures_js_1.test)('file view disposal retires publish, copy and diff patch actions', async ({ page, fleet }) => {
     await fleet.select(fleet.self);

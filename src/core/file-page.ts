@@ -1,11 +1,12 @@
 import * as path from 'path';
+import { createHash } from 'node:crypto';
 import { Marked } from 'marked';
 import type { TokenizerThis } from 'marked';
 import hljs from 'highlight.js';
 import * as katex from 'katex';
 import { createMathExtensions } from './helper-markdown.js';
 import { escapeHtml } from './helper-format';
-import { mediaFileName, videoMimeForPath } from './helper-media';
+import { formatMediaSize, mediaFileName, renderVideoSummary, videoMimeForPath } from './helper-media';
 import type { FileViewerFile } from './file-mention';
 
 export interface FilePageOptions {
@@ -36,6 +37,23 @@ function highlightCode(code: string, language: string): HighlightedCode {
   } catch {}
   return { html: escapeHtml(code), highlighted: false };
 }
+
+// The file page is sandboxed and only this fixed, hashed script can run.
+const FILE_PAGE_VIDEO_SCRIPT = `document.addEventListener('toggle', event => {
+  const disclosure = event.target;
+  if (disclosure.matches('details.video-disclosure:not([open])')) disclosure.querySelector('video').pause();
+}, true);
+document.addEventListener('loadedmetadata', event => {
+  const video = event.target;
+  const detail = video.closest('details.video-disclosure')?.querySelector('.video-detail');
+  if (!detail || detail.textContent || !Number.isFinite(video.duration) || video.duration <= 0) return;
+  const total = Math.round(video.duration);
+  const hours = Math.floor(total / 3600);
+  const mins = Math.floor(total / 60) % 60;
+  const secs = String(total % 60).padStart(2, '0');
+  detail.textContent = hours ? hours + ':' + String(mins).padStart(2, '0') + ':' + secs : mins + ':' + secs;
+}, true);`;
+export const FILE_PAGE_VIDEO_SCRIPT_HASH = createHash('sha256').update(FILE_PAGE_VIDEO_SCRIPT).digest('base64');
 
 const markdown = new Marked({
   breaks: true,
@@ -69,9 +87,13 @@ const markdown = new Marked({
     image(href, title, text) {
       const safeHref = sanitizeMarkdownUrl(href);
       if (safeHref !== '#' && videoMimeForPath(safeHref)) {
-        const label = text || mediaFileName(safeHref);
+        const fileName = mediaFileName(safeHref);
+        const label = text || fileName;
         const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
-        return `<figure class="video-player msg-video-player"><div class="video-stage"><video class="video-el msg-video" controls playsinline preload="metadata" src="${escapeHtml(safeHref)}"${titleAttr}><a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener">Open ${escapeHtml(label)}</a></video></div><figcaption class="video-toolbar"><span class="video-meta">${escapeHtml(label)}</span><div class="video-controls"><a class="video-btn video-download" href="${escapeHtml(safeHref)}" target="_blank" rel="noopener">Open</a><a class="video-btn video-download" href="${escapeHtml(safeHref)}" download="${escapeHtml(mediaFileName(safeHref))}">Download</a></div></figcaption></figure>`;
+        return `<figure class="video-player msg-video-player"><details class="video-disclosure" open>`
+          + renderVideoSummary(fileName)
+          + `<div class="video-stage"><video class="video-el msg-video" controls playsinline preload="metadata" src="${escapeHtml(safeHref)}"${titleAttr}><a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener">Open ${escapeHtml(label)}</a></video></div>`
+          + `<div class="video-toolbar"><div class="video-controls"><a class="video-btn video-download" href="${escapeHtml(safeHref)}" target="_blank" rel="noopener">Open</a><a class="video-btn video-download" href="${escapeHtml(safeHref)}" download="${escapeHtml(fileName)}">Download</a></div></div></details></figure>`;
       }
       const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
       return `<img src="${escapeHtml(safeHref)}" alt="${escapeHtml(text || '')}"${titleAttr}>`;
@@ -92,16 +114,16 @@ export function renderFilePage({ token, root, title, file }: FilePageOptions): s
   } else if (file.video) {
     const src = `/page/${encodeURIComponent(token)}?content=1&v=${file.mtime}-${file.size}`;
     const fileName = path.basename(root);
-    content = `<figure class="video-player file-view-video-player">`
+    content = `<figure class="video-player file-view-video-player"><details class="video-disclosure" open>`
+      + renderVideoSummary(fileName, formatMediaSize(file.size))
       + `<div class="video-stage"><video class="video-el file-view-video" controls playsinline preload="metadata" src="${escapeHtml(src)}">`
       + `<a href="${escapeHtml(src)}" target="_blank" rel="noopener">Open ${escapeHtml(fileName)}</a>`
       + `</video></div>`
-      + `<figcaption class="video-toolbar">`
-      + `<span class="video-meta" title="${escapeHtml(fileName)}">${escapeHtml(fileName)} · ${escapeHtml(file.video.mimeType)}</span>`
+      + `<div class="video-toolbar">`
       + `<div class="video-controls">`
       + `<a class="video-btn video-download" href="${escapeHtml(src)}" target="_blank" rel="noopener">Open</a>`
       + `<a class="video-btn video-download" href="${escapeHtml(src)}" download="${escapeHtml(fileName)}">Download</a>`
-      + `</div></figcaption></figure>`;
+      + `</div></div></details></figure>`;
   } else {
     const ext = path.extname(root).slice(1).toLowerCase();
     if (ext === 'md' || ext === 'markdown') {
@@ -124,6 +146,8 @@ export function renderFilePage({ token, root, title, file }: FilePageOptions): s
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/vendor/hljs-theme.min.css">
   <link rel="stylesheet" href="/vendor/katex.min.css">
+  ${content.includes('<details class="video-disclosure"') ? `<script>${FILE_PAGE_VIDEO_SCRIPT}</script>` : ''}
+</head>
 <body class="standalone-file-page">
   <main class="file-view">
     <header class="file-view-header">

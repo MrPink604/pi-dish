@@ -6605,6 +6605,34 @@ img.msg-image {
   margin: 0 auto;
 }
 
+.video-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  list-style: none;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.video-summary::-webkit-details-marker { display: none; }
+.video-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.video-disclosure[open] > .video-summary { border-bottom: 1px solid var(--line); }
+
+.video-chevron {
+  flex: none;
+  font-size: 9px;
+}
+
+.video-disclosure[open] > .video-summary .video-chevron { transform: rotate(90deg); }
+.video-icon { flex: none; }
+.video-detail,
+.video-resolution { flex: none; }
+.video-meta > :empty { display: none; }
+.video-disclosure:not([open]) .video-resolution { display: none; }
+
 .video-stage {
   position: relative;
   background: #000;
@@ -6636,7 +6664,7 @@ video.file-view-video {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 6px;
   padding: 6px 8px;
   background: var(--bg-darker);
@@ -6645,14 +6673,20 @@ video.file-view-video {
 }
 
 .video-meta {
-  flex: 1 1 80px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.video-filename {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .video-controls {
@@ -6750,8 +6784,8 @@ video.file-view-video {
 }
 
 /* A file published from the viewer uses the same reading surface as the
-   in-app takeover, but as the entire public document: no app chrome,
-   controls, scripts, or comment affordances. */
+   in-app takeover, but as the entire public document, without app chrome
+   or comment affordances. */
 body.standalone-file-page {
   height: auto;
   min-height: 100%;

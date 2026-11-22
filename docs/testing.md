@@ -66,8 +66,8 @@ available in the job log. Failure excerpts are also published as check
 annotations, so they can be inspected without downloading authenticated logs.
 
 The [file-view video spec](../test/browser/file-views.spec.ts) uses a fixed,
-seekable WebM instead of recording a canvas in headless Chromium. It waits for
-the native video element to finish each seek before checking playback position.
+seekable VP8 WebM for playback, seeking, and pause-on-collapse. It also checks
+that video collapse survives a transcript remount without leaking across hosts.
 
 `npm run lint` applies correctness rules to repository JavaScript, including
 undefined names, duplicate arguments/keys/cases, unreachable code, unsafe
