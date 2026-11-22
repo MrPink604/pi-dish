@@ -130,33 +130,19 @@ async function fileRoutes(page) {
 });
 (0, fixtures_js_1.test)('file view plays videos with speed/frame controls, shows codec fallback on error, and upgrades markdown video embeds', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
-    // Synthesize a tiny real WebM in-browser so loadedmetadata, speed, and frame stepping exercise a real decoded stream.
-    const webmB64 = await page.evaluate(async () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = 64;
-        canvas.height = 36;
-        const ctx = fixtureElement(canvas.getContext('2d'), 'canvas 2d context');
-        const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
-        const recorder = new MediaRecorder(canvas.captureStream(15), { mimeType: mime });
-        const chunks = [];
-        recorder.ondataavailable = e => { if (e.data.size)
-            chunks.push(e.data); };
-        const done = new Promise(resolve => { recorder.onstop = () => resolve(); });
-        recorder.start();
-        for (let i = 0; i < 8; i++) {
-            ctx.fillStyle = i % 2 ? '#2563eb' : '#10b981';
-            ctx.fillRect(0, 0, 64, 36);
-            await new Promise(resolve => setTimeout(resolve, 40));
-        }
-        recorder.stop();
-        await done;
-        const bytes = new Uint8Array(await new Blob(chunks, { type: mime }).arrayBuffer());
-        let bin = '';
-        for (let i = 0; i < bytes.length; i++)
-            bin += String.fromCharCode(bytes[i]);
-        return btoa(bin);
-    });
-    const webmBytes = Buffer.from(webmB64, 'base64');
+    // A fixed, seekable VP8 clip: recording a canvas in headless Chromium can
+    // finish before it delivers any frames, leaving only a WebM header.
+    // ffmpeg -f lavfi -i color=c=blue:s=64x36:r=30:d=0.3 -an -c:v libvpx -threads 1 -fflags +bitexact -flags:v +bitexact demo.webm
+    const webmBytes = Buffer.from('GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAKJEU2bdLpNu4tTq4QVSalmU6yBoU27i1Or' +
+        'hBZUrmtTrIHGTbuMU6uEElTDZ1OsggETTbuMU6uEHFO7a1OsggJz7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+        'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmoCrX' +
+        'sYMPQkBNgIRMYXZmV0GETGF2ZkSJiEBywAAAAAAAFlSua8iuAQAAAAAAAD/XgQFzxYgAAAAAAAAAAZyBACK1nIN1bmSIgQCG' +
+        'hVZfVlA4g4EBI+ODhAH8oFXgkLCBQLqBJJqBAlWwhFW5gQESVMNn0HNzzWPAi2PFiAAAAAAAAAABZ8iYRaOHRU5DT0RFUkSH' +
+        'i0xhdmMgbGlidnB4Z8ihRaOIRFVSQVRJT05Eh5MwMDowMDowMC4zMDAwMDAwMDAAH0O2dUEF54EAo8GBAACAUAMAnQEqQAAk' +
+        'AABHCIWFiIWEiAICAnWqA/gCBwjVZ5mPN9IA/v9NEv/8WFfxYV/FhX/xYV/8/M7txfzmAKOWgQAhANEBAAUQrAAYABhYL/QA' +
+        'CIwAAKOWgQBDANEBAAUQrAAYABhYL/QACIwAAKOWgQBkANEBAAUQrAAYABhYL/QACIwAAKOWgQCFANEBAAUQrAAYABhYL/QA' +
+        'CIwAAKOWgQCnANEBAAUQrAAYABhYL/QACIwAAKOWgQDIANEBAAUQrAAYABhYL/QACIwAAKOVgQDpALEBAAUQEBRgAGFgv9AA' +
+        'IjAAo5aBAQsA0QEABRCsABgAGFgv9AAIjAAAHFO7a5G7j7OBALeK94EB8YIBaPCBAw==', 'base64');
     await page.route('**/api/sessions/*/file?*', route => {
         const reqPath = new URL(route.request().url()).searchParams.get('path') ?? '';
         if (reqPath === 'demo.webm') {
@@ -216,10 +202,13 @@ async function fileRoutes(page) {
     // Speed and frame-stepping controls update playbackRate and currentTime.
     await player.locator('.video-speed').selectOption('1.5');
     (0, fixtures_js_1.expect)(await video.evaluate(node => node.playbackRate)).toBe(1.5);
-    await player.locator('.video-step-fwd').click();
-    (0, fixtures_js_1.expect)(await video.evaluate(node => node.currentTime)).toBeGreaterThan(0.02);
-    await player.locator('.video-step-back').click();
-    (0, fixtures_js_1.expect)(await video.evaluate(node => node.currentTime)).toBeLessThan(0.01);
+    for (const [button, targetTime] of [['.video-step-fwd', 1 / 30], ['.video-step-back', 0]]) {
+        await player.locator(button).click();
+        await fixtures_js_1.expect.poll(() => video.evaluate(node => {
+            const { currentTime, seeking } = node;
+            return { currentTime, seeking };
+        })).toEqual({ currentTime: fixtures_js_1.expect.closeTo(targetTime, 2), seeking: false });
+    }
     // Unsupported codec error reveals the fallback card with Open and Download links and hides <video>.
     await page.evaluate(() => fixtureApp.features.fileViews.openFile('unsupported.mkv'));
     const badPlayer = page.locator('#fileViewBody .file-view-video-player');

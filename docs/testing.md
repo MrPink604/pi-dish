@@ -65,6 +65,10 @@ screenshots from `test-results/` for seven days on failure; all suite output is
 available in the job log. Failure excerpts are also published as check
 annotations, so they can be inspected without downloading authenticated logs.
 
+The [file-view video spec](../test/browser/file-views.spec.ts) uses a fixed,
+seekable WebM instead of recording a canvas in headless Chromium. It waits for
+the native video element to finish each seek before checking playback position.
+
 `npm run lint` applies correctness rules to repository JavaScript, including
 undefined names, duplicate arguments/keys/cases, unreachable code, unsafe
 finally blocks, and invalid `typeof` comparisons. Browser script globals are
