@@ -482,7 +482,11 @@ const lineagePayload = {
     await (0, fixtures_js_1.expect)(page.locator('#swarmPromptInput')).toHaveValue('@builder (re #2) @#tests ');
     await page.locator('#swarmPromptInput').fill('Check @nar');
     await (0, fixtures_js_1.expect)(page.locator('#swarmMentionMenu')).toBeVisible();
-    await page.locator('#swarmPromptInput').press('Enter');
+    activeSwarm = { ...activeSwarm, posts: [swarmPayload.posts[0], { ...swarmPayload.posts[1], text: 'Builder posted during mention completion.' }] };
+    await page.locator('[data-app-click="reloadSubagentsView"]').evaluate(button => button.click());
+    await (0, fixtures_js_1.expect)(page.locator('#swarmBoardFeed')).toContainText('Builder posted during mention completion.');
+    await (0, fixtures_js_1.expect)(page.locator('#swarmMentionMenu')).toBeVisible();
+    await page.keyboard.press('Enter');
     await (0, fixtures_js_1.expect)(page.locator('#swarmPromptInput')).toHaveValue('Check @narrator ');
     // + Add worker drawer validates duplicate name, Esc dismisses drawer before closing view.
     await page.locator('#subagentsAddWorkerBtn').click();
@@ -530,9 +534,16 @@ const lineagePayload = {
     // 5. Overview narrator feedback strips @ mentions so workers aren't woken.
     await page.locator('#subagentsTree [data-subagents-aux="swarm-overview"]').click();
     await page.locator('#swarmNarratorFeedbackInput').fill('Mark @builder work as high priority');
+    activeSwarm = { ...activeSwarm, plan: { ...swarmPayload.plan, goal: { ...swarmPayload.plan.goal, line: 'Review the refreshed plan' } } };
+    await page.locator('[data-app-click="reloadSubagentsView"]').evaluate(button => button.click());
+    await (0, fixtures_js_1.expect)(page.locator('#swarmOverviewBody')).toContainText('Review the refreshed plan');
+    await (0, fixtures_js_1.expect)(page.locator('#swarmNarratorFeedbackInput')).toBeFocused();
     await page.locator('#swarmNarratorFeedbackBtn').click();
     await fixtures_js_1.expect.poll(() => prompts.length).toBe(8);
-    (0, fixtures_js_1.expect)(prompts[7].message).toContain('@narrator user feedback: Mark builder work as high priority');
+    (0, fixtures_js_1.expect)(prompts[7]).toEqual({
+        endpoint: 'steer',
+        message: 'Post this verbatim to the swarm board: @narrator user feedback: Mark builder work as high priority',
+    });
 });
 (0, fixtures_js_1.test)('Antigravity brain artifacts open in #fileView with local image rewrite, file:// links, and Proceed approval', async ({ page, fleet }) => {
     const brainDir = '/home/tester/.gemini/antigravity-cli/brain/coord-native';

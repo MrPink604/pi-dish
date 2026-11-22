@@ -49,6 +49,17 @@ interface MentionCandidate {
   readonly meta: string;
 }
 
+interface SwarmComposer {
+  root: HTMLDivElement;
+  pills: HTMLDivElement;
+  textarea: HTMLTextAreaElement;
+  menu: HTMLDivElement;
+  status: HTMLSpanElement;
+  stop: HTMLButtonElement;
+  steer: HTMLButtonElement;
+  send: HTMLButtonElement;
+}
+
 const DEFAULT_LOG_TAIL = 65_536;
 const MAX_LOG_TAIL = 262_144;
 const WORKER_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/;
@@ -143,6 +154,7 @@ export function createSubagentsView(options: {
   let boardDraft = '';
   let boardStatusText = '';
   let addDrawerOpen = false;
+  let boardComposer: SwarmComposer | null = null;
   let coordModelsForId: string | null = null;
   let coordModels: SwarmModelOption[] = [];
   let modelsLoadingForId: string | null = null;
@@ -276,6 +288,7 @@ export function createSubagentsView(options: {
     clearRapidTimers();
     treeEvents.abort();
     auxEvents.abort();
+    boardComposer = null;
     addDrawerOpen = false;
     element('subagentsAddDrawer').style.display = 'none';
     element('subagentsAddWorkerBtn').style.display = 'none';
@@ -754,6 +767,10 @@ export function createSubagentsView(options: {
       renderSwarmBoardPanel(aux);
       return;
     }
+    if (boardComposer) {
+      hideMentionMenu();
+      boardComposer = null;
+    }
     if (selection?.kind === 'swarm-overview') {
       empty.style.display = 'none';
       content.style.display = 'none';
@@ -771,6 +788,7 @@ export function createSubagentsView(options: {
 
     aux.style.display = 'none';
     auxEvents.abort();
+    if (aux.hasChildNodes()) aux.replaceChildren();
     const target = peekTarget;
     if (selection?.kind !== 'session' || !target) {
       empty.style.display = '';
@@ -1151,12 +1169,13 @@ export function createSubagentsView(options: {
     const prevFeed = container.querySelector<HTMLElement>('#swarmBoardFeed');
     const wasPinned = !prevFeed || prevFeed.scrollHeight - prevFeed.scrollTop - prevFeed.clientHeight < 60;
     const prevScroll = prevFeed?.scrollTop ?? 0;
-    const prevInput = container.querySelector<HTMLTextAreaElement>('#swarmPromptInput');
-    if (prevInput) boardDraft = prevInput.value;
-    const hadFocus = !!prevInput && document.activeElement === prevInput;
-    const caretPos = prevInput?.selectionStart ?? boardDraft.length;
-
-    container.replaceChildren();
+    if (!swarmData.hasSwarm || !swarmData.isActive) {
+      hideMentionMenu();
+      boardComposer = null;
+    }
+    const composer = boardComposer?.root ?? null;
+    // Keep the live composer attached while replacing its read-only neighbors.
+    while (container.firstChild && container.firstChild !== composer) container.firstChild.remove();
 
     if (!swarmData.hasSwarm) {
       if (swarmData.isActive) {
@@ -1226,7 +1245,7 @@ export function createSubagentsView(options: {
     followBtn.textContent = followBoard ? '● Follow' : '○ Follow';
     followBtn.addEventListener('click', () => { followBoard = !followBoard; renderDetail(); }, { signal: auxEvents.signal });
     filters.appendChild(followBtn);
-    container.appendChild(filters);
+    container.insertBefore(filters, composer);
 
     // Feed
     const feed = document.createElement('div');
@@ -1300,116 +1319,146 @@ export function createSubagentsView(options: {
         feed.appendChild(card);
       }
     }
-    container.appendChild(feed);
-
-    // Coordinator composer
+    container.insertBefore(feed, composer);
     if (swarmData.isActive) {
-      const composer = document.createElement('div');
-      composer.className = 'swarm-composer';
-      composer.id = 'swarmComposer';
-
-      const pills = document.createElement('div');
-      pills.className = 'swarm-mention-pills';
-      pills.id = 'swarmMentionPills';
-      const liveWorkers = swarmData.members.filter(m => m.state !== 'killed' && m.name !== 'coordinator');
-      const tokens: { token: string; label: string; color?: string }[] = liveWorkers.map(m => ({ token: m.name, label: `@${m.name}`, color: memberColor(m.name) }));
-      if (liveWorkers.length) tokens.push({ token: 'all', label: '@all' });
-      for (const ch of swarmData.channels) {
-        if (ch.name === 'main' || ch.archived) continue;
-        tokens.push({ token: `#${ch.name}`, label: `@#${ch.name}` });
+      if (!boardComposer) {
+        boardComposer = createSwarmComposer();
+        container.appendChild(boardComposer.root);
       }
-
-      const wrap = document.createElement('div');
-      wrap.className = 'swarm-composer-input-wrap';
-      const menu = document.createElement('div');
-      menu.className = 'swarm-mention-menu'; menu.id = 'swarmMentionMenu';
-      menu.setAttribute('role', 'listbox'); menu.style.display = 'none';
-      const textarea = document.createElement('textarea');
-      textarea.id = 'swarmPromptInput'; textarea.rows = 2;
-      textarea.placeholder = 'Message coordinator… (@ to mention, Enter to send, Shift+Enter for newline)';
-      textarea.value = boardDraft;
-      wrap.append(menu, textarea);
-
-      for (const item of tokens) {
-        const btn = document.createElement('button');
-        btn.type = 'button'; btn.className = 'swarm-mention-pill';
-        btn.textContent = item.label;
-        if (item.color) btn.style.color = item.color;
-        btn.addEventListener('click', () => insertMentionToken(textarea, item.token), { signal: auxEvents.signal });
-        pills.appendChild(btn);
-      }
-
-      const actions = document.createElement('div');
-      actions.className = 'subagents-signal-actions';
-      const statusSpan = document.createElement('span');
-      statusSpan.className = 'subagents-signal-status'; statusSpan.id = 'swarmPromptStatus';
-      statusSpan.textContent = boardStatusText;
-      const busy = swarmData.coordinatorTurnInProgress;
-      const stopBtn = document.createElement('button');
-      stopBtn.type = 'button'; stopBtn.className = 'btn btn-small swarm-btn-danger'; stopBtn.id = 'swarmCoordinatorStopBtn';
-      stopBtn.textContent = 'Stop'; stopBtn.style.display = busy ? '' : 'none';
-      const steerBtn = document.createElement('button');
-      steerBtn.type = 'button'; steerBtn.className = `btn btn-small${busy ? ' btn-primary' : ''}`; steerBtn.id = 'swarmPromptSteerBtn';
-      steerBtn.textContent = 'Steer';
-      const sendBtn = document.createElement('button');
-      sendBtn.type = 'button'; sendBtn.className = `btn btn-small${busy ? '' : ' btn-primary'}`; sendBtn.id = 'swarmPromptSendBtn';
-      sendBtn.textContent = 'Send';
-      actions.append(statusSpan, stopBtn, steerBtn, sendBtn);
-
-      const submitBoard = async (mode: 'prompt' | 'steer' | 'auto') => {
-        const msg = textarea.value.trim();
-        if (!msg) return;
-        hideMentionMenu();
-        const ok = await dispatchCoordinatorText(msg, mode);
-        if (ok && owns()) { textarea.value = ''; boardDraft = ''; }
-      };
-
-      stopBtn.addEventListener('click', () => { void abortCoordinatorTurn(); }, { signal: auxEvents.signal });
-      steerBtn.addEventListener('click', () => { void submitBoard('steer'); }, { signal: auxEvents.signal });
-      sendBtn.addEventListener('click', () => { void submitBoard('prompt'); }, { signal: auxEvents.signal });
-      textarea.addEventListener('input', () => {
-        boardDraft = textarea.value;
-        const caret = textarea.selectionStart ?? textarea.value.length;
-        const match = MENTION_TRIGGER_RE.exec(textarea.value.slice(0, caret));
-        if (!match) { hideMentionMenu(); return; }
-        mentionChoices = buildMentionCandidates(match[1]);
-        mentionIndex = 0;
-        renderMentionMenu(textarea, menu);
-      }, { signal: auxEvents.signal });
-      textarea.addEventListener('blur', () => { setTimeout(() => hideMentionMenu(), 120); }, { signal: auxEvents.signal });
-      textarea.addEventListener('keydown', (event) => {
-        if (mentionChoices.length) {
-          if (event.key === 'ArrowDown') { event.preventDefault(); mentionIndex = (mentionIndex + 1) % mentionChoices.length; renderMentionMenu(textarea, menu); return; }
-          if (event.key === 'ArrowUp') { event.preventDefault(); mentionIndex = (mentionIndex - 1 + mentionChoices.length) % mentionChoices.length; renderMentionMenu(textarea, menu); return; }
-          if (event.key === 'Tab' || event.key === 'Enter') { event.preventDefault(); acceptMentionChoice(textarea, mentionChoices[mentionIndex].token); return; }
-          if (event.key === 'Escape') { event.preventDefault(); hideMentionMenu(); return; }
-        }
-        if (event.key !== 'Enter' || event.shiftKey) return;
-        event.preventDefault();
-        void submitBoard('auto');
-      }, { signal: auxEvents.signal });
-
-      composer.append(pills, wrap, actions);
-      container.appendChild(composer);
-      if (hadFocus) { textarea.focus(); textarea.setSelectionRange(caretPos, caretPos); }
+      updateSwarmComposer(boardComposer);
     }
 
     if (followBoard && wasPinned) feed.scrollTop = feed.scrollHeight;
     else feed.scrollTop = prevScroll;
   }
 
+  function createSwarmComposer(): SwarmComposer {
+    const root = document.createElement('div');
+    root.className = 'swarm-composer';
+    root.id = 'swarmComposer';
+
+    const pills = document.createElement('div');
+    pills.className = 'swarm-mention-pills';
+    pills.id = 'swarmMentionPills';
+    const wrap = document.createElement('div');
+    wrap.className = 'swarm-composer-input-wrap';
+    const menu = document.createElement('div');
+    menu.className = 'swarm-mention-menu'; menu.id = 'swarmMentionMenu';
+    menu.setAttribute('role', 'listbox'); menu.style.display = 'none';
+    const textarea = document.createElement('textarea');
+    textarea.id = 'swarmPromptInput'; textarea.rows = 2;
+    textarea.placeholder = 'Message coordinator… (@ to mention, Enter to send, Shift+Enter for newline)';
+    textarea.value = boardDraft;
+    wrap.append(menu, textarea);
+
+    const actions = document.createElement('div');
+    actions.className = 'subagents-signal-actions';
+    const status = document.createElement('span');
+    status.className = 'subagents-signal-status'; status.id = 'swarmPromptStatus';
+    const stop = document.createElement('button');
+    stop.type = 'button'; stop.className = 'btn btn-small swarm-btn-danger'; stop.id = 'swarmCoordinatorStopBtn';
+    stop.textContent = 'Stop';
+    const steer = document.createElement('button');
+    steer.type = 'button'; steer.className = 'btn btn-small'; steer.id = 'swarmPromptSteerBtn';
+    steer.textContent = 'Steer';
+    const send = document.createElement('button');
+    send.type = 'button'; send.className = 'btn btn-small'; send.id = 'swarmPromptSendBtn';
+    send.textContent = 'Send';
+    actions.append(status, stop, steer, send);
+
+    const submitBoard = async (mode: 'prompt' | 'steer' | 'auto') => {
+      const draft = textarea.value;
+      if (boardComposer?.root !== root || !draft.trim()) return;
+      hideMentionMenu();
+      const owner = viewOwner;
+      const ok = await dispatchCoordinatorText(draft, mode);
+      if (ok && viewOwner === owner && boardDraft === draft) {
+        boardDraft = '';
+        if (boardComposer) boardComposer.textarea.value = '';
+      }
+    };
+
+    stop.addEventListener('click', () => { if (boardComposer?.root === root) void abortCoordinatorTurn(); });
+    steer.addEventListener('click', () => { void submitBoard('steer'); });
+    send.addEventListener('click', () => { void submitBoard('prompt'); });
+    textarea.addEventListener('input', () => {
+      boardDraft = textarea.value;
+      const match = MENTION_TRIGGER_RE.exec(textarea.value.slice(0, textarea.selectionStart));
+      if (!match) { hideMentionMenu(); return; }
+      mentionChoices = buildMentionCandidates(match[1]);
+      mentionIndex = 0;
+      renderMentionMenu(textarea, menu);
+    });
+    // Choosing a menu option prevents the mousedown default, so it does not blur the input.
+    textarea.addEventListener('blur', hideMentionMenu);
+    textarea.addEventListener('keydown', (event) => {
+      if (mentionChoices.length) {
+        if (event.key === 'ArrowDown') { event.preventDefault(); mentionIndex = (mentionIndex + 1) % mentionChoices.length; renderMentionMenu(textarea, menu); return; }
+        if (event.key === 'ArrowUp') { event.preventDefault(); mentionIndex = (mentionIndex - 1 + mentionChoices.length) % mentionChoices.length; renderMentionMenu(textarea, menu); return; }
+        if (event.key === 'Tab' || event.key === 'Enter') { event.preventDefault(); acceptMentionChoice(textarea, mentionChoices[mentionIndex].token); return; }
+        if (event.key === 'Escape') { event.preventDefault(); hideMentionMenu(); return; }
+      }
+      if (event.key !== 'Enter' || event.shiftKey) return;
+      event.preventDefault();
+      void submitBoard('auto');
+    });
+
+    root.append(pills, wrap, actions);
+    return { root, pills, textarea, menu, status, stop, steer, send };
+  }
+
+  function updateSwarmComposer({ pills, textarea, menu, status, stop, steer, send }: SwarmComposer) {
+    const busy = swarmData.coordinatorTurnInProgress;
+    status.textContent = boardStatusText;
+    stop.style.display = busy ? '' : 'none';
+    steer.classList.toggle('btn-primary', busy);
+    send.classList.toggle('btn-primary', !busy);
+
+    const tokens = document.createDocumentFragment();
+    function addPill(token: string, color?: string) {
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'swarm-mention-pill';
+      btn.textContent = `@${token}`;
+      if (color) btn.style.color = color;
+      btn.addEventListener('click', () => insertMentionToken(textarea, token));
+      tokens.appendChild(btn);
+    }
+    let hasWorker = false;
+    for (const member of swarmData.members) {
+      if (member.name === 'coordinator' || member.state === 'killed') continue;
+      addPill(member.name, memberColor(member.name));
+      hasWorker = true;
+    }
+    if (hasWorker) addPill('all');
+    for (const ch of swarmData.channels) {
+      if (ch.name !== 'main' && !ch.archived) addPill(`#${ch.name}`);
+    }
+    pills.replaceChildren(tokens);
+
+    if (mentionChoices.length) {
+      const token = mentionChoices[mentionIndex].token;
+      const match = MENTION_TRIGGER_RE.exec(textarea.value.slice(0, textarea.selectionStart));
+      if (!match) { hideMentionMenu(); return; }
+      mentionChoices = buildMentionCandidates(match[1]);
+      mentionIndex = Math.max(0, mentionChoices.findIndex(choice => choice.token === token));
+      renderMentionMenu(textarea, menu);
+    }
+  }
+
   function renderSwarmOverviewPanel(container: HTMLElement) {
     auxEvents.abort();
     auxEvents = new AbortController();
-    container.replaceChildren();
-    const body = document.createElement('div');
-    body.className = 'swarm-overview-body';
-    body.id = 'swarmOverviewBody';
+    let body = container.querySelector<HTMLElement>('#swarmOverviewBody');
+    if (!body) {
+      body = document.createElement('div');
+      body.className = 'swarm-overview-body';
+      body.id = 'swarmOverviewBody';
+      container.replaceChildren(body);
+    }
 
     if (!swarmData.hasSwarm) {
       const empty = document.createElement('div'); empty.className = 'subagents-state'; empty.textContent = 'No swarm active in this session.';
-      body.appendChild(empty);
-      container.appendChild(body);
+      body.replaceChildren(empty);
       return;
     }
 
@@ -1423,7 +1472,8 @@ export function createSubagentsView(options: {
     const goalLine = text(goal?.line) || text(view?.headline) || `${swarmData.members.length} members · ${swarmData.head} board post${swarmData.head === 1 ? '' : 's'}`;
     goalCard.innerHTML = `<div class="swarm-overview-heading">${escapeHtml(goalTitle)}</div><div class="swarm-overview-line">${escapeHtml(goalLine)}</div>`
       + (text(view?.running_summary) ? `<div class="swarm-overview-summary">${escapeHtml(text(view?.running_summary))}</div>` : '');
-    body.appendChild(goalCard);
+    const content = document.createDocumentFragment();
+    content.appendChild(goalCard);
 
     const attention = Array.isArray(view?.attention) ? view.attention.filter(record) : [];
     if (attention.length) {
@@ -1450,7 +1500,7 @@ export function createSubagentsView(options: {
         }
         sec.appendChild(card);
       }
-      body.appendChild(sec);
+      content.appendChild(sec);
     }
 
     const workstreams = Array.isArray(view?.workstreams) ? view.workstreams.filter(record) : [];
@@ -1468,7 +1518,7 @@ export function createSubagentsView(options: {
           + (note ? `<div class="swarm-overview-line">${escapeHtml(note)}</div>` : '');
         sec.appendChild(card);
       }
-      body.appendChild(sec);
+      content.appendChild(sec);
     } else if (threads.length) {
       const sec = document.createElement('div'); sec.className = 'swarm-overview-section';
       sec.innerHTML = '<div class="tasks-section-title">Threads</div>';
@@ -1481,33 +1531,48 @@ export function createSubagentsView(options: {
           + (listHtml ? `<ul class="swarm-overview-tasks">${listHtml}</ul>` : '');
         sec.appendChild(card);
       }
-      body.appendChild(sec);
+      content.appendChild(sec);
     }
 
     const narrator = swarmData.members.find(m => /^narrator(?:-\d+)?$/.test(m.name) && m.state !== 'killed');
-    if (swarmData.isActive && narrator) {
-      const fbCard = document.createElement('div'); fbCard.className = 'swarm-overview-card';
-      const title = document.createElement('div'); title.className = 'swarm-overview-item-title'; title.textContent = `Feedback for @${narrator.name}`;
-      const row = document.createElement('div'); row.className = 'swarm-narrator-feedback';
-      const input = document.createElement('input'); input.type = 'text'; input.id = 'swarmNarratorFeedbackInput'; input.placeholder = 'Correct summary, priority, or status…';
-      const sendBtn = document.createElement('button'); sendBtn.type = 'button'; sendBtn.id = 'swarmNarratorFeedbackBtn'; sendBtn.className = 'btn btn-small'; sendBtn.textContent = 'Send feedback';
-      const submitFeedback = async () => {
-        const raw = input.value.trim();
-        if (!raw) { input.focus(); return; }
-        const sanitized = raw.replace(/@([a-z0-9_#-]+)/gi, '$1');
-        const ok = await dispatchCoordinatorText(`Post this verbatim to the swarm board: @${narrator.name} user feedback: ${sanitized}`, 'auto', {
-          successText: `Sent feedback to @${narrator.name}`,
-        });
-        if (ok && owns()) input.value = '';
-      };
-      sendBtn.addEventListener('click', () => { void submitFeedback(); }, { signal: auxEvents.signal });
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void submitFeedback(); } }, { signal: auxEvents.signal });
-      row.append(input, sendBtn);
-      fbCard.append(title, row);
-      body.appendChild(fbCard);
+    const coordId = swarmData.coordinatorId;
+    const feedback = body.lastElementChild as HTMLElement | null;
+    if (swarmData.isActive && narrator && coordId) {
+      if (feedback?.dataset.narrator === narrator.name && feedback.dataset.coordinatorId === coordId) {
+        // Keep the form attached so a refresh cannot erase a draft or interrupt a click.
+        while (body.firstChild && body.firstChild !== feedback) body.firstChild.remove();
+        body.insertBefore(content, feedback);
+        return;
+      }
+      content.appendChild(createNarratorFeedback(narrator.name, coordId));
     }
+    body.replaceChildren(content);
+  }
 
-    container.appendChild(body);
+  function createNarratorFeedback(narrator: string, coordId: string) {
+    const card = document.createElement('div'); card.className = 'swarm-overview-card';
+    card.dataset.narrator = narrator;
+    card.dataset.coordinatorId = coordId;
+    const title = document.createElement('div'); title.className = 'swarm-overview-item-title'; title.textContent = `Feedback for @${narrator}`;
+    const row = document.createElement('div'); row.className = 'swarm-narrator-feedback';
+    const input = document.createElement('input'); input.type = 'text'; input.id = 'swarmNarratorFeedbackInput'; input.placeholder = 'Correct summary, priority, or status…';
+    const sendBtn = document.createElement('button'); sendBtn.type = 'button'; sendBtn.id = 'swarmNarratorFeedbackBtn'; sendBtn.className = 'btn btn-small'; sendBtn.textContent = 'Send feedback';
+    const submitFeedback = async () => {
+      if (!card.isConnected) return;
+      const draft = input.value;
+      const raw = draft.trim();
+      if (!raw) { input.focus(); return; }
+      const sanitized = raw.replace(/@([a-z0-9_#-]+)/gi, '$1');
+      const ok = await dispatchCoordinatorText(`Post this verbatim to the swarm board: @${narrator} user feedback: ${sanitized}`, 'auto', {
+        successText: `Sent feedback to @${narrator}`,
+      });
+      if (ok && card.isConnected && input.value === draft) input.value = '';
+    };
+    sendBtn.addEventListener('click', () => { void submitFeedback(); });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void submitFeedback(); } });
+    row.append(input, sendBtn);
+    card.append(title, row);
+    return card;
   }
 
   // ---- Background Task detail panel inside #subagentsAuxPanel ---------------

@@ -505,7 +505,11 @@ test('Interactive Swarm and Tasks controls inside Subagents view dispatch coordi
 
   await page.locator('#swarmPromptInput').fill('Check @nar');
   await expect(page.locator('#swarmMentionMenu')).toBeVisible();
-  await page.locator('#swarmPromptInput').press('Enter');
+  activeSwarm = { ...activeSwarm, posts: [swarmPayload.posts[0], { ...swarmPayload.posts[1], text: 'Builder posted during mention completion.' }] };
+  await page.locator('[data-app-click="reloadSubagentsView"]').evaluate(button => (button as HTMLButtonElement).click());
+  await expect(page.locator('#swarmBoardFeed')).toContainText('Builder posted during mention completion.');
+  await expect(page.locator('#swarmMentionMenu')).toBeVisible();
+  await page.keyboard.press('Enter');
   await expect(page.locator('#swarmPromptInput')).toHaveValue('Check @narrator ');
 
   // + Add worker drawer validates duplicate name, Esc dismisses drawer before closing view.
@@ -562,9 +566,16 @@ test('Interactive Swarm and Tasks controls inside Subagents view dispatch coordi
   // 5. Overview narrator feedback strips @ mentions so workers aren't woken.
   await page.locator('#subagentsTree [data-subagents-aux="swarm-overview"]').click();
   await page.locator('#swarmNarratorFeedbackInput').fill('Mark @builder work as high priority');
+  activeSwarm = { ...activeSwarm, plan: { ...swarmPayload.plan, goal: { ...swarmPayload.plan.goal, line: 'Review the refreshed plan' } } };
+  await page.locator('[data-app-click="reloadSubagentsView"]').evaluate(button => (button as HTMLButtonElement).click());
+  await expect(page.locator('#swarmOverviewBody')).toContainText('Review the refreshed plan');
+  await expect(page.locator('#swarmNarratorFeedbackInput')).toBeFocused();
   await page.locator('#swarmNarratorFeedbackBtn').click();
   await expect.poll(() => prompts.length).toBe(8);
-  expect(prompts[7].message).toContain('@narrator user feedback: Mark builder work as high priority');
+  expect(prompts[7]).toEqual({
+    endpoint: 'steer',
+    message: 'Post this verbatim to the swarm board: @narrator user feedback: Mark builder work as high priority',
+  });
 });
 
 test('Antigravity brain artifacts open in #fileView with local image rewrite, file:// links, and Proceed approval', async ({ page, fleet }) => {

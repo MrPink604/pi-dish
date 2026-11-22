@@ -239,6 +239,11 @@ Delay routes or emit fixture bridge events to reproduce asynchronous ownership
 bugs deterministically; never borrow a live agent session. Preserve sanitization
 in `test/test-env.js`, temporary socket/tmux ownership, and cleanup on failure.
 
+The [Antigravity swarm spec](../test/browser/agy-tasks-swarm.spec.ts) refreshes
+the board during mention completion and the overview while narrator feedback
+is being drafted. It checks that Enter completes the mention without sending a
+prompt and that the sanitized feedback still reaches the coordinator.
+
 Before extracting state or transport, identify the relevant rows above and run
 those checks while developing. Run `npm run check` and the full backend suite
 before committing code changes, plus the focused browser and desktop/mobile
