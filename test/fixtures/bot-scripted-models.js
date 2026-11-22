@@ -5,6 +5,7 @@ exports.openBotModels = openBotModels;
 /**
  * A bot relay's model in tests (`PI_DISH_BOT_MODELS` names this module): pi-ai's faux provider under the bot's own
  * selector. Every request is answered `echo <n>: <last user text>`, where n counts the user messages in its context,
+ * followed by `[<k> image(s)]` when that message holds images,
  * so a test sees what the bot's conversation holds. While `hold` exists in `PI_DISH_BOT_FAUX_DIR` an answer waits
  * for it to go, and `holding` says one is waiting: a run a test keeps in progress. pi-dish's idle-rollover draft
  * request is answered as a bot should: `Summary: <line>`, then the notebook between its markers.
@@ -40,7 +41,10 @@ async function openBotModels(selector) {
             return faux.fauxAssistantMessage('Summary: Rolled over while idle\n<<<NOTEBOOK\nNotes kept over the rollover.\nNOTEBOOK>>>');
         }
         const users = context.messages.filter(message => message.role === 'user');
-        return faux.fauxAssistantMessage(`echo ${users.length}: ${text(users.at(-1))}`);
+        const latest = users.at(-1);
+        const images = Array.isArray(latest?.content) ? latest.content.filter(part => part.type === 'image').length : 0;
+        const note = images ? `[${images} image${images === 1 ? '' : 's'}]` : '';
+        return faux.fauxAssistantMessage(`echo ${users.length}: ${[text(latest), note].filter(Boolean).join(' ')}`);
     };
     handle.appendResponses(Array.from({ length: 1000 }, () => answer));
     const models = createModels();

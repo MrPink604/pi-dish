@@ -857,3 +857,33 @@ test('typed metadata accumulation narrows malformed known fields without promoti
     assert.equal(info.parentSession, '/parent');
     assert.equal(info.lastActivity.getTime(), 1000);
 });
+test('a transcript read stops at the size its stats recorded: a message appended during the read is not counted', () => {
+    const file = path.join(tmpDir, 'appended-during-read.jsonl');
+    const line = (entry) => JSON.stringify(entry) + '\n';
+    fs.writeFileSync(file, line({ type: 'session', version: 3, id: 'appended', cwd: '/w', timestamp: '2026-11-22T00:00:00.000Z' })
+        // Longer than one read chunk, so the read goes on after the append.
+        + line({ type: 'message', id: 'big', parentId: null, timestamp: '2026-11-22T00:00:01.000Z', message: { role: 'user', content: 'x'.repeat(1_500_000) } })
+        + line({ type: 'message', id: 'small', parentId: 'big', timestamp: '2026-11-22T00:00:02.000Z', message: { role: 'user', content: 'y' } }));
+    const stats = fs.statSync(file);
+    const readSync = fs.readSync;
+    let reads = 0;
+    fs.readSync = ((...args) => {
+        const read = readSync(...args);
+        if (++reads === 1)
+            fs.appendFileSync(file, line({ type: 'message', id: 'late', parentId: 'small', timestamp: '2026-11-22T00:00:03.000Z', message: { role: 'user', content: 'z' } }));
+        return read;
+    });
+    let ids = [];
+    let endsNl = false;
+    try {
+        const read = SF.readSessionFileEntries(file, stats);
+        ids = read.entries.map(entry => (0, test_types_js_1.record)(entry).id);
+        endsNl = read.endsNl;
+    }
+    finally {
+        fs.readSync = readSync;
+    }
+    assert.ok(reads > 1, 'the append came after the first chunk');
+    assert.deepEqual(ids, ['appended', 'big', 'small']);
+    assert.equal(endsNl, true);
+});

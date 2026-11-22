@@ -12,7 +12,7 @@ import type { BotRegistry, BotRow } from '../lib/bot-registry';
 import type { BotControl, BotHandlers } from '../lib/bot-handlers';
 import type { RouteHandler } from '../lib/http-boundary';
 import type { BotRuntime, HubApi, IdleRolloverPorts, IdleRolloverRecord, SessionsPort, WorkerRecord } from '../lib/bot-runtime';
-const { BotMirror }: typeof import('../lib/bot-mirror') = require('../lib/bot-mirror');
+const { BotMirror, readBotMirrorHeader, lastBotTurn }: typeof import('../lib/bot-mirror') = require('../lib/bot-mirror');
 const runtimeModule: typeof import('../lib/bot-runtime') = require('../lib/bot-runtime');
 const {
   openBotRuntime, settledWorker, newContextRefusal, composeHandoff, composeInstructions,
@@ -70,18 +70,20 @@ interface TestBotOptions {
   from?: string;
   /** The idle rollover's settings, cache TTLs, routines, log and clock; by default no cache TTL is known, so it never fires. */
   idleRollover?: IdleRolloverPorts;
+  /** What the faux models take; text and images by default. */
+  input?: ('text' | 'image')[];
 }
 
 const noIdleRollover: IdleRolloverPorts = { settings: () => ({}), cacheRetention: () => ({ revision: 'none', rules: [] }) };
 
 async function openTestBot(t: test.TestContext, sessions: SessionsPort,
   { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses, pollMs = { first: 20, max: 40 }, scriptTimeoutMs, from,
-    idleRollover = noIdleRollover }: TestBotOptions = {}): Promise<Harness> {
+    idleRollover = noIdleRollover, input }: TestBotOptions = {}): Promise<Harness> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-'));
   const faux: Faux = await import('@earendil-works/pi-ai/providers/faux');
   const { createModels } = await import('@earendil-works/pi-ai/models');
   // faux-2 is a second model for a bot told to run on another one.
-  const provider = faux.fauxProvider({ models: [{ id: 'faux-1', contextWindow }, { id: 'faux-2', contextWindow }] });
+  const provider = faux.fauxProvider({ models: [{ id: 'faux-1', contextWindow, input }, { id: 'faux-2', contextWindow, input }] });
   const models = createModels();
   models.setProvider(provider.provider);
   const requests: Message[][] = [];
@@ -2121,7 +2123,7 @@ async function anthropicPayload(context: TranscriptContext): Promise<{ system: u
   const api = await import('@earendil-works/pi-ai/api/anthropic-messages');
   const model = {
     id: 'claude-opus-4-5', name: 'Claude Opus', api: 'anthropic-messages', provider: 'anthropic', baseUrl: 'https://api.anthropic.com',
-    reasoning: false, input: ['text'], cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, contextWindow: 200_000, maxTokens: 64_000,
+    reasoning: false, input: ['text', 'image'], cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, contextWindow: 200_000, maxTokens: 64_000,
   } as const;
   let payload: { system: unknown; tools: unknown; messages: unknown[] } | undefined;
   const client = { beta: { messages: { create: () => { throw new Error('captured, not sent'); } } } };
@@ -2296,4 +2298,195 @@ test('an idle handoff\u2019s quote never ends inside a surrogate pair', () => {
   assert.ok(handoff.includes(`Latest request: ${'a'.repeat(1_499)}… [the first 1499 of ${request.length} characters; history read 2 has all of it]`));
   assert.doesNotMatch(handoff, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   assert.ok(composeHandoff({ windowNumber: 2, closed: [], tail: [], request, workers: [], forced: true }).includes(request), 'other rollovers quote it whole');
+});
+
+// Images sent to a bot: they reach its model, on every route a bot runs on, and a window holds a bounded number.
+
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+/** A 2×1 grey JPEG. */
+const JPEG = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAFA3PEY8MlBGQUZaVVBfeMiCeG5uePWvuZHI////////////////////////////////////////////////////wAALCAABAAIBAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/ACv/2Q==';
+const image = (data = PNG, mimeType = 'image/png') => ({ type: 'image' as const, data, mimeType });
+/** A PNG header followed by `bytes` of padding: an image as large as a test needs. */
+const largePng = (bytes: number) => Buffer.concat([Buffer.from(PNG, 'base64'), Buffer.alloc(bytes)]).toString('base64');
+
+/** The request body `api` builds for `context`, captured from its payload hook; nothing is sent. */
+async function routePayload(api: string, model: Record<string, unknown>, context: TranscriptContext, options: Record<string, unknown> = {}): Promise<unknown> {
+  // pi-ai is ESM-only and each route is its own module: this CommonJS test loads the one named, as anthropicPayload does.
+  const module = await import(`@earendil-works/pi-ai/api/${api}`) as { stream(model: never, context: TranscriptContext, options: never): { result(): Promise<unknown> } };
+  let payload: unknown;
+  const full = {
+    api, provider: 'test', baseUrl: 'https://example.invalid/v1', reasoning: false, input: ['text', 'image'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200_000, maxTokens: 8_000, ...model,
+  };
+  await module.stream(full as never, context, {
+    apiKey: 'test-key', ...options, onPayload: (params: unknown) => { payload = params; throw new Error('captured, not sent'); },
+  } as never).result();
+  assert.ok(payload, `${api} built a payload`);
+  return payload;
+}
+
+/** The blocks of `payload` (anywhere in it) that `match` picks. */
+function blocksIn(payload: unknown, match: (block: Record<string, unknown>) => boolean): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = [];
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    if (!value || typeof value !== 'object') return;
+    const block = value as Record<string, unknown>;
+    if (match(block)) found.push(block);
+    Object.values(block).forEach(walk);
+  };
+  walk(payload);
+  return found;
+}
+
+/** A ChatGPT-style token whose only claim is the account Codex reads from it. */
+const codexToken = `x.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'acct' } })).toString('base64url')}.x`;
+
+test('an image reaches the bot\u2019s model after its text, an image alone is a message, and each route sends it in its own image block', async t => {
+  const bot = await openTestBot(t, noSessions);
+  bot.respond(bot.faux.fauxAssistantMessage('A pixel.'), bot.faux.fauxAssistantMessage('Another pixel.'));
+  await bot.runtime.prompt('What is this?', 'followUp', [image()]);
+  await until(() => said(bot, 'A pixel.'), 'the first answer');
+  assert.deepEqual(bot.requests[0].at(-1)!.content, [{ type: 'text', text: 'What is this?' }, image()], 'the text, then the image');
+  const second = image(JPEG, 'image/jpeg');
+  await bot.runtime.prompt('', 'followUp', [second]);
+  await until(() => said(bot, 'Another pixel.'), 'the image alone is answered');
+  assert.deepEqual(bot.requests[1].at(-1)!.content, [second], 'no empty text block');
+  // The chat shows each message with its image, as a session's transcript holds one.
+  const users = bot.mirrorLines().filter(line => line.type === 'message' && (line.message as Record<string, unknown>).role === 'user')
+    .map(line => (line.message as Record<string, unknown>).content);
+  assert.deepEqual(users, [[{ type: 'text', text: 'What is this?' }, image()], [second]]);
+
+  const context = bot.contexts[1];
+  const anthropic = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } };
+  const anthropicJpeg = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: second.data } };
+  // Anthropic Messages, through Pi's model runtime, and the Claude Code replay of the subscription route.
+  const messages = (await anthropicPayload(context)).messages;
+  assert.deepEqual(cacheContent(blocksIn(messages, block => block.type === 'image')), [anthropic, anthropicJpeg]);
+  const frames = await claudeCodeFrames(context.messages);
+  assert.deepEqual(cacheContent(blocksIn(frames, block => block.type === 'image')), [anthropic, anthropicJpeg]);
+  // OpenAI Responses, the Codex subscription's Responses body, Chat Completions and Gemini.
+  const dataUrl = (data: string, mimeType: string) => `data:${mimeType};base64,${data}`;
+  for (const [api, options] of [['openai-responses', {}], ['openai-codex-responses', { apiKey: codexToken }]] as const) {
+    const payload = await routePayload(api, { id: 'gpt-5', provider: api === 'openai-responses' ? 'openai' : 'openai-codex' }, context, options);
+    assert.deepEqual(blocksIn(payload, block => block.type === 'input_image').map(block => block.image_url),
+      [dataUrl(PNG, 'image/png'), dataUrl(second.data, 'image/jpeg')], api);
+  }
+  const completions = await routePayload('openai-completions', { id: 'gpt-4o', provider: 'openai' }, context);
+  assert.deepEqual(blocksIn(completions, block => block.type === 'image_url').map(block => block.image_url),
+    [{ url: dataUrl(PNG, 'image/png') }, { url: dataUrl(second.data, 'image/jpeg') }]);
+  const gemini = await routePayload('google-generative-ai', { id: 'gemini-2.5-pro', provider: 'google' }, context);
+  assert.deepEqual(blocksIn(gemini, block => 'inlineData' in block).map(block => block.inlineData),
+    [{ mimeType: 'image/png', data: PNG }, { mimeType: 'image/jpeg', data: second.data }]);
+});
+
+test('images a bot cannot pass on are refused with the reason, before they count as input; a malformed image is refused, not dropped', async t => {
+  const { botImages } = runtimeModule;
+  assert.deepEqual(botImages(undefined), []);
+  assert.deepEqual(botImages([{ data: PNG, mimeType: 'image/png' }]), [image()]);
+  // Typed by its content, whatever it claims.
+  assert.deepEqual(botImages([{ data: JPEG, mimeType: 'image/png' }]), [image(JPEG, 'image/jpeg')]);
+  assert.deepEqual(runtimeModule.imageHeader(Buffer.from(JPEG, 'base64')), { mimeType: 'image/jpeg', width: 2, height: 1 });
+  assert.deepEqual(botImages([{ data: PNG, mimeType: 'image/jpeg' }]), [image()]);
+  // GIF and WebP are not taken, a whole one or not.
+  for (const [data, kind] of [['R0lGODdhAgABAIEAAP8AAAAAAAAAAAAAACwAAAAAAgABAAAIBQABAAgIADs=', 'a GIF'], ['R0lGODlhAQABAA==', 'a GIF'],
+    ['UklGRhwAAABXRUJQVlA4TA8AAAAvAQAAEAcQ/Y8CBiKi/wEA', 'a WebP image']]) {
+    assert.throws(() => botImages([{ data, mimeType: 'image/png' }]), new RegExp(`^Error: Image 1 is ${kind}; a bot takes only PNG and JPEG images\\. Nothing was sent\\.$`));
+  }
+  // What a provider could not decode would fail every later request of the window: it is never stored. A PNG without
+  // its image data, and a JPEG cut before its scan, have a header but are not whole.
+  const png = Buffer.from(PNG, 'base64');
+  const idat = png.indexOf('IDAT') - 4;
+  const noIdat = Buffer.concat([png.subarray(0, idat), png.subarray(idat + 12 + png.readUInt32BE(idat))]).toString('base64');
+  const jpeg = Buffer.from(JPEG, 'base64');
+  const sos = jpeg.indexOf(Buffer.from([0xff, 0xda]));
+  assert.ok(sos > jpeg.indexOf(Buffer.from([0xff, 0xc0])), 'the scan follows the frame header');
+  const noSos = Buffer.concat([jpeg.subarray(0, sos), Buffer.from([0xff, 0xd9])]).toString('base64');
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64');
+  for (const data of ['A', 'not base64!', svg, 'AAAA', noIdat, noSos]) {
+    assert.throws(() => botImages([image(), { data, mimeType: 'image/png' }]), /^Error: Image 2 is not a whole PNG or JPEG image; a bot takes only PNG and JPEG images\. Nothing was sent\.$/);
+  }
+  const tall = 'iVBORw0KGgoAAAANSUhEUgAAH0EAAAABCAAAAACZyqz4AAAAHUlEQVR4nO3BAQEAAACAkP6v7ggKAAAAAAAAAKgBH0IAAWX13dsAAAAASUVORK5CYII=';
+  assert.throws(() => botImages([{ data: tall, mimeType: 'image/png' }]), /^Error: Image 1 is 8001×1 px; a bot takes images of at most 8000 px a side/);
+  assert.throws(() => botImages('x'), /images must be a list/);
+
+  const textOnly = await openTestBot(t, noSessions, { input: ['text'] });
+  await assert.rejects(textOnly.runtime.prompt('Look', 'followUp', [image()]), /model \(faux\/faux-1\) does not take images/);
+  const bot = await openTestBot(t, noSessions);
+  await assert.rejects(bot.runtime.prompt('Look', 'followUp', [image(), image('A')]), /Image 2 is not a whole PNG or JPEG/, 'the store checks for itself');
+  await assert.rejects(bot.runtime.prompt('Look', 'followUp', [image(), image(largePng(3.4 * 1024 * 1024))]),
+    /^Error: Image 2 is 4\.5 MB; a bot takes images of at most 4\.5 MB/);
+  await assert.rejects(bot.runtime.prompt('Look', 'followUp', Array.from({ length: 21 }, () => image())),
+    /With these 21 images .* the limit of 20 images or 16\.0 MB per context window.*Nothing was sent/);
+  for (const refused of [textOnly, bot]) {
+    assert.equal(refused.requests.length, 0, 'no request');
+    assert.ok(!refused.mirrorLines().some(line => line.type === 'message'), 'nothing in the chat');
+  }
+});
+
+test('a window full of images refuses another until a new window opens; the handoff notes the images and carries none', async t => {
+  const bot = await openTestBot(t, noSessions);
+  const call = (name: string, args: Record<string, string>) =>
+    bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall(name, args)], { stopReason: 'toolUse' });
+  bot.respond(bot.faux.fauxAssistantMessage('Twenty pixels.'));
+  await bot.runtime.prompt('', 'followUp', Array.from({ length: 20 }, () => image()));
+  await until(() => said(bot, 'Twenty pixels.'), 'twenty images fit a window');
+  await assert.rejects(bot.runtime.prompt('And this one', 'followUp', [image()]),
+    /^Error: This bot's context window already holds 20 images \(0\.0 MB\); with this image .*or ask the bot to start a new context window first\.$/);
+  assert.ok(!bot.mirrorLines().some(line => textOf(line.message) === 'And this one'), 'the refused message is not in the chat');
+
+  bot.respond(
+    call('context_notes', { action: 'write', text: 'The user sends pixels.' }),
+    call('new_context', { summary: 'Looked at pixels' }),
+    bot.faux.fauxAssistantMessage('New window.'),
+    bot.faux.fauxAssistantMessage('One pixel.'),
+  );
+  await bot.runtime.prompt('Start a new context window', 'followUp');
+  await until(() => said(bot, 'New window.'), 'the window rolls over');
+  const handoff = textOf(bot.requests.at(-1)!.find(message => message.role === 'user'));
+  assert.match(handoff, /\nuser: \[20 images attached\]\n/);
+  assert.ok(!JSON.stringify(bot.requests.at(-1)).includes(PNG), 'no image data in the new window');
+  await bot.runtime.prompt('And this one', 'followUp', [image()]);
+  await until(() => said(bot, 'One pixel.'), 'the new window takes images again');
+  assert.deepEqual(bot.requests.at(-1)!.at(-1)!.content, [{ type: 'text', text: 'And this one' }, image()]);
+});
+
+test('a photo and a message sent after it to a busy bot reach the model in the order they were sent', async t => {
+  const bot = await openTestBot(t, noSessions);
+  const first = held(() => bot.faux.fauxAssistantMessage('Working.'));
+  bot.respond(first.response, bot.faux.fauxAssistantMessage('Seen.'), bot.faux.fauxAssistantMessage('Seen again.'));
+  await bot.runtime.prompt('Start', 'followUp');
+  await until(first.started, 'the bot is busy');
+  // The photo's window check takes longer than the text's admission: the text must still wait its turn.
+  await Promise.all([bot.runtime.prompt('', 'followUp', [image()]), bot.runtime.prompt('After the photo', 'followUp')]);
+  first.open();
+  await until(() => bot.requests.some(request => request.some(message => textOf(message) === 'After the photo')), 'both reach the model');
+  await untilSettled(bot, 'the follow-ups ran');
+  const users = bot.requests.at(-1)!.filter(message => message.role === 'user');
+  const photo = users.findIndex(message => Array.isArray(message.content) && message.content.some(part => part.type === 'image'));
+  const text = users.findIndex(message => textOf(message) === 'After the photo');
+  assert.ok(photo > 0 && text > photo, `the photo (${photo}) comes before the text (${text})`);
+});
+
+test('a mirror reopened after a large image row keeps its cursor and its chain', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-mirror-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, `${BOT.id}.jsonl`);
+  const header = { id: BOT.id, cwd: dir, name: 'Fleet' };
+  const mirror = new BotMirror(file, header);
+  mirror.appendMessage(7, { role: 'assistant', content: [{ type: 'text', text: 'Ready.' }], timestamp: Date.parse('2026-11-22T10:00:00Z') });
+  // A ~410k-character row, longer than any fixed tail the mirror could read: the relay restarts before the answer.
+  mirror.appendMessage(8, { role: 'user', content: [image(largePng(310 * 1024))], timestamp: Date.now() });
+  assert.ok(fs.statSync(file).size > 410_000);
+
+  const reopened = new BotMirror(file, header);
+  assert.equal(reopened.lastEntryId, 8, 'the cursor is kept');
+  assert.equal(reopened.name, 'Fleet');
+  reopened.appendMessage(9, { role: 'assistant', content: [{ type: 'text', text: 'A big picture.' }], timestamp: Date.parse('2026-11-22T10:05:00Z') });
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>);
+  const ids = lines.slice(1).map(line => line.id);
+  assert.deepEqual(ids, ['bot-0-name', 'bot-7', 'bot-8', 'bot-9'], 'nothing replayed');
+  assert.equal(lines.at(-1)!.parentId, 'bot-8', 'one chain');
+  assert.deepEqual(readBotMirrorHeader(file), header);
+  assert.equal(lastBotTurn(file), '2026-11-22T10:05:00.000Z');
 });

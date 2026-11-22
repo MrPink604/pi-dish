@@ -23,7 +23,7 @@ interface Held { sessionId: string; delivery: 'prompt' | 'followUp'; message: st
 interface Prompt { text: string; options: unknown }
 
 function harness({
-  windowMs = 5_000, live = true, known = true, hibernated = false,
+  windowMs = 5_000, live = true, known = true, hibernated = false, harnessId = 'pi',
   capabilities = ['prompt', 'followUp', 'steer'] as BridgeCapability[],
 } = {}) {
   const held: Held[] = [];
@@ -31,6 +31,7 @@ function harness({
   let steers = 0;
   const wakes: string[] = [];
   const session = {
+    harnessId,
     prompt: async (text: string, options?: unknown) => { prompts.push({ text, options }); return { ok: true }; },
     steer: async (text: string) => { steers++; return { ok: true, text }; },
   };
@@ -147,6 +148,21 @@ test('attached images bypass the hold and reach the live session', async () => {
   assert.equal(res.status, 200);
   assert.equal(h.held.length, 0);
   assert.deepEqual(h.prompts, [{ text: 'look', options: { images: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }] } }]);
+});
+
+test('images for a bot whose relay predates image support are refused as retryable, and nothing is sent', async () => {
+  const images = [{ data: 'AAAA', mimeType: 'image/png' }];
+  const old = harness({ harnessId: 'bot' });
+  const refused = await post(old.app, '/api/sessions/bot-1/prompt', { message: 'look', images });
+  assert.equal(refused.status, 503);
+  assert.equal(refused.body.retryable, true);
+  assert.match(String(refused.body.error), /older pi-dish code that cannot take images.*Nothing was sent: send it again/);
+  assert.deepEqual(old.prompts, []);
+  // Its text alone still goes; a relay that advertises images takes them.
+  assert.equal((await post(old.app, '/api/sessions/bot-1/prompt', { message: 'look' })).status, 200);
+  const current = harness({ harnessId: 'bot', capabilities: ['prompt', 'followUp', 'steer', 'images'] });
+  assert.equal((await post(current.app, '/api/sessions/bot-1/prompt', { message: 'look', images })).status, 200);
+  assert.equal(current.prompts.length, 1);
 });
 
 test('a peer follow-up holds with followUp delivery', async () => {

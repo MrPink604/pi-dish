@@ -251,6 +251,8 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
           ? block.mimeType : 'image/png');
     res.setHeader('Cache-Control', 'private, no-cache');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    // An SVG opened as a page would run its scripts on pi-dish's origin; sandboxed it still shows in an <img>.
+    if (/^image\/svg/i.test(mimeType)) res.setHeader('Content-Security-Policy', 'sandbox');
     if (isVideo) {
       sendRangedBuffer(req, res, bytes, { mimeType });
       return;

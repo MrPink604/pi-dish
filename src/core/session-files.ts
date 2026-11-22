@@ -16,6 +16,7 @@ import { createUsageCostEstimator, isPlanProvider, pricingRevision } from './har
 import type { UsageCostEstimator } from './harness-pricing.js';
 import { TURN_ERROR_ENTRY_TYPE, turnErrorData } from './turn-error-entry.js';
 import { AGY_BRAIN_PROFILE_ID, isAgyBrainTranscriptPath, parseAgyBrainEntries } from './agy-brain.js';
+import { forEachLine } from './file-lines.js';
 
 export interface SessionFileProfile {
   readonly profileId?: string;
@@ -133,11 +134,22 @@ export function readSessionFileEntries(file: string, stats: fs.Stats = fs.statSy
     const entries = parsedFile.entries.deref();
     if (entries) return { entries, endsNl: parsedFile.endsNl };
   }
-  const content = fs.readFileSync(file, 'utf-8');
-  const entries = effectiveProfile === AGY_BRAIN_PROFILE_ID
-    ? parseAgyBrainEntries(content, file)
-    : parseSessionEntries(content);
-  const endsNl = content.endsWith('\n');
+  let entries: SessionEntries;
+  let endsNl: boolean;
+  if (effectiveProfile === AGY_BRAIN_PROFILE_ID) {
+    const content = fs.readFileSync(file, 'utf-8');
+    entries = parseAgyBrainEntries(content, file);
+    endsNl = content.endsWith('\n');
+  } else {
+    // Line by line in bounded chunks: a transcript past Node's largest string (image rows) still reads. The read stops
+    // at the size `stats` recorded, which callers index by: a message appended meanwhile is read once, next time.
+    const parsed: unknown[] & { firstEntryOnFirstLine?: boolean } = [];
+    let last = '';
+    let lines = 0;
+    forEachLine(file, (line) => { last = line; addSessionLine(parsed, line, lines++); }, stats.size);
+    entries = parsed;
+    endsNl = lines > 1 && last === '';
+  }
   parsedFile = { file, profileId: effectiveProfile, stats, entries: new WeakRef(entries), endsNl };
   return { entries, endsNl };
 }
@@ -219,16 +231,18 @@ function parseEntry(line: string): unknown {
   return JSON.parse(line);
 }
 
+/** One physical line of a Pi transcript; an unparsable line is skipped. */
+function addSessionLine(entries: unknown[] & { firstEntryOnFirstLine?: boolean }, line: string, index: number): void {
+  try {
+    entries.push(parseEntry(line));
+    // Only physical line zero can be the header/title line.
+    if (index === 0) entries.firstEntryOnFirstLine = true;
+  } catch {}
+}
+
 export function parseSessionEntries(content: string): SessionEntries {
   const entries: unknown[] & { firstEntryOnFirstLine?: boolean } = [];
-  const lines = content.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    try {
-      entries.push(parseEntry(lines[i]));
-      // Only physical line zero can be the header/title line.
-      if (i === 0) entries.firstEntryOnFirstLine = true;
-    } catch (e) {}
-  }
+  content.split('\n').forEach((line, index) => addSessionLine(entries, line, index));
   return entries;
 }
 

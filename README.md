@@ -1236,6 +1236,18 @@ old code. A message, routine run or room post that arrives while a relay is
 down starts the bot and is delivered once it is back. Bounce agents restarts a
 bot by hand in the same way.
 
+Images you attach to a message for a bot reach its model after the text, in
+the order you sent them, and an image may be sent alone. A bot takes whole PNG
+and JPEG images, recognized by their content (GIF, WebP and SVG are refused),
+of at most 8000 px a side. Every request in a context window sends its images again, so a
+window holds at most 20 images and 16 MB of them, and one image at most 4.5 MB
+(Pi's own per-image limit). A message over a limit, or with images for a model
+that does not take them, is refused with the reason and nothing is sent; a new
+window (the bot's `new_context`) takes images again. A bot still on code from
+before images were passed on refuses them with a retryable error until it
+restarts. Handoffs and `history` note an image as `[1 image attached]` and
+never carry its data.
+
 #### Idle rollover before the prompt cache expires
 
 A bot left idle with a large context window would make your next message

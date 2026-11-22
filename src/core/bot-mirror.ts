@@ -9,10 +9,10 @@
  */
 import fs = require('fs');
 import path = require('path');
+import { firstLine, linesFromEnd } from './file-lines';
 import { record as isRecord } from './helper-values';
 import type { ProtocolRecord } from './wire-protocol';
 
-const TAIL_BYTES = 256 * 1024;
 const ENTRY_ID = /^bot-(\d+)(?:-|$)/;
 
 export interface BotMirrorHeader {
@@ -22,20 +22,10 @@ export interface BotMirrorHeader {
   name: string;
 }
 
-function tail(file: string): string {
-  const size = fs.statSync(file).size;
-  const length = Math.min(size, TAIL_BYTES);
-  const buffer = Buffer.alloc(length);
-  const fd = fs.openSync(file, 'r');
-  try { fs.readSync(fd, buffer, 0, length, size - length); } finally { fs.closeSync(fd); }
-  return length === size ? buffer.toString('utf8') : buffer.toString('utf8').slice(buffer.indexOf(10) + 1);
-}
-
 /** The bot id a mirror belongs to; throws when the file is not a bot mirror. */
 export function readBotMirrorHeader(file: string): BotMirrorHeader {
-  const first = fs.readFileSync(file, 'utf8').split('\n', 1)[0];
   let header: unknown = null;
-  try { header = JSON.parse(first); } catch {}
+  try { header = JSON.parse(firstLine(file)); } catch {}
   if (!isRecord(header) || header.type !== 'session' || typeof header.id !== 'string' || !isRecord(header.bot)) {
     throw new Error(`Not a bot mirror: ${file}`);
   }
@@ -44,13 +34,13 @@ export function readBotMirrorHeader(file: string): BotMirrorHeader {
 
 /** When the bot last answered: the time of the newest model message in its mirror, or null for none or no mirror. */
 export function lastBotTurn(file: string): string | null {
-  let lines: string[];
-  try { lines = tail(file).split('\n'); } catch { return null; }
-  for (let index = lines.length - 1; index >= 0; index--) {
-    let entry: unknown;
-    try { entry = JSON.parse(lines[index]); } catch { continue; }
-    if (isRecord(entry) && entry.type === 'message' && isRecord(entry.message) && entry.message.role === 'assistant' && typeof entry.timestamp === 'string') return entry.timestamp;
-  }
+  try {
+    for (const line of linesFromEnd(file)) {
+      let entry: unknown;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (isRecord(entry) && entry.type === 'message' && isRecord(entry.message) && entry.message.role === 'assistant' && typeof entry.timestamp === 'string') return entry.timestamp;
+    }
+  } catch {}
   return null;
 }
 
@@ -79,11 +69,11 @@ export class BotMirror {
       this.append('session_info', `bot-0-name`, { name: header.name });
       return;
     }
-    const lines = tail(file).split('\n');
+    // Read back line by line, however large a row (an image) is: a cut row must not lose the cursor.
     let named = false;
-    for (let index = lines.length - 1; index >= 0; index--) {
+    for (const line of linesFromEnd(file)) {
       let entry: unknown;
-      try { entry = JSON.parse(lines[index]); } catch { continue; }
+      try { entry = JSON.parse(line); } catch { continue; }
       if (!isRecord(entry) || entry.type === 'session' || typeof entry.id !== 'string') continue;
       if (!named && entry.type === 'session_info' && typeof entry.name === 'string') { this.name = entry.name; named = true; }
       this.parentId ??= entry.id;

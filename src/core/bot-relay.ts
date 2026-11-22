@@ -20,7 +20,7 @@ import { execFile } from 'child_process';
 import { once } from 'events';
 import { openBotRegistry, type BotRow } from './bot-registry';
 import { BotMirror, readBotMirrorHeader } from './bot-mirror';
-import { openBotModels, openBotRuntime, type BotRuntime, type HubApi, type SessionsPort } from './bot-runtime';
+import { botImages, openBotModels, openBotRuntime, type BotRuntime, type HubApi, type SessionsPort } from './bot-runtime';
 import { IDLE_ROLLOVER_LOG, appendDecisionLog } from './bot-idle-rollover';
 import { listRoutines } from './routines';
 import { nextScheduledRun } from './routine-runner';
@@ -237,10 +237,12 @@ async function main(): Promise<void> {
         case 'prompt':
         case 'steer': {
           const message = typeof cmd.message === 'string' ? cmd.message : '';
-          if (!message) return respond(sock, cmd, false, undefined, 'message required');
+          // Images reach the model after the text; a message of images alone is a message.
+          const images = botImages(cmd.images);
+          if (!message && !images.length) return respond(sock, cmd, false, undefined, 'message required');
           const queued = bot.busy;
           taking++;
-          try { await bot.prompt(message, cmd.command === 'steer' || cmd.deliverAs === 'steer' ? 'steer' : 'followUp'); } finally { taking--; }
+          try { await bot.prompt(message, cmd.command === 'steer' || cmd.deliverAs === 'steer' ? 'steer' : 'followUp', images); } finally { taking--; }
           writeClaim();
           return respond(sock, cmd, true, { queued });
         }

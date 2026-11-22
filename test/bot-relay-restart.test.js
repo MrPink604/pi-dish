@@ -6,8 +6,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
  * bounce queue once it is idle. Each case boots server.js against a temp HOME and an isolated tmux server with bots
  * on; the relay in the pane is the real one, its model scripted by `fixtures/bot-scripted-models.js`
  * (`PI_DISH_BOT_MODELS`). A relay from before builds were recorded is made by removing the build from its lock and
- * its `relay-build` file, which is how the first deploy of this change finds the bots already running. The last case
- * has the real relay ask an idle bot to roll its window over before its prompt cache expires.
+ * its `relay-build` file, which is how the first deploy of this change finds the bots already running. One case has
+ * the real relay ask an idle bot to roll its window over before its prompt cache expires; the last sends it images
+ * through pi-dish's prompt route.
  *
  * Run with: npm test
  */
@@ -106,10 +107,13 @@ async function untilAsync(predicate, message, timeout = 30_000) {
 async function get(base, requestPath) {
     return (0, test_types_js_1.record)(await (await fetch(base + requestPath)).json());
 }
-async function prompt(base, route, message) {
-    const response = await fetch(`${base}/api/sessions/${encodeURIComponent(route)}/prompt`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }),
+function post(base, route, body) {
+    return fetch(`${base}/api/sessions/${encodeURIComponent(route)}/prompt`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
+}
+async function prompt(base, route, message) {
+    const response = await post(base, route, { message });
     assert.equal(response.status, 200, `the prompt is taken: ${await response.text()}`);
 }
 const botsDir = (home) => path.join(home, '.pi', 'dish', 'bots');
@@ -286,5 +290,32 @@ test('an idle bot\u2019s relay drafts its notebook in a fork before its cache ex
     assert.equal(triggered.retention, '1h');
     assert.equal(decisions().find(entry => entry.outcome === 'rolled-over')?.notebookBytes, Buffer.byteLength('Notes kept over the rollover.'));
     assert.equal(fs.statSync(log).mode & 0o777, 0o600, 'the log is owner-only');
+    await server.stop();
+});
+test('a bot\u2019s relay passes images on to its model, with text or alone, and refuses more than a window holds with the reason', { timeout: 180_000 }, async () => {
+    const home = makeHome();
+    const port = await freePort();
+    const server = await boot(home, port);
+    const fleet = await liveFleet(server, home);
+    const image = { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' };
+    for (const body of [{ message: 'What is this?', images: [image] }, { message: '', images: [image, image] }]) {
+        const response = await post(server.base, fleet.route, body);
+        assert.equal(response.status, 200, `the prompt is taken: ${await response.text()}`);
+    }
+    await until(() => said(home, fleet.id, 'echo 1: What is this? [1 image]') === 1, 'the image reaches the model after the text');
+    await until(() => said(home, fleet.id, 'echo 2: [2 images]') === 1, 'images alone reach it');
+    // The bot's chat shows each image as a session's does: the transcript route links it, and the link serves it.
+    const users = (0, test_types_js_1.records)((await get(server.base, `/api/sessions/${encodeURIComponent(fleet.route)}/messages`)).messages)
+        .filter(message => message.role === 'user');
+    const links = users.map(message => (0, test_types_js_1.records)(message.content).filter(block => block.type === 'image').map(block => String(block.url)));
+    assert.deepEqual(links.map(list => list.length), [1, 2]);
+    const served = await fetch(server.base + links[0][0]);
+    assert.equal(served.status, 200);
+    assert.equal(served.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await served.arrayBuffer()), Buffer.from(image.data, 'base64'));
+    const refused = await post(server.base, fleet.route, { message: 'And these', images: Array.from({ length: 18 }, () => image) });
+    assert.equal(refused.status, 500);
+    assert.match(String((0, test_types_js_1.record)(await refused.json()).error), /^This bot's context window already holds 3 images \(0\.0 MB\); with these 18 images .* limit of 20 images .*Nothing was sent/);
+    assert.ok(!chat(home, fleet.id).some(entry => entry.text === 'And these'), 'nothing of it is in the chat');
     await server.stop();
 });

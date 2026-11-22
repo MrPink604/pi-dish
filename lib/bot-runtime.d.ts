@@ -32,6 +32,53 @@ export interface SettledWorker {
 }
 /** Text blocks of a Pi message, joined; tool calls and thinking are left out. */
 export declare function messageText(message: unknown): string;
+/** The image blocks of a Pi message: how many, and their base64 characters. */
+export declare function imageLoad(message: unknown): ImageLoad;
+/** `messageText` for a text path (a handoff, history): an image the message held is noted, its data never carried. */
+export declare function messageTextNotingImages(message: unknown): string;
+/** One image of a bot prompt, as pi-ai holds it. */
+export interface BotImage {
+    type: 'image';
+    data: string;
+    mimeType: string;
+}
+/** Images held by a context window, or arriving in one message. */
+export interface ImageLoad {
+    count: number;
+    bytes: number;
+}
+/** The largest image a bot takes, in base64 characters: Pi's own per-image limit, under Anthropic's 5 MB. */
+export declare const BOT_IMAGE_MAX_BYTES: number;
+/**
+ * A window holds at most this many images, and this many base64 characters of them: every request in the window
+ * sends them all again, and Anthropic refuses a request over 32 MB or tightens its image limits past 20 images.
+ */
+export declare const BOT_WINDOW_IMAGE_MAX_COUNT = 20;
+export declare const BOT_WINDOW_IMAGE_MAX_BYTES: number;
+/** Bedrock's limit on an image side, the strictest a bot's routes have; the PWA sends at most 1568 px. */
+export declare const BOT_IMAGE_MAX_SIDE = 8000;
+/**
+ * The type and size of a PNG or JPEG, read from its own bytes, or null when it is neither or is not whole: a PNG needs
+ * IHDR first, then IDAT and IEND, each chunk within the data; a JPEG needs SOI, a frame header (SOF), a scan (SOS)
+ * and then EOI. A cheap check of structure, not a decode.
+ */
+export declare function imageHeader(bytes: Buffer): {
+    mimeType: string;
+    width: number;
+    height: number;
+} | null;
+/**
+ * The images of a bridge `prompt` or `steer` frame, checked by their content before anything stores them: a whole
+ * PNG or JPEG (the PWA sends JPEG) no larger than 8000 px a side, typed by its bytes whatever type it claims. Anything
+ * else, GIF, WebP and SVG included, is refused with the reason, never dropped: a provider that cannot decode a stored
+ * image would fail every later request of the window.
+ */
+export declare function botImages(value: unknown): BotImage[];
+/**
+ * Why `images` may not join a window that already holds `held`, on a model whose pi-ai `input` is given; null when
+ * they may. A model without image input would see a placeholder instead, so it is refused rather than dropped.
+ */
+export declare function botImageRefusal(images: readonly BotImage[], held: ImageLoad, input: readonly string[] | undefined, model: string): string | null;
 /**
  * The settle rule `pi-dish-sessions wait` uses: a worker has settled when it is
  * not working or compacting, its transcript holds more than `since` messages,
@@ -263,8 +310,11 @@ export interface BotRuntime {
         contextWindow: number;
         percent: number;
     } | null;
-    /** `followUp` queues behind a busy run; `steer` joins it, except an idle-rollover run, which it queues behind. */
-    prompt(message: string, mode: 'followUp' | 'steer'): Promise<void>;
+    /**
+     * `followUp` queues behind a busy run; `steer` joins it, except an idle-rollover run, which it queues behind.
+     * Images follow the text; a model without image input, an image over the cap or a window full of images is refused.
+     */
+    prompt(message: string, mode: 'followUp' | 'steer', images?: readonly BotImage[]): Promise<void>;
     /** A room message, a question from another family or the answer to one, posted once per request id. */
     deliver(input: BotInput): Promise<void>;
     /** Plans the idle rollover again: settings or the bot's registry row changed. */
