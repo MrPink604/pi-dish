@@ -110,19 +110,71 @@ function cleanupError(error: unknown, remainingProcesses: ProcessIdentity[]): Pa
   return Object.assign(error instanceof Error ? error : new Error(String(error)), { remainingProcesses });
 }
 
-function runTmux(args: readonly unknown[], { timeout = 3000 } = {}): Promise<string> {
+function runFile(file: string, args: readonly unknown[], timeout: number): Promise<string> {
   return new Promise((resolve, reject) => {
     // No shell quoting: execFile owns argv coercion/rejection.
-    execFile('tmux', args as readonly string[], { timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
+    execFile(file, args as readonly string[], { timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
       if (err) { err.stderr = stderr; return reject(err); }
       resolve(stdout);
     });
   });
 }
 
+function runTmux(args: readonly unknown[], { timeout = 3000 } = {}): Promise<string> {
+  return runFile('tmux', args, timeout);
+}
+
 /** Every command names one server socket; the format/query calls share one timeout. */
 function runTmuxOn(socket: string, args: readonly unknown[]): Promise<string> {
   return runTmux(['-S', socket, ...args], { timeout: 2000 });
+}
+
+async function tmuxServerRunning(socket: string): Promise<boolean> {
+  try { await runTmuxOn(socket, ['list-sessions']); return true; } catch { return false; }
+}
+
+function executableOnPath(name: string, searchPath: string | undefined): string | null {
+  for (const dir of (searchPath || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, name);
+    try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch {}
+  }
+  return null;
+}
+
+/**
+ * Argv prefix that starts the tmux server for `socket` in its own transient
+ * user scope. A tmux server stays in the cgroup of whatever started it, and
+ * tmux puts each pane in a scope PartOf= that unit; started from a pi-dish
+ * pane, agent panes would stop whenever pi-dish.service stops. Null - start
+ * tmux directly - without a reachable user systemd manager, without
+ * systemd-run, or with PI_DISH_TMUX_SCOPE=0.
+ */
+export function tmuxServerScopeArgv(socket: string, env: NodeJS.ProcessEnv = process.env): string[] | null {
+  if (env.PI_DISH_TMUX_SCOPE === '0' || !env.XDG_RUNTIME_DIR) return null;
+  try {
+    if (!fs.statSync(path.join(env.XDG_RUNTIME_DIR, 'systemd', 'private')).isSocket()) return null;
+  } catch { return null; }
+  const systemdRun = executableOnPath('systemd-run', env.PATH);
+  if (!systemdRun) return null;
+  const label = path.basename(socket).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40) || 'server';
+  const unit = `pi-dish-tmux-${label}-${process.pid}-${Date.now().toString(36)}.scope`;
+  return [systemdRun, '--user', '--scope', '--quiet', '--collect', `--unit=${unit}`, '--', 'tmux'];
+}
+
+/** Run tmux `args`, which may start the server on `socket`; a new server gets its own scope. */
+async function runTmuxStartingServer(socket: string, args: readonly unknown[], timeout: number): Promise<string> {
+  const scope = await tmuxServerRunning(socket) ? null : tmuxServerScopeArgv(socket);
+  if (!scope) return runTmux(args, { timeout });
+  try {
+    return await runFile(scope[0], [...scope.slice(1), ...args], timeout);
+  } catch (error) {
+    // A running server means tmux itself ran and failed. Otherwise the scope
+    // could not be created (bus refused, policy): start tmux unscoped.
+    if (await tmuxServerRunning(socket)) throw error;
+    console.error(`tmux: no systemd scope for ${socket}, starting the server unscoped:`, error instanceof Error ? error.message : error);
+    return runTmux(args, { timeout });
+  }
 }
 
 let tmuxAvailable: boolean | null = null;
@@ -205,7 +257,9 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
   if (cwd) args.push('-c', cwd);
   args.push(...envFlags, '-P', '-F', '#{pane_id}', '--', ...command);
 
-  const out = await runTmux(args, { timeout: 5000 });
+  const out = newTmuxSessionName
+    ? await runTmuxStartingServer(socket, args, 5000)
+    : await runTmux(args, { timeout: 5000 });
   return { paneId: out.trim() };
 }
 

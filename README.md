@@ -772,6 +772,16 @@ server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the
 `pi-dish` session and `server` window by default.
 The manager always targets the default tmux server, even when invoked from
 inside a pane attached to another socket.
+With a user systemd manager and `systemd-run` available, a tmux server that
+`start` bootstraps runs in its own transient scope
+(`pi-dish-tmux-default-<pid>-<time>.scope`), as does a server pi-dish starts
+for a new tmux session such as the hidden `pi-dish` agent server
+(`pi-dish-tmux-<socket>-<pid>-<id>.scope`). tmux places each pane in a scope
+that is `PartOf=` the server's unit, so a server started inside a service's
+cgroup would lose every pane when the service stops. Stopping the service
+still removes the pi-dish server window and processes through `stop`; other
+panes survive. Without systemd, or with `PI_DISH_TMUX_SCOPE=0`, tmux starts
+directly in the caller's cgroup, as does a server whose scope systemd refuses.
 When scanning for old server processes, it silently skips processes that have already exited.
 `scripts/pi-dish-tmux.sh status` probes `http://127.0.0.1:$PORT/api/host`
 (`PORT` defaults to `3333`), regardless of the tmux session or window name.

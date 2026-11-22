@@ -73,6 +73,15 @@ export interface PaneCleanupOptions extends PaneProcessOptions {
 export interface PaneCleanupError extends Error {
     remainingProcesses: ProcessIdentity[];
 }
+/**
+ * Argv prefix that starts the tmux server for `socket` in its own transient
+ * user scope. A tmux server stays in the cgroup of whatever started it, and
+ * tmux puts each pane in a scope PartOf= that unit; started from a pi-dish
+ * pane, agent panes would stop whenever pi-dish.service stops. Null - start
+ * tmux directly - without a reachable user systemd manager, without
+ * systemd-run, or with PI_DISH_TMUX_SCOPE=0.
+ */
+export declare function tmuxServerScopeArgv(socket: string, env?: NodeJS.ProcessEnv): string[] | null;
 export declare function isTmuxAvailable(): boolean;
 export declare function tmuxTmpdir(): string;
 export declare function listServers(): Promise<TmuxServer[]>;

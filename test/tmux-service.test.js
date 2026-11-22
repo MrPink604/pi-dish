@@ -9,6 +9,7 @@ const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
 const test = require("node:test");
 const ROOT = path.resolve(__dirname, '..');
+const tmux = require('../lib/tmux');
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(predicate, label, timeout = 5000) {
     const deadline = Date.now() + timeout;
@@ -165,4 +166,129 @@ test('status follows loopback HTTP health without querying tmux or Tailscale', t
     assert.equal(down.status, 1);
     assert.match(down.stderr, /not healthy at http:\/\/127\.0\.0\.1:4321/);
     assert.equal(fs.existsSync(path.join(root, 'tmux-env.log')), false);
+});
+// A unix socket where the user systemd manager's private socket would be. It
+// drops every connection: tmux itself dials it to place panes and would
+// otherwise wait on a manager that never answers.
+async function fakeUserManager(t, runtimeDir) {
+    fs.mkdirSync(path.join(runtimeDir, 'systemd'), { recursive: true });
+    const manager = net.createServer(connection => connection.destroy());
+    await new Promise(resolve => manager.listen(path.join(runtimeDir, 'systemd', 'private'), resolve));
+    t.after(() => manager.close());
+}
+// Logs its argv, then runs the command after `--` the way a created scope does.
+const systemdRunStub = (exitStatus) => [
+    '#!/bin/sh',
+    'printf "systemd-run %s\\n" "$*" >> "$TMUX_LOG"',
+    ...(exitStatus === null ? ['while [ "$1" != -- ]; do shift; done', 'shift', 'exec "$@"'] : [`exit ${exitStatus}`]),
+].join('\n');
+test('start bootstraps the default tmux server in its own systemd scope, falling back unscoped', async (t) => {
+    const cases = [
+        { name: 'scoped', manager: true, systemdRun: null, env: {}, scoped: true },
+        { name: 'scope refused', manager: true, systemdRun: 1, env: {}, scoped: false },
+        { name: 'opted out', manager: true, systemdRun: null, env: { PI_DISH_TMUX_SCOPE: '0' }, scoped: false },
+        { name: 'no user manager', manager: false, systemdRun: null, env: {}, scoped: false },
+    ];
+    for (const scenario of cases) {
+        const root = fixtureRoot(t);
+        const bin = path.join(root, 'bin');
+        const log = path.join(root, 'tmux-env.log');
+        if (scenario.manager)
+            await fakeUserManager(t, root);
+        fs.writeFileSync(path.join(bin, 'systemd-run'), systemdRunStub(scenario.systemdRun), { mode: 0o755 });
+        // No server is running until the bootstrap session starts one.
+        fs.writeFileSync(path.join(bin, 'tmux'), [
+            '#!/bin/sh',
+            'printf "tmux %s\\n" "$*" >> "$TMUX_LOG"',
+            'case "$1" in list-sessions|has-session) exit 1 ;; esac',
+        ].join('\n'), { mode: 0o755 });
+        fs.writeFileSync(path.join(bin, 'curl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        const start = (0, node_child_process_1.spawnSync)(path.join(root, 'scripts', 'pi-dish-tmux.sh'), ['start'], {
+            cwd: root,
+            env: { ...fixtureEnv(root, 3333), PI_DISH_TMUX_STARTUP_DELAY: '0', ...scenario.env },
+            encoding: 'utf8',
+            timeout: 20000,
+        });
+        assert.equal(start.status, 0, `${scenario.name}: ${start.stderr}`);
+        const calls = fs.readFileSync(log, 'utf8').trim().split('\n');
+        const bootstrap = /new-session -d -s pi-dish-bootstrap-\d+ -n bootstrap sleep 30$/;
+        const scopeCalls = calls.filter(line => line.startsWith('systemd-run '));
+        const direct = calls.filter(line => line.startsWith('tmux ') && bootstrap.test(line));
+        // The bootstrap tmux client runs exactly once either way; only it starts a server.
+        assert.equal(direct.length, 1, `${scenario.name}: ${calls.join('\n')}`);
+        if (scenario.scoped) {
+            assert.equal(scopeCalls.length, 1, scenario.name);
+            assert.match(scopeCalls[0], /^systemd-run --user --scope --quiet --collect --unit=pi-dish-tmux-default-\d+-\d+\.scope -- tmux new-session /);
+        }
+        else {
+            assert.equal(scopeCalls.length, scenario.systemdRun === 1 ? 1 : 0, `${scenario.name}: ${calls.join('\n')}`);
+        }
+        if (scenario.systemdRun === 1)
+            assert.match(start.stderr, /starting tmux unscoped/);
+        // The managed window joins the running server and never gets a scope.
+        assert.ok(calls.some(line => /^tmux new-session -d -s pi-dish -n server /.test(line)), scenario.name);
+    }
+});
+test('tmux server scope argv needs a user manager, systemd-run and no opt-out', async (t) => {
+    const { tmuxServerScopeArgv } = tmux;
+    const root = fixtureRoot(t);
+    const bin = path.join(root, 'bin');
+    fs.writeFileSync(path.join(bin, 'systemd-run'), systemdRunStub(null), { mode: 0o755 });
+    const env = { XDG_RUNTIME_DIR: root, PATH: bin };
+    assert.equal(tmuxServerScopeArgv('/tmp/tmux-1/pi-dish', env), null, 'no manager socket');
+    await fakeUserManager(t, root);
+    const argv = tmuxServerScopeArgv('/tmp/tmux-1/pi-dish', env);
+    assert.ok(argv);
+    assert.deepEqual(argv.slice(0, 5), [path.join(bin, 'systemd-run'), '--user', '--scope', '--quiet', '--collect']);
+    assert.match(argv[5], new RegExp(`^--unit=pi-dish-tmux-pi-dish-${process.pid}-[0-9a-z]+\\.scope$`));
+    assert.deepEqual(argv.slice(6), ['--', 'tmux']);
+    assert.match(tmuxServerScopeArgv('/tmp/tmux-1/odd name.$x', env)?.[5] ?? '', /^--unit=pi-dish-tmux-odd_name_x-/);
+    assert.equal(tmuxServerScopeArgv('/tmp/tmux-1/pi-dish', { ...env, PI_DISH_TMUX_SCOPE: '0' }), null, 'opt-out');
+    assert.equal(tmuxServerScopeArgv('/tmp/tmux-1/pi-dish', { ...env, PATH: path.join(root, 'scripts') }), null, 'no systemd-run');
+});
+const tmuxOk = (0, node_child_process_1.spawnSync)('tmux', ['-V']).status === 0;
+test('spawnInTmux starts an absent server in its own scope and joins a running one directly', { skip: !tmuxOk }, async (t) => {
+    const root = fixtureRoot(t);
+    // Only systemd-run is stubbed: the real tmux runs on sockets under the temp
+    // root. The fixture's stub tmux stays first on PATH for the root's `stop`.
+    const bin = path.join(root, 'scope-bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'systemd-run'), systemdRunStub(null), { mode: 0o755 });
+    const log = path.join(root, 'tmux-env.log');
+    await fakeUserManager(t, root);
+    const saved = { PATH: process.env.PATH, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, TMUX_LOG: process.env.TMUX_LOG, PI_DISH_TMUX_SCOPE: process.env.PI_DISH_TMUX_SCOPE };
+    Object.assign(process.env, { PATH: `${bin}:${process.env.PATH}`, XDG_RUNTIME_DIR: root, TMUX_LOG: log });
+    delete process.env.PI_DISH_TMUX_SCOPE;
+    // Outside the fixture root, whose own cleanup may remove it first.
+    const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-scope-'));
+    const sockets = [];
+    t.after(() => {
+        for (const socket of sockets)
+            (0, node_child_process_1.spawnSync)('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore' });
+        fs.rmSync(socketDir, { recursive: true, force: true });
+        for (const [key, value] of Object.entries(saved)) {
+            if (value === undefined)
+                delete process.env[key];
+            else
+                process.env[key] = value;
+        }
+    });
+    const spawnSession = (socket, name) => tmux.spawnInTmux({
+        socket, newTmuxSessionName: name, command: ['sleep', '60'],
+    });
+    const scopeCalls = () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [];
+    const scoped = path.join(socketDir, 'scoped');
+    sockets.push(scoped);
+    assert.match((await spawnSession(scoped, 'first')).paneId, /^%\d+$/);
+    assert.equal(scopeCalls().length, 1);
+    assert.match(scopeCalls()[0], /--unit=pi-dish-tmux-scoped-\d+-[0-9a-z]+\.scope -- tmux -S \S+\/scoped new-session -d -s first /);
+    assert.match((await spawnSession(scoped, 'second')).paneId, /^%\d+$/);
+    assert.equal(scopeCalls().length, 1, 'a running server is joined without a scope');
+    // systemd-run refusing the scope never runs tmux; the server starts unscoped.
+    fs.writeFileSync(path.join(bin, 'systemd-run'), systemdRunStub(1), { mode: 0o755 });
+    const refused = path.join(socketDir, 'refused');
+    sockets.push(refused);
+    assert.match((await spawnSession(refused, 'only')).paneId, /^%\d+$/);
+    assert.equal(scopeCalls().length, 2);
+    assert.equal((0, node_child_process_1.spawnSync)('tmux', ['-S', refused, 'has-session', '-t', '=only']).status, 0);
 });

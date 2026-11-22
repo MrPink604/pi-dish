@@ -244,6 +244,8 @@ function sanitizeTestEnv(env = process.env) {
     next.PI_DISH_AGY_COMMAND = path.join(isolated, 'no-agy');
     // A server a suite boots never starts a bot relay (or its model).
     next.PI_DISH_BOTS = 'off';
+    // Test tmux servers never become transient units in the operator's systemd manager.
+    next.PI_DISH_TMUX_SCOPE = '0';
     next.HOST = '127.0.0.1';
     next.PORT = '0';
     return withBunOnPath(next);

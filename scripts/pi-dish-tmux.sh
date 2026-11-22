@@ -126,6 +126,31 @@ wait_until_healthy() {
   return 1
 }
 
+# Start the default tmux server with tmux arguments "$@". A tmux server stays
+# in the cgroup of whatever started it, and tmux puts each pane in a scope
+# PartOf= that unit. Started from pi-dish.service, stopping the service would
+# stop every pane: pi-dish's own and, through the agent server it starts,
+# every agent's. A transient user scope keeps the server out of the unit.
+# Without a user systemd manager or systemd-run, or with PI_DISH_TMUX_SCOPE=0,
+# tmux starts directly as before.
+start_tmux_server() {
+  if [[ ${PI_DISH_TMUX_SCOPE:-} != 0 && -n ${XDG_RUNTIME_DIR:-} &&
+        -S $XDG_RUNTIME_DIR/systemd/private ]] &&
+     command -v systemd-run >/dev/null 2>&1; then
+    if systemd-run --user --scope --quiet --collect \
+        "--unit=pi-dish-tmux-default-$$-$(date +%s).scope" -- tmux "$@"; then
+      return 0
+    fi
+    # A running server means tmux itself ran and failed; otherwise the scope
+    # could not be created.
+    if tmux list-sessions >/dev/null 2>&1; then
+      return 1
+    fi
+    echo "pi-dish-tmux.sh: no systemd scope; starting tmux unscoped" >&2
+  fi
+  tmux "$@"
+}
+
 start_service() {
   local bootstrap_session= rc=0
 
@@ -135,7 +160,7 @@ start_service() {
   # one-time restore settles, then reconcile the managed window afterward.
   if ! tmux list-sessions >/dev/null 2>&1; then
     bootstrap_session="${session}-bootstrap-$$"
-    tmux new-session -d -s "$bootstrap_session" -n bootstrap 'sleep 30'
+    start_tmux_server new-session -d -s "$bootstrap_session" -n bootstrap 'sleep 30'
     sleep "${PI_DISH_TMUX_STARTUP_DELAY:-2}"
   fi
 

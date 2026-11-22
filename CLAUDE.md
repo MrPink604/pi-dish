@@ -1015,6 +1015,14 @@ so mixed states during a fleet rollout degrade gracefully).
 
 `spawnInTmux` new-windows with `-d`: the user may be attached to the target
 session, and a remote spawn must not switch their current window.
+A `new-session` that finds no server on its socket starts that server through
+`systemd-run --user --scope --collect --unit=pi-dish-tmux-<socket>-<pid>-<id>.scope`
+(`tmuxServerScopeArgv`): tmux puts each pane in a scope `PartOf=` the server's
+unit, and pi-dish itself runs in a pane of the default server, so an inherited
+cgroup would stop every agent pane with `pi-dish.service`. `scripts/pi-dish-tmux.sh`
+bootstraps the default server the same way. No user manager socket
+(`$XDG_RUNTIME_DIR/systemd/private`), no `systemd-run`, a refused scope, or
+`PI_DISH_TMUX_SCOPE=0` start tmux directly; the test environment sets the opt-out.
 `isSocketAllowed()` rejects any socket not directly under the tmux tmpdir (the
 same directory `listServers()` enumerates) — the server can be on 0.0.0.0, so
 an arbitrary `-S` path from the LAN must not get through. Placements persist in
