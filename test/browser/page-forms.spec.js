@@ -234,6 +234,41 @@ const OSBG_SPEC = {
     await (0, fixtures_js_1.expect)(tab.locator('#pdfApp .pdf-summary')).toHaveText('1 changed from default: paint → 2 Umber');
     await tab.close();
 });
+(0, fixtures_js_1.test)('the page preview reads as disabled and turns a tap anywhere on it into the answer button (phone width)', async ({ page, fleet }) => {
+    const { self } = fleet;
+    const published = await publish(self, 'osbg-preview', `<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body><h1>Your pick</h1><script type="application/pi-dish-form">${JSON.stringify(OSBG_SPEC)}</script></body></html>`);
+    const tab = await page.context().newPage();
+    await tab.setViewportSize({ width: 390, height: 844 });
+    await tab.goto(`${self.base}${published.path}/`);
+    const preview = tab.locator('[data-pi-dish-form]');
+    const answer = preview.locator('a[data-pi-dish-answer]');
+    const night = preview.locator('fieldset[data-q="paint"] .pdf-opt', { has: tab.locator('input[value="5 Night"]') });
+    await (0, fixtures_js_1.expect)(night).toHaveCSS('cursor', 'not-allowed');
+    await (0, fixtures_js_1.expect)(night).toHaveCSS('border-top-style', 'dashed');
+    // Far down the form the button stays in view, stuck to the form's top.
+    const notes = preview.locator('fieldset[data-q="notes"] textarea');
+    await notes.scrollIntoViewIfNeeded();
+    const noticeTop = await preview.locator('.pdf-head').evaluate(head => head.getBoundingClientRect().bottom);
+    (0, fixtures_js_1.expect)(noticeTop, 'the notice\'s own place has scrolled away').toBeLessThan(0);
+    await (0, fixtures_js_1.expect)(answer).toBeInViewport();
+    // A tap on a disabled control lands on the cover: nothing changes but the hash.
+    for (const target of [notes, night]) {
+        await target.scrollIntoViewIfNeeded();
+        const box = await target.boundingBox();
+        if (!box)
+            throw new Error('control has no box');
+        const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        (0, fixtures_js_1.expect)(await tab.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className, point)).toBe('pdf-preview-cover');
+        await tab.mouse.click(point.x, point.y);
+        await (0, fixtures_js_1.expect)(tab).toHaveURL(`${self.base}${published.path}/#pi-dish-form-answer`);
+        await (0, fixtures_js_1.expect)(answer).toBeInViewport();
+    }
+    await (0, fixtures_js_1.expect)(night.locator('input')).not.toBeChecked();
+    await (0, fixtures_js_1.expect)(preview.locator('input[value="3 Racing green"]')).toBeChecked();
+    await answer.click();
+    await (0, fixtures_js_1.expect)(tab).toHaveURL(`${self.base}/forms/${published.token}`);
+    await tab.close();
+});
 (0, fixtures_js_1.test)('an unconfirmed submit keeps its id: a retry sends the same submission once', async ({ page, fleet }) => {
     const { self } = fleet;
     const published = await publish(self, 'reconcile', formHtml());
