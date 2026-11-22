@@ -1430,9 +1430,11 @@ repository-wide test/tooling closure; planned packages are not implemented featu
 
 Run `npm run build:browser` after browser source changes and commit all generated
 scripts: `public/app.js`, `public/browser.js`, `public/helpers.js`,
-`public/artifact-comments.js`, `public/sw.js` and `public/theme-prepaint.js`. `npm run check`
-verifies strict types and byte-for-byte output consistency. Normal startup uses
-the committed scripts directly.
+`public/artifact-comments.js`, `public/sw.js` and `public/theme-prepaint.js`.
+Commit `public/index.html` alongside the bundles: the build versions each local
+JS and CSS URL in the shell by its content hash. This keeps a new shell from
+loading an older cached bundle. `npm run check` verifies the URLs, strict types
+and generated outputs; startup needs no build.
 
 Build-tool implementations are authored as sibling TypeScript in `scripts/`;
 their checked-in `.js`/`.mjs` outputs retain the existing direct command paths.

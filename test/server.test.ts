@@ -5076,6 +5076,18 @@ test('GET /api/config reports terminal disabled without PI_DISH_TERMINAL=1', asy
   assert.equal(body.terminal, false);
 });
 
+test('shell documents, styles and scripts are never stored by caches', async () => {
+  for (const requestPath of ['/', '/index.html', '/style.css', '/app.js', '/browser.js', '/sw.js']) {
+    const response = await rawGet(requestPath);
+    assert.equal(response.status, 200, requestPath);
+    assert.equal(response.headers['cache-control'], 'no-store', `${requestPath} must stay out of caches`);
+  }
+  // Query versions do not change the mutable path during a rollout.
+  const versioned = await rawGet('/app.js?v=0123456789abcdef');
+  assert.equal(versioned.status, 200);
+  assert.equal(versioned.headers['cache-control'], 'no-store');
+});
+
 test('startup omits feature assets and compresses large static text', async () => {
   const html = await (await fetch(base + '/')).text();
   assert.doesNotMatch(html, /vendor\/xterm(?:-addon-fit)?\.(?:js|css)/,

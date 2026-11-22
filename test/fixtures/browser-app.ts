@@ -46,7 +46,7 @@ function fixtureAppBundle(): Promise<string> {
 
 async function installFixtureApp(page: Page) {
   const bundle = await fixtureAppBundle();
-  await page.route('**/app.js', (route: Route) => route.fulfill({ contentType: 'application/javascript', body: bundle }));
+  await page.route(url => url.pathname === '/app.js', (route: Route) => route.fulfill({ contentType: 'application/javascript', body: bundle }));
   await page.addInitScript(() => {
     Reflect.set(globalThis, 'fixtureElement', <T>(value: T | null | undefined, label: string): T => {
       if (value === null || value === undefined) throw new Error(`Missing fixture element: ${label}`);

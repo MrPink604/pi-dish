@@ -74,6 +74,7 @@ import { createVaultApprovals, type VaultApprovalsController } from './vault-app
 import { createBounce } from './bounce';
 import { createAppBindings } from './app-bindings';
 import { createPrivateSessions, type PrivateSessions } from './private-sessions';
+import { signalBootFailed, signalBootReady, signalBootStarted } from './startup-guard';
 import type { CwdAutocompleteOptions } from './cwd-autocomplete';
 import type { Terminal as Xterm } from '@xterm/xterm';
 import type { FitAddon as XtermFitAddon } from '@xterm/addon-fit';
@@ -82,6 +83,10 @@ declare const FitAddon: { FitAddon: typeof XtermFitAddon } | typeof XtermFitAddo
 import type { SessionEntry } from './session-state';
 import type { HighlightRuntime, MarkedRuntime, MermaidRuntime } from './rich-text-vendors';
 declare const marked: MarkedRuntime | undefined, hljs: HighlightRuntime | undefined, mermaid: MermaidRuntime | undefined;
+
+// The pre-paint guard owns the visible failure surface; announce that this
+// bundle reached application construction before touching the DOM.
+signalBootStarted(document);
 
 const hostView = createHostView();
 const HOSTS_KEY = 'pi-dish-hosts';
@@ -309,12 +314,12 @@ const responseDetailsController: ReturnType<typeof createResponseDetails> = crea
 const appChrome = createAppChrome({ document, storage: localStorage, older: container => transcriptController.maybeOlder(container) });
 function autosizePromptInput(input: HTMLTextAreaElement) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; }
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function startApp(): Promise<void> {
   const startupSelection = sessionState.selectionGeneration;
   
-  const promptInput = (document.getElementById('promptInput') as HTMLTextAreaElement);
+  const promptInput = document.querySelector<HTMLTextAreaElement>('#promptInput');
 
-  promptInput.addEventListener('keydown', (e) => {
+  promptInput?.addEventListener('keydown', (e) => {
     if (composerAutocomplete.visible) {
       if (e.key === 'ArrowDown') { e.preventDefault(); composerAutocomplete.move(1); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); composerAutocomplete.move(-1); return; }
@@ -370,7 +375,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  promptInput.addEventListener('input', () => {
+  promptInput?.addEventListener('input', () => {
     autosizePromptInput(promptInput);
     composerAutocomplete.handle(promptInput.value);
     composerDrafts.exitHistory(); // typing exits history browsing
@@ -378,7 +383,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Any pasted file attaches; text and HTML clipboard items keep pasting as text.
-  promptInput.addEventListener('paste', (e) => {
+  promptInput?.addEventListener('paste', (e) => {
     const files = Array.from(e.clipboardData?.items || [])
       .filter((it) => it.kind === 'file')
       .map((it) => it.getAsFile()).filter((file): file is File => file !== null);
@@ -387,10 +392,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     composerDrafts.images.add(files);
   });
 
-  (document.getElementById('attachFileInput') as HTMLInputElement).addEventListener('change', (e) => {
-    const input = e.currentTarget as HTMLInputElement; composerDrafts.images.add(input.files || []);
-    input.value = ''; // allow re-picking the same file
-  });
+  // An older shell has the same composer and button, but a different picker id.
+  const picker = document.querySelector<HTMLInputElement>('.composer-main input[type="file"]');
+  if (picker) {
+    document.getElementById('btnAttach')?.addEventListener('click', () => picker.click());
+    picker.addEventListener('change', () => {
+      composerDrafts.images.add(picker.files || []);
+      picker.value = ''; // allow re-picking the same file
+    });
+  }
 
   // Files dropped anywhere on the composer attach; other drags (text) keep their default.
   const composerArea = document.querySelector<HTMLElement>('.input-area');
@@ -553,7 +563,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Periodic refresh must preserve an in-flight server search, or the list
   // resets to unfiltered mid-search.
   sidebarLists.mount();
-});
+  signalBootReady(document);
+}
+
+function runApp(): void {
+  void startApp().catch(error => {
+    signalBootFailed(document);
+    console.error('pi-dish failed to start', error);
+  });
+}
 
 const sessionReferences: ReturnType<typeof createSessionReferences> = createSessionReferences({
   sessionState, selfId: () => hostDirectory.self.hostId, host: hostEntryFor, hostLabel: hostLabelFor, config: () => appConfig,
@@ -1247,7 +1265,6 @@ createAppBindings({ document, actions: {
   panelOpenTreeModal: () => { appChrome.closePanel(); transcriptTree.open(); },
   panelOpenSessionHarnessSettings: () => { appChrome.closePanel(); openSessionHarnessSettings(); },
   panelExportSession: () => { appChrome.closePanel(); sessionControls.export(); },
-  attachFiles: () => (document.getElementById('attachFileInput') as HTMLInputElement).click(),
   abortTurn: () => composerSubmit.abortTurn(),
   sendSteer: () => composerSubmit.sendSteer(),
   sendFollowUp: () => composerSubmit.sendFollowUp(),
@@ -1290,3 +1307,8 @@ createAppBindings({ document, actions: {
   closeResponseDetails: () => responseDetailsController.close(),
   togglePromptHistory: () => promptHistory.toggle(),
 } });
+
+// A deferred script sees a parsed document. A late-loaded script must not
+// wait for DOMContentLoaded after it has already fired.
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', runApp, { once: true });
+else runApp();

@@ -33,6 +33,23 @@ async function chips(page: Page) {
   })));
 }
 
+test('a cached shell with the old image picker still opens sessions and attaches images', async ({ page, fleet }) => {
+  await page.route(`${fleet.self.base}/`, async route => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace(/app\.js\?v=[0-9a-f]+/, 'app.js')
+      .replace('id="attachFileInput"', 'id="imageFileInput" accept="image/*"')
+      .replace('id="btnAttach"', 'id="btnAttach" data-app-click="attachImage"');
+    await route.fulfill({ response, body });
+  });
+  await page.reload();
+  await fleet.row(fleet.self).click();
+  await expect(page.locator('#messages')).toContainText('self root transcript');
+  const chooser = page.waitForEvent('filechooser');
+  await page.locator('#btnAttach').click();
+  await (await chooser).setFiles(image);
+  await expect(page.locator('#attachmentStrip img')).toHaveCount(1);
+});
+
 test('text and audio attach as files while an image stays an image block', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.locator('#attachFileInput').setInputFiles([notes, clip, image]);

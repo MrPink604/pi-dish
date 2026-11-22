@@ -1,6 +1,8 @@
 // Generated tool from scripts/build-browser.ts; edit that source and run npm run build:tools.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const node_crypto_1 = require("node:crypto");
+const node_fs_1 = require("node:fs");
 const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
 const esbuild = require("esbuild");
@@ -43,6 +45,18 @@ const prepared = entries.map(entry => {
     }
     return { file: entry.target, target: path.join(build_output_js_1.root, entry.target), content: result.outputFiles[0].contents, mode: 0o644 };
 });
+// Every local JS/CSS reference in the shell gets a new cache key when its bytes change.
+const shellFile = 'public/index.html';
+const shellPath = path.join(build_output_js_1.root, shellFile);
+const shell = (0, node_fs_1.readFileSync)(shellPath, 'utf8');
+const versioned = shell.replace(/\b(src|href)="([\w./-]+\.(?:js|css))(?:\?v=[0-9a-f]+)?"/g, (_match, attribute, asset) => {
+    const file = `public/${asset}`;
+    const content = prepared.find(output => output.file === file)?.content ?? (0, node_fs_1.readFileSync)(path.join(build_output_js_1.root, file));
+    const version = (0, node_crypto_1.createHash)('sha256').update(content).digest('hex').slice(0, 16);
+    return `${attribute}="${asset}?v=${version}"`;
+});
+if (versioned !== shell)
+    prepared.push({ file: shellFile, target: shellPath, content: versioned, mode: 0o644 });
 (0, build_output_js_1.writeOutputs)(prepared, {
     check,
     kind: 'Browser',

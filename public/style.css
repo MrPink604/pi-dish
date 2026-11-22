@@ -164,7 +164,7 @@ body.sidebar-open {
   outline-offset: -3px;
 }
 
-.reachability-sign-in {
+:is(.reachability-sign-in, .startup-failure) {
   position: fixed;
   inset: 0;
   margin: auto;
@@ -177,9 +177,9 @@ body.sidebar-open {
   color: var(--text-bright);
 }
 
-.reachability-sign-in::backdrop { background: color-mix(in srgb, var(--bg-darker) 82%, transparent); }
-.reachability-sign-in h2 { margin-bottom: 16px; font-size: 20px; }
-.reachability-sign-in button { min-height: 44px; }
+:is(.reachability-sign-in, .startup-failure)::backdrop { background: color-mix(in srgb, var(--bg-darker) 82%, transparent); }
+:is(.reachability-sign-in, .startup-failure) h2 { margin-bottom: 16px; font-size: 20px; }
+:is(.reachability-sign-in, .startup-failure) button { min-height: 44px; }
 
 /* Sidebar */
 .sidebar {

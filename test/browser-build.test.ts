@@ -15,6 +15,10 @@ test('browser build detects stale output and preserves it on type failure', () =
       fs.copyFileSync(path.join(__dirname, '..', file), path.join(root, file));
     }
     fs.symlinkSync(path.join(__dirname, '../node_modules'), path.join(root, 'node_modules'), 'junction');
+    const shell = path.join(root, 'public/index.html');
+    fs.writeFileSync(shell, '<link href="style.css" rel="stylesheet"><script src="app.js" defer></script>');
+    const style = path.join(root, 'public/style.css');
+    fs.writeFileSync(style, 'body { color: red; }');
     fs.writeFileSync(path.join(root, 'src/browser/theme-prepaint.ts'), 'const themeAnswer: number = 3; console.log(themeAnswer);');
     const appSource = path.join(root, 'src/browser/app.ts');
     const appSourceText = 'let fixtureState = 0; function fixtureApp(value: number) { fixtureState += value; return fixtureState; } console.log(fixtureApp(2));';
@@ -31,6 +35,7 @@ test('browser build detects stale output and preserves it on type failure', () =
     });
     const first = run();
     assert.equal(first.status, 0, first.stdout + first.stderr);
+    const firstShell = fs.readFileSync(shell, 'utf8');
     const output = path.join(root, 'public/browser.js');
     const original = fs.readFileSync(output, 'utf8');
     assert.equal(run('--check').status, 0);
@@ -62,11 +67,14 @@ test('browser build detects stale output and preserves it on type failure', () =
     }
     fs.writeFileSync(appSource, "import { answer } from './index'; console.log(answer);");
     const importedApp = run(); assert.equal(importedApp.status, 0, importedApp.stdout + importedApp.stderr);
+    assert.notEqual(fs.readFileSync(shell, 'utf8'), firstShell, 'a changed bundle must get a new script URL');
     vm.runInContext(fs.readFileSync(appOutput, 'utf8'), context);
     assert.deepEqual(logged, [2, 42], 'runtime imports are bundled locally');
     assert.equal(vm.runInContext('typeof answer', context), 'undefined');
     fs.writeFileSync(appSource, appSourceText);
+    fs.writeFileSync(style, 'body { color: blue; }');
     assert.equal(run().status, 0);
+    assert.notEqual(fs.readFileSync(shell, 'utf8'), firstShell, 'a CSS-only change must get a new stylesheet URL');
     fs.mkdirSync(path.join(root, 'src/core'));
     const sharedSource = path.join(root, 'src/core/helper-fixture.ts');
     fs.writeFileSync(sharedSource, "export { answer } from '../browser/index';");

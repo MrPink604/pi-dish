@@ -86,7 +86,7 @@ function fixtureAppBundle() {
 }
 async function installFixtureApp(page) {
     const bundle = await fixtureAppBundle();
-    await page.route('**/app.js', (route) => route.fulfill({ contentType: 'application/javascript', body: bundle }));
+    await page.route(url => url.pathname === '/app.js', (route) => route.fulfill({ contentType: 'application/javascript', body: bundle }));
     await page.addInitScript(() => {
         Reflect.set(globalThis, 'fixtureElement', (value, label) => {
             if (value === null || value === undefined)

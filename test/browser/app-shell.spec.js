@@ -111,3 +111,40 @@ fixtures_js_1.test.describe('backgrounded-tab revival', () => {
         })).toContain(`/api/sessions/${fixtures_js_1.ROOT}/stream`);
     });
 });
+fixtures_js_1.test.describe('startup failure recovery', () => {
+    fixtures_js_1.test.use({ instrumentApp: false });
+    (0, fixtures_js_1.test)('an uncaught startup error shows a reload control that boots the real app', async ({ page, fleet }) => {
+        let failStartup = true;
+        await page.route(url => url.pathname === '/app.js', route => failStartup
+            ? route.fulfill({ contentType: 'application/javascript', body: "throw new Error('injected startup failure');" })
+            : route.fallback());
+        await page.reload();
+        const failure = page.getByRole('alertdialog', { name: 'pi-dish failed to start' });
+        await (0, fixtures_js_1.expect)(failure).toBeVisible();
+        failStartup = false;
+        const reloaded = page.waitForEvent('load');
+        await page.getByRole('button', { name: 'Reload', exact: true }).click();
+        await reloaded;
+        await (0, fixtures_js_1.expect)(failure).toHaveCount(0);
+        await page.locator('#tabAll').click();
+        await (0, fixtures_js_1.expect)(fleet.row(fleet.self)).toHaveCount(1);
+        await (0, fixtures_js_1.expect)(fleet.row(fleet.peer)).toHaveCount(1);
+    });
+    (0, fixtures_js_1.test)('a bundle that never loads reports failure, and a late bundle still boots', async ({ page, fleet }) => {
+        let serveBundle = false;
+        await page.route(url => url.pathname === '/app.js', route => serveBundle ? route.fallback() : route.abort('failed'));
+        await page.reload();
+        const failure = page.getByRole('alertdialog', { name: 'pi-dish failed to start' });
+        await (0, fixtures_js_1.expect)(failure).toBeVisible();
+        serveBundle = true;
+        await page.evaluate(() => {
+            const source = document.querySelector('script[src*="app.js"]')?.getAttribute('src') || 'app.js';
+            const script = document.createElement('script');
+            script.src = `${source}${source.includes('?') ? '&' : '?'}late=1`;
+            document.head.append(script);
+        });
+        await (0, fixtures_js_1.expect)(failure).toHaveCount(0);
+        await page.locator('#tabAll').click();
+        await (0, fixtures_js_1.expect)(fleet.row(fleet.self)).toBeVisible();
+    });
+});

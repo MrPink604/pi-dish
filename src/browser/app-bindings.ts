@@ -40,7 +40,6 @@ export const APP_ACTION_NAMES = [
   'panelOpenTreeModal',
   'panelOpenSessionHarnessSettings',
   'panelExportSession',
-  'attachFiles',
   'abortTurn',
   'sendSteer',
   'sendFollowUp',

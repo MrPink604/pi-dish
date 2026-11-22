@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import path = require('node:path');
 import { spawnSync } from 'node:child_process';
 import esbuild = require('esbuild');
@@ -41,6 +43,19 @@ const prepared: GeneratedOutput[] = entries.map(entry => {
   }
   return { file: entry.target, target: path.join(root, entry.target), content: result.outputFiles[0].contents, mode: 0o644 };
 });
+
+// Every local JS/CSS reference in the shell gets a new cache key when its bytes change.
+const shellFile = 'public/index.html';
+const shellPath = path.join(root, shellFile);
+const shell = readFileSync(shellPath, 'utf8');
+const versioned = shell.replace(/\b(src|href)="([\w./-]+\.(?:js|css))(?:\?v=[0-9a-f]+)?"/g,
+  (_match, attribute: string, asset: string) => {
+    const file = `public/${asset}`;
+    const content = prepared.find(output => output.file === file)?.content ?? readFileSync(path.join(root, file));
+    const version = createHash('sha256').update(content).digest('hex').slice(0, 16);
+    return `${attribute}="${asset}?v=${version}"`;
+  });
+if (versioned !== shell) prepared.push({ file: shellFile, target: shellPath, content: versioned, mode: 0o644 });
 
 writeOutputs(prepared, {
   check,

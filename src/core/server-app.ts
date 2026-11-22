@@ -131,8 +131,9 @@ export function startServer(rootDirectory: string): Server {
   app.use(accessHandlers.cors);
   app.use(express.static(path.join(rootDirectory, 'public'), {
     setHeaders(res, filePath) {
-      // Revalidate shell assets on reload so updated HTML never pairs with stale cached CSS/JS.
-      if (/\.(?:html|css|js)$/i.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+      // Shell paths are mutable and unhashed: a query version still names the
+      // same file while a rollout is in progress, so never let a cache store it.
+      if (/\.(?:html|css|js)$/i.test(filePath)) res.setHeader('Cache-Control', 'no-store');
     },
   }));
 
