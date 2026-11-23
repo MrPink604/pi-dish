@@ -15,6 +15,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
  *   steer     - the first prompt hands over to the second (no usage)
  *   steer-usage - like steer, but the handed-over prompt reports its own usage
  *   background - the turn ends while a command runs; agy resumes on its own
+ *   background-unfinished - after end_turn: a tool and a thought, then prose
+ *               after FAKE_AGY_FINAL_DELAY_MS (never when unset)
+ *   max-turn-requests - a text reply answered with stopReason max_turn_requests
  *   slow      - a prompt stays open until session/cancel
  *   tool      - read_file + run_command completed tool calls
  *   elicit    - ask_question + elicitation/create form
@@ -351,6 +354,38 @@ function handlePrompt(id, params) {
             }, 5);
             return;
         }
+        case 'background-unfinished': {
+            // Observed live (framework b43204e7): agy answers end_turn while a command
+            // runs, then reads, thinks and goes quiet while it writes its next step.
+            const finalDelay = Number(process.env.FAKE_AGY_FINAL_DELAY_MS);
+            setTimeout(() => {
+                toolCall('call-bg-u', 'run_command', { CommandLine: 'npm test', WaitMsBeforeAsync: 5000 }, 'npm test', 'execute');
+                usageUpdate(700);
+                finishPrompt(id, 'end_turn');
+                setTimeout(() => {
+                    toolUpdate('call-bg-u', 'run_command', 'completed', {
+                        title: 'npm test',
+                        kind: 'execute',
+                        content: [{ type: 'content', content: { type: 'text', text: 'all passed\n' } }],
+                        rawOutput: { output: 'all passed\n', exit_code: 0 },
+                    });
+                    toolCall('call-read-u', 'read_file', { Path: `${cwd}/README.md` }, 'File README.md', 'read');
+                    toolUpdate('call-read-u', 'read_file', 'completed', {
+                        title: 'File README.md',
+                        kind: 'read',
+                        content: [{ type: 'content', content: { type: 'text', text: '# scratch\n' } }],
+                    });
+                    sessionUpdate({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Checking the result.' } });
+                    if (!(finalDelay > 0))
+                        return;
+                    setTimeout(() => {
+                        textChunk('Final report.');
+                        usageUpdate(900);
+                    }, finalDelay);
+                }, 40);
+            }, 5);
+            return;
+        }
         case 'background-chain': {
             // Observed live: first background command yields end_turn; when it finishes,
             // agy launches a second long background command that outlives the autonomous
@@ -494,6 +529,13 @@ function handlePrompt(id, params) {
         case 'refusal': {
             setTimeout(() => {
                 finishPrompt(id, 'refusal');
+            }, 5);
+            return;
+        }
+        case 'max-turn-requests': {
+            setTimeout(() => {
+                textChunk('Stopping at the request limit.');
+                finishPrompt(id, 'max_turn_requests');
             }, 5);
             return;
         }

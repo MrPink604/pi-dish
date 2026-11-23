@@ -84,6 +84,19 @@ function autonomousIdleMs(): number {
 }
 
 /**
+ * Quiet period that ends an autonomous turn whose latest output was thinking or
+ * a tool result rather than closing prose. agy streams nothing while it writes
+ * a step's tool arguments: on framework, 99% of pauses after a thought or tool
+ * result ended within 281 s (longest 383 s, a large `write_file`), so a 15 s
+ * window cut those turns short. Five minutes still releases a stopped agent.
+ */
+const AUTONOMOUS_UNFINISHED_IDLE_DEFAULT_MS = 5 * 60_000;
+function autonomousUnfinishedIdleMs(): number {
+  const override = Number(process.env.PI_DISH_AGY_UNFINISHED_IDLE_MS);
+  return Number.isFinite(override) && override > 0 ? override : AUTONOMOUS_UNFINISHED_IDLE_DEFAULT_MS;
+}
+
+/**
  * agy persists a conversation slightly after pi-dish closes the mirror entry;
  * a comparison this loose still catches TUI turns, which are minutes apart.
  */
@@ -346,6 +359,10 @@ export class AcpSession extends TransportSession {
   declare private earlyFrames: { dir: 'in' | 'out'; msg: unknown }[];
   /** Set while agy works with no outstanding prompt (a background command woke it). */
   declare private autonomousTimer: NodeJS.Timeout | null;
+  /** Whether agy's latest live output was assistant prose (not thinking or tool activity). */
+  declare private lastOutputWasProse: boolean;
+  /** Arrival time of agy's latest live activity frame, for the unfinished-turn window. */
+  declare private lastOutputAt: number;
   /** Usage reported by prompts that handed their turn to a steer; added to the turn's total. */
   declare private handoverUsage: ProtocolRecord | null;
   /** Request-start timestamp of the in-flight or upcoming LLM step (includes TTFT). */
@@ -396,6 +413,8 @@ export class AcpSession extends TransportSession {
     this.counter = 0;
     this.earlyFrames = [];
     this.autonomousTimer = null;
+    this.lastOutputWasProse = false;
+    this.lastOutputAt = 0;
     this.handoverUsage = null;
     this.nextStepStartedAt = null;
     this.sawStepSignal = false;
@@ -550,12 +569,22 @@ export class AcpSession extends TransportSession {
       }
       this.newestPromptId = null;
       const stop = text(result.stopReason);
-      this._closeSegment(acpStopReason(stop), this._takeHandoverUsage(acpUsage(result.usage)),
-        stop === 'refusal' ? 'Antigravity refused this request.' : null, true);
+      const stopReason = acpStopReason(stop);
+      let usage = this._takeHandoverUsage(acpUsage(result.usage));
+      const continues = stop !== 'cancelled' && stop !== 'refusal' && this.hasActiveToolWork;
+      // With nothing open to carry it, usage would close an empty assistant shell
+      // mid-turn; the turn's next assistant message takes it instead.
+      if (continues && !this.segment && stopReason === 'stop') {
+        this.handoverUsage = usage;
+        usage = null;
+      }
+      this._closeSegment(stopReason, usage,
+        stop === 'refusal' ? 'Antigravity refused this request.' : null, true,
+        stop && stop !== 'end_turn' ? stop : null);
       // agy answers session/prompt with end_turn when a background command or
       // subagent yields the turn, before its tool_call_update(completed) arrives.
       // Keep the turn active and the running tool card live until it finishes.
-      if (stop !== 'cancelled' && stop !== 'refusal' && this.hasActiveToolWork) {
+      if (continues) {
         this._armAutonomousTimer();
         return;
       }
@@ -636,7 +665,10 @@ export class AcpSession extends TransportSession {
       this.transcript?.applyReplayUpdate(update);
       return;
     }
-    if (Object.hasOwn(ACTIVITY_UPDATES, kind) && !this._isPassiveToolCompletion(kind, update)) this._noteActivity();
+    if (Object.hasOwn(ACTIVITY_UPDATES, kind) && !this._isPassiveToolCompletion(kind, update)) {
+      this._noteOutputKind(kind, update);
+      this._noteActivity();
+    }
     switch (kind) {
       case 'agent_message_chunk': {
         const content = asRecord(update.content);
@@ -785,11 +817,12 @@ export class AcpSession extends TransportSession {
     this.emitEvent('message_start', { type: 'message_start', message: structuredClone(message) });
   }
 
-  private _closeSegment(stopReason: string, usage: ProtocolRecord | null, errorMessage: string | null, resetTurn = false): void {
-    // A turn that ends right after a tool call, cancels early, or fails/refuses
-    // before streaming any chunk has no open segment; open a shell so usage,
-    // abort state and errors reach the mirror and SSE.
-    if (!this.segment && (errorMessage || usage || stopReason === 'aborted' || stopReason === 'error')) {
+  private _closeSegment(stopReason: string, usage: ProtocolRecord | null, errorMessage: string | null, resetTurn = false,
+    rawStopReason: string | null = null): void {
+    // A turn that ends right after a tool call, cancels early, hits a limit, or
+    // fails/refuses before streaming any chunk has no open segment; open a shell
+    // so usage, abort state, limits and errors reach the mirror and SSE.
+    if (!this.segment && (errorMessage || usage || stopReason === 'aborted' || stopReason === 'error' || stopReason === 'length')) {
       this._ensureSegment(true);
     }
     const message = this.segment;
@@ -813,6 +846,7 @@ export class AcpSession extends TransportSession {
       : null;
     if (stepTtftMs !== null) message.ttft = stepTtftMs;
     message.stopReason = stopReason;
+    if (rawStopReason) message.rawStopReason = rawStopReason;
     if (usage) {
       const priorGenMs = this.turnGenMs;
       const totalGenMs = priorGenMs + stepMs;
@@ -954,11 +988,23 @@ export class AcpSession extends TransportSession {
     this._clearAutonomousTimer();
     this._syncTaskLogTimer();
     this.turnInProgress = false;
+    this.lastOutputWasProse = false;
     this.lastActivityAt = new Date();
     trackRunningToolCalls(this.runningToolCalls, 'turn_end', { type: 'turn_end' });
     this.emitEvent('turn_end', { type: 'turn_end' });
     this.emitEvent('agent_end', { type: 'agent_end' });
     this._refreshStats();
+  }
+
+  /** Blank text chunks and non-text media leave the previous kind in place; plans are neutral. */
+  private _noteOutputKind(kind: string, update: ProtocolRecord): void {
+    this.lastOutputAt = Date.now();
+    if (kind === 'agent_message_chunk') {
+      const content = asRecord(update.content);
+      if (content.type === 'text' && text(content.text).trim()) this.lastOutputWasProse = true;
+    } else if (kind !== 'plan') {
+      this.lastOutputWasProse = false;
+    }
   }
 
   /**
@@ -981,9 +1027,9 @@ export class AcpSession extends TransportSession {
     this._armAutonomousTimer();
   }
 
-  private _armAutonomousTimer(): void {
+  private _armAutonomousTimer(ms = autonomousIdleMs()): void {
     this._clearAutonomousTimer();
-    this.autonomousTimer = setTimeout(() => this._autonomousIdle(), autonomousIdleMs());
+    this.autonomousTimer = setTimeout(() => this._autonomousIdle(), ms);
     this.autonomousTimer.unref();
   }
 
@@ -1048,10 +1094,20 @@ export class AcpSession extends TransportSession {
       this._armAutonomousTimer();
       return;
     }
+    // agy answers `end_turn` and keeps working. A pause after thinking or a tool
+    // result is usually the next step being generated; only closing prose ends
+    // the turn at the short window. Later frames keep this same turn.
+    if (!this.lastOutputWasProse) {
+      const remaining = this.lastOutputAt + autonomousUnfinishedIdleMs() - Date.now();
+      if (remaining > 0) {
+        this._armAutonomousTimer(remaining);
+        return;
+      }
+    }
     let usage = this._takeHandoverUsage();
-    if (!usage && this.segment) {
+    if (this.segment) {
       const segStart = finite(this.segment.timestamp) ? this.segment.timestamp - 5000 : undefined;
-      usage = readLatestAgyBrainStepUsage(this.nativeSessionId, segStart);
+      usage = sumUsage(usage, readLatestAgyBrainStepUsage(this.nativeSessionId, segStart));
     }
     this._closeSegment('stop', usage, null, true);
     this._endTurn();

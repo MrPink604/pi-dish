@@ -84,6 +84,39 @@ function assistantText(messages) {
         ? message.content.flatMap(block => asRecord(block).type === 'text' ? [String(asRecord(block).text ?? '')] : [])
         : []).join('\n');
 }
+/** Sets idle-window and fixture variables for one test; restored afterwards. */
+function withEnv(t, vars) {
+    const saved = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]]));
+    Object.assign(process.env, vars);
+    t.after(() => {
+        for (const [key, value] of Object.entries(saved)) {
+            if (value === undefined)
+                delete process.env[key];
+            else
+                process.env[key] = value;
+        }
+    });
+}
+function eventCount(events, name) {
+    return events.filter(event => event.event === name).length;
+}
+/** Records arrival times of streamed updates and turn ends. */
+function timed(session, events) {
+    const times = new Map();
+    for (const name of ['message_update', 'turn_end'])
+        session.on(name, () => times.set(events.at(-1), Date.now()));
+    return times;
+}
+/** Arrival time of the first streamed update containing `needle`. */
+function streamedAt(events, times, needle) {
+    const hit = events.find(event => event.event === 'message_update' && JSON.stringify(event.data).includes(needle));
+    return hit ? times.get(hit) : undefined;
+}
+function turnEndedAt(events, times) {
+    const end = events.find(event => event.event === 'turn_end');
+    assert.ok(end, 'turn ended');
+    return times.get(end);
+}
 test('handshake fails closed on the wrong agent or missing resume capability', async (t) => {
     cleanup(t);
     await assert.rejects(launch('fail-closed'), /Unexpected ACP agent/);
@@ -261,6 +294,8 @@ test('cancelled background tool calls release active tool work and end the turn'
         else
             process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = saved;
     });
+    // The turn ends on the cancelled tool result, with no prose after it.
+    withEnv(t, { PI_DISH_AGY_UNFINISHED_IDLE_MS: '150' });
     const session = await launch('background-cancelled');
     cleanup(t, session);
     const events = capture(session);
@@ -271,6 +306,83 @@ test('cancelled background tool calls release active tool work and end the turn'
     const endEv = events.find(event => event.event === 'tool_execution_end');
     assert.ok(endEv, 'cancelled status still emits tool_execution_end');
     assert.equal(asRecord(endEv.data).isError, true);
+});
+test('after end_turn, a quiet pause following a tool and a thought keeps the turn; later prose lands in it', async (t) => {
+    withEnv(t, {
+        PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '80',
+        PI_DISH_AGY_UNFINISHED_IDLE_MS: '5000',
+        FAKE_AGY_FINAL_DELAY_MS: '600',
+    });
+    const session = await launch('background-unfinished');
+    cleanup(t, session);
+    const events = capture(session);
+    const times = timed(session, events);
+    await session.prompt('run the tests and report');
+    await until(() => streamedAt(events, times, 'Checking the result.') !== undefined);
+    const thoughtAt = streamedAt(events, times, 'Checking the result.');
+    await (0, promises_1.setTimeout)(300);
+    assert.equal(eventCount(events, 'turn_end'), 0, 'the short window does not end a thinking-only pause');
+    assert.equal(session.turnInProgress, true);
+    await until(() => eventCount(events, 'turn_end') > 0, 5000);
+    const quietMs = turnEndedAt(events, times) - thoughtAt;
+    assert.ok(quietMs >= 550, `the turn ended ${quietMs} ms after the thought, before the prose`);
+    await (0, promises_1.setTimeout)(150);
+    assert.deepEqual(events.map(event => event.event).filter(name => name === 'turn_start' || name === 'turn_end'), ['turn_start', 'turn_end'], 'the later prose stays in the same turn');
+    assert.equal(eventCount(events, 'agent_end'), 1);
+    const mirrored = mirrorEntries(session.sessionFile)
+        .filter(entry => entry.type === 'message').map(entry => asRecord(entry.message));
+    const roles = mirrored.map(message => `${String(message.role)}${message.toolName ? `:${String(message.toolName)}` : ''}`);
+    assert.deepEqual(roles, ['user', 'assistant', 'toolResult:bash', 'assistant', 'toolResult:read', 'assistant'], 'no empty usage shell after the tool segment at end_turn');
+    const final = mirrored.at(-1);
+    assert.deepEqual(final.content.map(block => asRecord(block).type), ['thinking', 'text']);
+    assert.match(assistantText([final]), /Final report\./);
+    assert.equal(final.stopReason, 'stop');
+    assert.equal(asRecord(final.usage).totalTokens, 130, 'the prompt usage moves to the turn\'s closing message');
+});
+test('after end_turn, a thinking-only pause still ends the turn at the long window', async (t) => {
+    withEnv(t, { PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '80', PI_DISH_AGY_UNFINISHED_IDLE_MS: '500' });
+    const session = await launch('background-unfinished');
+    cleanup(t, session);
+    const events = capture(session);
+    const times = timed(session, events);
+    await session.prompt('run the tests and report');
+    await until(() => eventCount(events, 'turn_end') > 0, 5000);
+    const quietMs = turnEndedAt(events, times) - streamedAt(events, times, 'Checking the result.');
+    assert.ok(quietMs >= 450, `the turn ended ${quietMs} ms after the thought`);
+    assert.equal(session.turnInProgress, false);
+    assert.equal(eventCount(events, 'agent_end'), 1);
+    const last = messages(events, 'assistant').at(-1);
+    assert.deepEqual(last.content.map(block => asRecord(block).type), ['thinking']);
+    assert.equal(asRecord(last.usage).totalTokens, 130, 'carried prompt usage is kept when the turn ends');
+});
+test('after end_turn, closing prose still ends the turn at the short window', async (t) => {
+    withEnv(t, { PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '120', PI_DISH_AGY_UNFINISHED_IDLE_MS: '10000' });
+    const session = await launch('background');
+    cleanup(t, session);
+    const events = capture(session);
+    const times = timed(session, events);
+    await session.prompt('run the tests');
+    await until(() => eventCount(events, 'turn_end') > 0, 5000);
+    const quietMs = turnEndedAt(events, times) - streamedAt(events, times, 'Background tests passed.');
+    assert.ok(quietMs >= 100 && quietMs < 2000, `the turn ended ${quietMs} ms after the closing prose`);
+    assert.equal(eventCount(events, 'agent_end'), 1);
+});
+test('max_turn_requests surfaces as a length limit with the raw ACP reason', async (t) => {
+    assert.equal(acpTranscript.acpStopReason('max_turn_requests'), 'length');
+    assert.equal(acpTranscript.acpStopReason('max_tokens'), 'length');
+    assert.equal(acpTranscript.acpStopReason('end_turn'), 'stop');
+    const session = await launch('max-turn-requests');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('keep going');
+    await until(() => eventCount(events, 'turn_end') > 0);
+    const assistant = messages(events, 'assistant').at(-1);
+    assert.equal(assistant.stopReason, 'length');
+    assert.equal(assistant.rawStopReason, 'max_turn_requests');
+    const persisted = mirrorEntries(session.sessionFile)
+        .flatMap(entry => asRecord(entry.message).role === 'assistant' ? [asRecord(entry.message)] : []).at(-1);
+    assert.equal(persisted.stopReason, 'length');
+    assert.equal(persisted.rawStopReason, 'max_turn_requests');
 });
 test('autonomous idle reconciles a stale background tool once brain records completion/cancellation', async (t) => {
     const savedIdle = process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;

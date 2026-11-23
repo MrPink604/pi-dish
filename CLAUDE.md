@@ -832,9 +832,16 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   `run_command`) are still open when `end_turn` arrives, in which case the
   interim assistant message closes and the turn stays active (and its running
   tool card stays live, replayed to reconnecting bridge clients) until active
-  tools complete and autonomous frames go quiet. Daemon tool calls
+  tools complete and autonomous frames go quiet. Quiet ends an autonomous
+  turn after 15 s only when agy's latest output was prose; after thinking or
+  a tool result it waits 5 min (`PI_DISH_AGY_UNFINISHED_IDLE_MS`), because
+  agy streams nothing while writing a step's tool arguments, and later frames
+  stay in the same turn. Usage from an `end_turn` with no open segment moves
+  to the turn's next assistant message instead of an empty shell. Daemon tool calls
   (`IsDaemon: true`) do not hold a turn open. `prompt()` resolves once the
   request is written; completion is tracked through events.
+  `max_tokens`/`max_turn_requests` map to `stopReason: 'length'`; any
+  non-`end_turn` ACP reason is kept as `rawStopReason`.
 - **Assistant segments:** ACP interleaves text and tool calls, so the open
   assistant message closes at each `tool_call`. The mirror therefore writes
   every assistant `toolCall` before its `toolResult`.

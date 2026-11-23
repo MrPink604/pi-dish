@@ -30,7 +30,11 @@ export declare function normalizeAgyUsageReports(parsed: unknown, options?: {
     planType?: string | null;
     fetchedAt?: number;
 }): NormalizedAgyUsageReport[];
-/** ACP stop reasons → Pi's assistant `stopReason` vocabulary. */
+/**
+ * ACP stop reasons → Pi's assistant `stopReason` vocabulary. Both ACP limits
+ * (`max_tokens`, `max_turn_requests`) are `length`; callers keep the ACP value
+ * in `rawStopReason`.
+ */
 export declare function acpStopReason(value: unknown): string;
 export interface AcpToolCall {
     /** Pi-dish tool name the existing cards understand. */

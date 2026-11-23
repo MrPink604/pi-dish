@@ -81,6 +81,10 @@ export declare class AcpSession extends TransportSession {
     private earlyFrames;
     /** Set while agy works with no outstanding prompt (a background command woke it). */
     private autonomousTimer;
+    /** Whether agy's latest live output was assistant prose (not thinking or tool activity). */
+    private lastOutputWasProse;
+    /** Arrival time of agy's latest live activity frame, for the unfinished-turn window. */
+    private lastOutputAt;
     /** Usage reported by prompts that handed their turn to a steer; added to the turn's total. */
     private handoverUsage;
     /** Request-start timestamp of the in-flight or upcoming LLM step (includes TTFT). */
@@ -129,6 +133,8 @@ export declare class AcpSession extends TransportSession {
     private _toolUpdate;
     private _emitTool;
     private _endTurn;
+    /** Blank text chunks and non-text media leave the previous kind in place; plans are neutral. */
+    private _noteOutputKind;
     /**
      * agy keeps working without an open prompt when a background command or
      * subagent runs past `session/prompt`'s `end_turn` response (or wakes the

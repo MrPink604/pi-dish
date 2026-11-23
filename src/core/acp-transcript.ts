@@ -143,11 +143,16 @@ export function normalizeAgyUsageReports(
   }];
 }
 
-/** ACP stop reasons → Pi's assistant `stopReason` vocabulary. */
+/**
+ * ACP stop reasons → Pi's assistant `stopReason` vocabulary. Both ACP limits
+ * (`max_tokens`, `max_turn_requests`) are `length`; callers keep the ACP value
+ * in `rawStopReason`.
+ */
 export function acpStopReason(value: unknown): string {
   switch (value) {
     case 'end_turn': return 'stop';
     case 'max_tokens': return 'length';
+    case 'max_turn_requests': return 'length';
     case 'cancelled': return 'aborted';
     case 'refusal': return 'error';
     default: return 'stop';
