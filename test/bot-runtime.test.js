@@ -258,8 +258,13 @@ test('worker ownership resolves full, unique, host-qualified and disambiguated r
     assert.equal(workerRefMatches(desktopA, 'beelink/01a1fc02'), false);
     assert.equal(findOwnedWorker(memory, desktopA.sessionId)?.[0], 'a');
     assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02'), undefined, 'an old short ref is refused when that host is ambiguous');
-    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-0')?.[0], 'a');
-    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-1')?.[0], 'b');
+    // shortSessionRef extends colliding 8-char UUID prefixes across the hyphen (01a1fc02-1 / 01a1fc02-2);
+    // direct UUID prefix matching must target the matching worker instead of treating -1 as ordinal index 1.
+    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-1')?.[0], 'a');
+    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-2')?.[0], 'b');
+    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-0')?.[0], 'a', 'legacy ordinal fallback still works when no direct prefix matches');
+    assert.equal(findOwnedWorker(memory, 'desktop/'), undefined, 'empty id segment never matches');
+    assert.equal(findOwnedWorker(memory, '-0'), undefined, 'bare ordinal without prefix never matches');
     assert.equal(findOwnedWorker(memory, 'beelink/01a1fc02')?.[0], 'c', 'a legacy short ref remains usable when unique on its host');
 });
 /** A sessions port for one worker the test drives: it works until `answer`, and `close` stops it. */

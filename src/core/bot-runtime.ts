@@ -338,27 +338,29 @@ function splitWorkerRef(value: string): { host: string | null; id: string } {
 /** Whether a ref names this worker through any of the CLI's equivalent forms. */
 export function workerRefMatches(worker: WorkerRecord, wanted: string): boolean {
   const parsed = splitWorkerRef(wanted);
+  if (!parsed.id) return false;
   if (parsed.host && parsed.host !== 'self' && parsed.host !== worker.host) return false;
   if (parsed.host === 'self' && worker.host !== null) return false;
   const aliases = new Set([worker.sessionId, ...sessionRefAliases(worker.sessionId), splitWorkerRef(worker.ref).id]);
   return [...aliases].some(alias => alias === parsed.id || alias.startsWith(parsed.id));
 }
 
-/** Find one owned worker, including a list disambiguator such as `desktop/01a1fc02-0`. */
+/** Find one owned worker, checking direct id/alias prefix matches before legacy ordinal fallbacks. */
 export function findOwnedWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined {
   const entries = Object.entries(memory?.workers ?? {});
   const parsed = splitWorkerRef(wanted);
-  const disambiguated = parsed.id.match(/^(.*)-(\d+)$/);
+  if (!parsed.id) return undefined;
+  const direct = entries.filter(([, worker]) => workerRefMatches(worker, wanted));
+  if (direct.length === 1) return direct[0];
+  if (direct.length > 1) return undefined;
+  const disambiguated = parsed.id.match(/^(.+)-(\d+)$/);
   if (disambiguated) {
     const base = parsed.host ? `${parsed.host}/${disambiguated[1]}` : disambiguated[1];
     const candidates = entries.filter(([, worker]) => workerRefMatches(worker, base));
     const index = Number(disambiguated[2]);
-    // Prefer the list's ordinal over a coincidental prefix such as
-    // `01a1fc02-1`, which may itself prefix one worker's UUID.
     if (candidates.length && index < candidates.length) return candidates[index];
   }
-  const direct = entries.filter(([, worker]) => workerRefMatches(worker, wanted));
-  return direct.length === 1 ? direct[0] : undefined;
+  return undefined;
 }
 
 export interface ClosedWindow {
@@ -1485,7 +1487,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       if (args.action === 'close') return closeWorker(need(args.ref, 'ref'), api, callContext);
       if (args.action === 'wait') return waitFor(need(args.ref, 'ref'), args.since, args.timeout, api, callContext);
       if (args.action === 'send') {
-        const ref = need(args.ref, 'ref');
+        const rawRef = need(args.ref, 'ref');
+        const ref = ownWorker(await api.snapshot(MemoryDoc, api.conversationId, callContext), rawRef)?.[1].ref ?? rawRef;
         if (await api.memo<boolean>('sending', callContext)) {
           return refusal(`The send to ${ref} was cut off by a restart and its outcome is unknown, so it was not sent again. Read the session before sending it again.`);
         }
