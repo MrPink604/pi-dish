@@ -190,13 +190,16 @@ export function createNewSession(options: {
     renderHarnessInputs();
     renderPrivate();
   }
-  function changeHarness(value: string, previousHarness = selectedHarness()): void {
+  function changeHarness(value: string, previousHarness = harnessId): void {
     if (disposed) return;
     const previouslySupportedTargets = supportsSpawnTargets(previousHarness);
     harnessId = value || 'pi'; storage.setItem(NEW_SESSION_HARNESS_KEY, harnessId);
+    if (harnessSelect.value !== harnessId && Array.from(harnessSelect.options).some(option => option.value === harnessId)) {
+      harnessSelect.value = harnessId;
+    }
     preferences.restore(harnessId); models.clear(); renderHarnessInputs(); preferences.render(); renderPrivate();
     // Harness discovery may report more than once; only reload when target support actually changes.
-    if (previouslySupportedTargets !== supportsSpawnTargets()) void targets.load();
+    if (previouslySupportedTargets !== supportsSpawnTargets(harnessId)) void targets.load();
     refresh();
   }
   // Only harnesses with an alternate session root outside the backup set can

@@ -152,5 +152,10 @@ async function setup(page) {
     (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.newSessionController.preferences.selectedModel()))
         .toBe('google-antigravity/gemini-4-hydrogen');
     (0, fixtures_js_1.expect)(modelsRequested).toBeGreaterThan(0);
+    // Switching from agy to pi must reload and reveal tmux targets; switching back hides them.
+    await page.selectOption('#nsHarnessSelect', 'pi');
+    await (0, fixtures_js_1.expect)(page.locator('#newSessionTargetWrap')).toBeVisible();
+    await page.selectOption('#nsHarnessSelect', 'agy');
+    await (0, fixtures_js_1.expect)(page.locator('#newSessionTargetWrap')).toBeHidden();
     void fleet;
 });

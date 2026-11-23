@@ -154,6 +154,11 @@ test('Antigravity keeps pre-spawn naming and tmux targets off while offering its
   expect(await page.evaluate(() => fixtureApp.features.newSessionController.preferences.selectedModel()))
     .toBe('google-antigravity/gemini-4-hydrogen');
   expect(modelsRequested).toBeGreaterThan(0);
+  // Switching from agy to pi must reload and reveal tmux targets; switching back hides them.
+  await page.selectOption('#nsHarnessSelect', 'pi');
+  await expect(page.locator('#newSessionTargetWrap')).toBeVisible();
+  await page.selectOption('#nsHarnessSelect', 'agy');
+  await expect(page.locator('#newSessionTargetWrap')).toBeHidden();
   void fleet;
 });
 
