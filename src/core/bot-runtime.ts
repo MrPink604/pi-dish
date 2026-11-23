@@ -345,22 +345,13 @@ export function workerRefMatches(worker: WorkerRecord, wanted: string): boolean 
   return [...aliases].some(alias => alias === parsed.id || alias.startsWith(parsed.id));
 }
 
-/** Find one owned worker, checking direct id/alias prefix matches before legacy ordinal fallbacks. */
+/** Find one owned worker by unique direct id or alias prefix match. */
 export function findOwnedWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined {
-  const entries = Object.entries(memory?.workers ?? {});
   const parsed = splitWorkerRef(wanted);
   if (!parsed.id) return undefined;
+  const entries = Object.entries(memory?.workers ?? {});
   const direct = entries.filter(([, worker]) => workerRefMatches(worker, wanted));
-  if (direct.length === 1) return direct[0];
-  if (direct.length > 1) return undefined;
-  const disambiguated = parsed.id.match(/^(.+)-(\d+)$/);
-  if (disambiguated) {
-    const base = parsed.host ? `${parsed.host}/${disambiguated[1]}` : disambiguated[1];
-    const candidates = entries.filter(([, worker]) => workerRefMatches(worker, base));
-    const index = Number(disambiguated[2]);
-    if (candidates.length && index < candidates.length) return candidates[index];
-  }
-  return undefined;
+  return direct.length === 1 ? direct[0] : undefined;
 }
 
 export interface ClosedWindow {

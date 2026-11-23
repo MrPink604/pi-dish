@@ -247,25 +247,58 @@ const WORKER_ID = '2026-11-20T10-07-13-963Z_01a1f86c-1111-4222-8333-444455556666
 const workerRecord = (sessionId, host, ref = host ? `${host}/${sessionId}` : sessionId) => ({
     name: sessionId, ref, sessionId, harness: 'pi', host, startedAt: '', reports: 0,
 });
-test('worker ownership resolves full, unique, host-qualified and disambiguated refs without crossing hosts', () => {
-    const desktopA = workerRecord('2026-11-21T02-49-16-118Z_01a1fc02-1055-722e-84fc-ff1a34d00ade', 'desktop', 'desktop/01a1fc02');
-    const desktopB = workerRecord('2026-11-21T02-49-16-119Z_01a1fc02-2055-722e-84fc-ff1a34d00ade', 'desktop', 'desktop/01a1fc02');
-    const beelink = workerRecord('2026-11-21T02-49-16-120Z_01a1fc02-3055-722e-84fc-ff1a34d00ade', 'beelink', '01a1fc02');
+test('worker ownership resolves full, unique, host-qualified and UUID-prefix refs without ordinal fallback or crossing hosts', () => {
+    const desktopA = workerRecord('2026-11-21T02-49-16-118Z_01a1fc02-2055-722e-84fc-ff1a34d00ade', 'desktop', 'desktop/2026-11-21T02-49-16-118Z_01a1fc02-2055-722e-84fc-ff1a34d00ade');
+    const desktopB = workerRecord('2026-11-21T02-49-16-119Z_01a1fc02-3055-722e-84fc-ff1a34d00ade', 'desktop', 'desktop/2026-11-21T02-49-16-119Z_01a1fc02-3055-722e-84fc-ff1a34d00ade');
+    const beelink = workerRecord('2026-11-21T02-49-16-120Z_01a1fc02-4055-722e-84fc-ff1a34d00ade', 'beelink', '01a1fc02');
     const memory = { notebook: '', notebookSavedIn: -1, windows: [], workers: { a: desktopA, b: desktopB, c: beelink } };
     assert.equal(workerRefMatches(desktopA, desktopA.sessionId), true);
     assert.equal(workerRefMatches(desktopA, `desktop/${desktopA.sessionId}`), true);
     assert.equal(workerRefMatches(beelink, 'beelink/01a1fc02'), true);
     assert.equal(workerRefMatches(desktopA, 'beelink/01a1fc02'), false);
     assert.equal(findOwnedWorker(memory, desktopA.sessionId)?.[0], 'a');
-    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02'), undefined, 'an old short ref is refused when that host is ambiguous');
-    // shortSessionRef extends colliding 8-char UUID prefixes across the hyphen (01a1fc02-1 / 01a1fc02-2);
-    // direct UUID prefix matching must target the matching worker instead of treating -1 as ordinal index 1.
-    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-1')?.[0], 'a');
-    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-2')?.[0], 'b');
-    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-0')?.[0], 'a', 'legacy ordinal fallback still works when no direct prefix matches');
+    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02'), undefined, 'an ambiguous prefix on that host is refused');
+    // Direct UUID prefixes resolve the matching owned worker; non-owned colliding UUIDv7 refs (like C = 01a1fc02-1)
+    // and legacy ordinal guesses (-0, -1) must NEVER resolve to an unrelated owned worker.
+    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-2')?.[0], 'a');
+    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-3')?.[0], 'b');
+    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-1'), undefined, 'non-owned C ref must not match worker B via ordinal 1');
+    assert.equal(findOwnedWorker(memory, '01a1fc02-1'), undefined, 'unqualified non-owned C ref must not match worker B via ordinal 1');
+    assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-0'), undefined, 'ordinal -0 fallback is removed');
     assert.equal(findOwnedWorker(memory, 'desktop/'), undefined, 'empty id segment never matches');
     assert.equal(findOwnedWorker(memory, '-0'), undefined, 'bare ordinal without prefix never matches');
-    assert.equal(findOwnedWorker(memory, 'beelink/01a1fc02')?.[0], 'c', 'a legacy short ref remains usable when unique on its host');
+    assert.equal(findOwnedWorker(memory, 'beelink/01a1fc02')?.[0], 'c', 'a short ref remains usable when unique on its host');
+});
+test('sessions send canonicalizes direct owned worker refs and passes non-owned colliding refs raw to the CLI', async (t) => {
+    const idA = '2026-11-21T02-49-16-118Z_01a1fc02-2055-722e-84fc-ff1a34d00ade';
+    const idB = '2026-11-21T02-49-16-119Z_01a1fc02-3055-722e-84fc-ff1a34d00ade';
+    const spawnIds = [idA, idB];
+    const calls = [];
+    const port = async (args) => {
+        calls.push(args);
+        if (args[0] === 'spawn')
+            return JSON.stringify({ sessionId: spawnIds.shift(), harness: 'pi' });
+        if (args[0] === 'resolve')
+            return JSON.stringify({ session: { id: args[1], isActive: true, turnInProgress: true } });
+        if (args[0] === 'send')
+            return JSON.stringify({ ok: true, sentTo: args[1] });
+        throw new Error(`unexpected ${args[0]}`);
+    };
+    const bot = await openTestBot(t, port);
+    bot.respond(bot.faux.fauxAssistantMessage([
+        bot.faux.fauxToolCall('spawn_worker', { name: 'worker A', host: 'desktop', brief: 'Work A' }),
+        bot.faux.fauxToolCall('spawn_worker', { name: 'worker B', host: 'desktop', brief: 'Work B' }),
+    ], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage([
+        bot.faux.fauxToolCall('sessions', { action: 'send', ref: 'desktop/01a1fc02-1', message: 'For non-owned C' }),
+        bot.faux.fauxToolCall('sessions', { action: 'send', ref: 'desktop/01a1fc02-2', message: 'For owned A' }),
+    ], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage('Sent both.'));
+    await bot.runtime.prompt('Spawn A and B then send to C and A', 'followUp');
+    await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === 'Sent both.'), 'both sends finish');
+    const sends = calls.filter(args => args[0] === 'send');
+    assert.deepEqual(sends, [
+        ['send', 'desktop/01a1fc02-1', 'For non-owned C', '--json'],
+        ['send', `desktop/${idA}`, 'For owned A', '--json'],
+    ]);
 });
 /** A sessions port for one worker the test drives: it works until `answer`, and `close` stops it. */
 function scriptedWorker() {
@@ -430,7 +463,7 @@ test('a bot closes a worker it started and is refused for any other ref', async 
     assert.equal(reportsOf(bot).length, 1, 'its own close is not reported back');
 });
 test('a bot closes its worker through every equivalent ref form', async (t) => {
-    for (const ref of [WORKER_ID, `desktop/${WORKER_ID}`, 'desktop/01a1f86c', 'desktop/01a1f86c-0']) {
+    for (const ref of [WORKER_ID, `desktop/${WORKER_ID}`, 'desktop/01a1f86c', 'desktop/01a1f86c-1']) {
         const worker = scriptedWorker();
         const bot = await openTestBot(t, worker.port);
         bot.respond(toolCall(bot, 'spawn_worker', { name: 'check', brief: 'Check it.', host: 'desktop' }), bot.faux.fauxAssistantMessage('Started check.'), toolCall(bot, 'sessions', { action: 'close', ref }), bot.faux.fauxAssistantMessage('Closed it.'));

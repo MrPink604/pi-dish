@@ -116,7 +116,7 @@ export interface WorkerRecord {
 }
 /** Whether a ref names this worker through any of the CLI's equivalent forms. */
 export declare function workerRefMatches(worker: WorkerRecord, wanted: string): boolean;
-/** Find one owned worker, checking direct id/alias prefix matches before legacy ordinal fallbacks. */
+/** Find one owned worker by unique direct id or alias prefix match. */
 export declare function findOwnedWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined;
 export interface ClosedWindow {
     line: string;
