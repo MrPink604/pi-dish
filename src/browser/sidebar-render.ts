@@ -565,8 +565,8 @@ function workspaceGroupKey(hostId: string | null, path: string) {
 // Hosts with their own section; offline notes skip them so nothing is announced twice.
 let hostSectionsShown: Set<string> | null = null;
 
-/** Group session families by their root session's workspace, keeping newest-descendant recency. */
-function groupFamiliesByWorkspace(families: readonly SessionFamily<SessionEntry>[], collapsedSet?: ReadonlySet<string>) {
+/** Group session families by their root session's workspace, keeping newest-descendant recency; collapsing never reorders. */
+function groupFamiliesByWorkspace(families: readonly SessionFamily<SessionEntry>[]) {
   const groups = new Map<string, SessionFamily<SessionEntry>[]>();
   for (const family of families) {
     const key = family.session.cwd || '~';
@@ -577,16 +577,13 @@ function groupFamiliesByWorkspace(families: readonly SessionFamily<SessionEntry>
   for (const [, list] of groups) {
     list.sort((a, b) => b.activity - a.activity || a.order - b.order);
   }
-  const collapsed = (cwd: string) => (collapsedSet?.has(cwd) ? 1 : 0);
-  return [...groups.entries()].sort((a, b) =>
-    collapsed(a[0]) - collapsed(b[0])
-    || b[1][0].activity - a[1][0].activity);
+  return [...groups.entries()].sort((a, b) => b[1][0].activity - a[1][0].activity);
 }
 
 /** Multi-host: one section per host, self first then by label (not recency, so headings stay put). */
 function renderWorkspaceTrees(families: readonly SessionFamily<SessionEntry>[]) {
   if (!options.multiHost) {
-    const tree = buildWorkspaceTree(groupFamiliesByWorkspace(families, options.collapsed), options.collapsed);
+    const tree = buildWorkspaceTree(groupFamiliesByWorkspace(families));
     return tree.map(node => renderWorkspaceNode(node)).join('');
   }
   hostSectionsShown = new Set();
@@ -603,9 +600,7 @@ function renderWorkspaceTrees(families: readonly SessionFamily<SessionEntry>[]) 
     const isCollapsed = options.collapsed.has(key);
     let body = '';
     if (!isCollapsed) {
-      // groupFamiliesByWorkspace/buildWorkspaceTree only ask `has(path)`; strip the host prefix.
-      const collapsedView = hostId ? new Set([...options.collapsed].filter(key => key.startsWith(hostId + ' ')).map(key => key.slice((hostId + ' ').length))) : options.collapsed;
-      body = buildWorkspaceTree(groupFamiliesByWorkspace(mine, collapsedView), collapsedView)
+      body = buildWorkspaceTree(groupFamiliesByWorkspace(mine))
         .map(node => renderWorkspaceNode(node, { hostId })).join('');
       if (!mine.length) {
         body = `<div class="host-section-empty">${escapeHtml(host.state === 'blocked'

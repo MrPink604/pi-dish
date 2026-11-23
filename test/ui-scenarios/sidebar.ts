@@ -52,7 +52,7 @@ const sidebar: UiScenario = async ({ desktop, registryState, check, SKILL_SESSIO
   await desktop.click('.workspace-children .workspace-group-header'); // first (newest) child
   await desktop.waitForSelector('.session-segment.collapsed', { timeout: 2000 });
   const labelsAfter = await groupLabels();
-  check(labelsAfter[labelsAfter.length - 1] === 'proj-alpha', 'collapsed child sinks below its expanded sibling');
+  check(JSON.stringify(labelsAfter) === JSON.stringify(labelsBefore), 'collapsed child keeps its place');
   check(await desktop.locator('.session-segment.collapsed .session-item').count() === 0,
     'collapsed group hides its sessions');
   check(await desktop.evaluate(() =>

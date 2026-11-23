@@ -41,7 +41,7 @@ const sidebar = async ({ desktop, registryState, check, SKILL_SESSION_ID, CWD, B
     await desktop.click('.workspace-children .workspace-group-header'); // first (newest) child
     await desktop.waitForSelector('.session-segment.collapsed', { timeout: 2000 });
     const labelsAfter = await groupLabels();
-    check(labelsAfter[labelsAfter.length - 1] === 'proj-alpha', 'collapsed child sinks below its expanded sibling');
+    check(JSON.stringify(labelsAfter) === JSON.stringify(labelsBefore), 'collapsed child keeps its place');
     check(await desktop.locator('.session-segment.collapsed .session-item').count() === 0, 'collapsed group hides its sessions');
     check(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-collapsed-groups') || '[]').length) === 1, 'collapse persisted to localStorage');
     await desktop.click('.session-segment.collapsed .workspace-group-header');

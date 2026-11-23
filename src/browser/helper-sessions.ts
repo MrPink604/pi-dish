@@ -4,8 +4,8 @@ import { shortCwd } from './helper-format';
 import { finite, timestampMillis } from '../core/helper-values';
 import { sessionRefKey, sessionKey } from './helper-identity';
 
-/** Collapsed groups sort after expanded ones, still by recency. */
-export function groupByWorkspace<T extends HelperSession>(list: readonly T[], collapsedSet?: ReadonlySet<string>) {
+/** Groups sort by recency; collapsing a group never moves it. */
+export function groupByWorkspace<T extends HelperSession>(list: readonly T[]) {
   const groups = new Map<string, T[]>(); // cwd -> [sessions]
   for (const s of list) {
     const key = s.cwd || '~';
@@ -18,17 +18,15 @@ export function groupByWorkspace<T extends HelperSession>(list: readonly T[], co
     sessions.sort((a, b) => timestampMillis(b.lastActivity) - timestampMillis(a.lastActivity));
   }
 
-  const collapsed = (cwd: string) => (collapsedSet?.has(cwd) ? 1 : 0);
   return [...groups.entries()].sort((a, b) =>
-    collapsed(a[0]) - collapsed(b[0])
-    || timestampMillis(b[1][0].lastActivity) - timestampMillis(a[1][0].lastActivity));
+    timestampMillis(b[1][0].lastActivity) - timestampMillis(a[1][0].lastActivity));
 }
 
 /**
  * Tree of path nodes with single-child chains flattened, so a narrow sidebar shows the
- * shared prefix once. `path` is the collapse key; collapsed nodes sink below siblings.
+ * shared prefix once. `path` is the collapse key; collapse state never changes the order.
  */
-export function buildWorkspaceTree<T>(groups: readonly (readonly [string, readonly T[]])[], collapsedSet?: ReadonlySet<string>) {
+export function buildWorkspaceTree<T>(groups: readonly (readonly [string, readonly T[]])[]) {
   const root: WorkspaceBranch<T> = { label: '', path: '', sessions: null, children: new Map(), order: 0 };
   groups.forEach(([cwd, sessions], order) => {
     let segs = cwd.split('/').filter(Boolean);
@@ -64,15 +62,14 @@ export function buildWorkspaceTree<T>(groups: readonly (readonly [string, readon
   const homeIdx = tops.findIndex(t => shortCwd(t.path) === '~' && !t.sessions && t.children.size);
   if (homeIdx !== -1) tops.splice(homeIdx, 1, ...tops[homeIdx].children.values());
 
-  const collapsed = (path: string) => (collapsedSet?.has(path) ? 1 : 0);
   const finalize = (node: WorkspaceBranch<T>, topLevel: boolean): WorkspaceNode<T> => {
     const children = [...node.children.values()].map(child => finalize(child, false));
-    children.sort((a, b) => collapsed(a.path) - collapsed(b.path) || a.order - b.order);
+    children.sort((a, b) => a.order - b.order);
     return { ...node, children,
       count: (node.sessions ? node.sessions.length : 0) + children.reduce((n, child) => n + child.count, 0),
       label: topLevel ? shortCwd(node.path) : node.label };
   };
-  return tops.map(top => finalize(top, true)).sort((a, b) => collapsed(a.path) - collapsed(b.path) || a.order - b.order);
+  return tops.map(top => finalize(top, true)).sort((a, b) => a.order - b.order);
 }
 
 /** Recent-view date buckets; epoch-0 timestamps go to a trailing 'undated' bucket, not "January 1970". */

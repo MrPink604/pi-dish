@@ -277,16 +277,6 @@ test('groupByWorkspace groups by cwd and sorts by recency', () => {
     const groupA = Array.isArray(groups[2]) && Array.isArray(groups[2][1]) ? groups[2][1] : [];
     assert.deepEqual(groupA.map((session) => property(session, 'lastActivity')), ['2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z']);
 });
-test('groupByWorkspace sinks collapsed groups below expanded ones', () => {
-    const mk = workspaceSession;
-    const groups = H.groupByWorkspace([
-        mk('/a', '2026-01-01T00:00:00Z'),
-        mk('/b', '2026-01-03T00:00:00Z'),
-        mk('/c', '2026-01-02T00:00:00Z'),
-    ], new Set(['/b']));
-    // /b is newest but collapsed, so it sorts last; the rest stay recency-ordered
-    assert.deepEqual(groups.map((group) => Array.isArray(group) ? group[0] : undefined), ['/c', '/a', '/b']);
-});
 test('buildWorkspaceTree shows a shared prefix once with distinguishing tails as children', () => {
     const mk = workspaceSession;
     const groups = H.groupByWorkspace([
@@ -342,15 +332,6 @@ test('buildWorkspaceTree keeps sessions living at a prefix that also has childre
     assert.equal((0, test_types_js_1.present)(root.sessions).length, 1);
     assert.equal(root.count, 2);
     assert.deepEqual(root.children.map(child => child.label), ['sub']);
-});
-test('buildWorkspaceTree sinks collapsed nodes below expanded siblings per level', () => {
-    const mk = workspaceSession;
-    const collapsed = new Set(['/w/newest']);
-    const tree = H.buildWorkspaceTree(H.groupByWorkspace([
-        mk('/w/newest', '2026-01-03T00:00:00Z'),
-        mk('/w/older', '2026-01-02T00:00:00Z'),
-    ], collapsed), collapsed);
-    assert.deepEqual(tree[0].children.map((c) => property(c, 'label')), ['older', 'newest']);
 });
 test('buildWorkspaceTree hoists a bare home root — ~/x groups stay top-level', () => {
     const mk = workspaceSession;

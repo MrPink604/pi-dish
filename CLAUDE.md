@@ -2511,12 +2511,10 @@ same cwd; the parent stays first while the whole
 block sorts and enters Recent buckets by the newest activity anywhere below it.
 Families default collapsed, with explicit expansions persisted in
 `pi-dish-expanded-session-families`; search remains flat.
-Clicking a workspace group header collapses it — sessions hidden, group sunk
-below all expanded groups (ordering in `groupByWorkspace`, helpers.js). A
-clicked toggle (host, workspace/date, family, bot or closed-worker) stays at its
-viewport offset: `sidebar-controls.ts` records it before the toggle and
-`updateList` adjusts `#sessionList.scrollTop` after the rebuild, so the sunk
-header remains under the pointer instead of leaving the user's place.
+Clicking a workspace group header collapses it — sessions hidden, group kept
+in its recency slot (`groupByWorkspace`/`buildWorkspaceTree`, helpers.js;
+`groupFamiliesByWorkspace` in the renderer). Collapse state never reorders the
+tree, so the clicked header stays where the user's scroll position left it.
 
 Multi-host only, and nothing below renders on a single host: the workspace
 view groups into **host sections** (`.host-section`, `renderWorkspaceTrees`) —
@@ -2617,7 +2615,7 @@ view (`groupSessionsByDate` in helpers.js: Today/Yesterday/This week/Last
 week/month buckets, `pi-dish-sidebar-view` in localStorage); Recent rows carry
 the cwd hint, and collapsed date buckets keep their chronological slot
 (collapse keys are `date:<bucket>` in the same `pi-dish-collapsed-groups`
-store) instead of sinking like workspace groups.
+store), like collapsed workspace groups.
 
 Advanced search is a main-pane takeover (`.main.search-open`, usage-view
 pattern and mutually exclusive with it), opened from the sidebar-header 🔍 or

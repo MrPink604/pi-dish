@@ -316,44 +316,57 @@ test('pinning a cross-host child preserves an unrelated pinned session sharing t
   ]);
 });
 
+const scrollCases = [
+  { name: 'single host', singleHost: true },
+  { name: 'last host section', singleHost: false },
+];
 for (const viewport of [{ width: 1280, height: 900 }, { width: 412, height: 915 }]) {
-  test(`toggling a workspace group keeps its header in place in a scrolled list (${viewport.width}px)`, async ({ page, fleet }) => {
-    await page.setViewportSize(viewport);
-    await page.evaluate(({ self, peer }) => {
-      fixtureApp.features.sidebarLists.dispose(); // polls would replace the injected lists
-      fixtureApp.features.sessionState.setSessionLists([self, peer].map(hostId => ({ hostId, active: Array.from({ length: 60 }, (_, index) => ({
-        id: `scroll-${index}`, host: hostId, name: `Scroll ${index}`, isActive: true,
-        cwd: `/work/proj-${String(Math.floor(index / 2)).padStart(2, '0')}`, lastActivity: Date.now() - index * 1000,
-      })) })));
-    }, { self: fleet.self.hostId, peer: fleet.peer.hostId });
-    if (viewport.width <= 768) {
-      await page.locator('.header-menu-btn:visible, .empty-menu-btn:visible').first().click();
-      await expect(page.locator('#sidebar')).toHaveClass(/\bopen\b/);
-      // A click during the slide-in retries after scrolling the header to the top.
-      await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.x).toBe(0);
-    }
-    const key = `${fleet.self.hostId} /work/proj-15`;
-    const header = page.locator(`.workspace-group-header[data-cwd="${key}"]`);
-    // Collapsed groups sink below every expanded sibling, far outside this viewport.
-    const offset = () => header.evaluate(element => {
-      const list = fixtureElement(element.closest<HTMLElement>('#sessionList'), 'session list');
-      return { top: element.getBoundingClientRect().top - list.getBoundingClientRect().top, scrollTop: list.scrollTop };
+  for (const scrollCase of scrollCases) {
+    test(`toggling a workspace group keeps its header in place in a scrolled list (${scrollCase.name}, ${viewport.width}px)`, async ({ page, fleet }) => {
+      await page.setViewportSize(viewport);
+      if (scrollCase.singleHost) {
+        // Runs after the fixture's own init script, so the reload sees only the serving host.
+        await page.addInitScript(() => localStorage.removeItem('pi-dish-hosts'));
+        await page.reload();
+        await expect.poll(() => page.evaluate(() => typeof fixtureApp !== 'undefined' && !!fixtureApp.features?.sidebarLists)).toBe(true);
+      }
+      const target = scrollCase.singleHost ? fleet.self : fleet.peer;
+      await page.evaluate(({ hosts, target }) => {
+        fixtureApp.features.sidebarLists.dispose(); // polls would replace the injected lists
+        fixtureApp.features.sessionState.setSessionLists(hosts.map(hostId => ({ hostId, active: Array.from({ length: hostId === target ? 60 : 4 }, (_, index) => ({
+          id: `scroll-${index}`, host: hostId, name: `Scroll ${index}`, isActive: true,
+          cwd: `/work/proj-${String(Math.floor(index / 2)).padStart(2, '0')}`, lastActivity: Date.now() - index * 1000,
+        })) })));
+      }, { hosts: scrollCase.singleHost ? [fleet.self.hostId] : [fleet.self.hostId, fleet.peer.hostId], target: target.hostId });
+      if (viewport.width <= 768) {
+        await page.locator('.header-menu-btn:visible, .empty-menu-btn:visible').first().click();
+        await expect(page.locator('#sidebar')).toHaveClass(/\bopen\b/);
+        // A click during the slide-in retries after scrolling the header to the top.
+        await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.x).toBe(0);
+      }
+      // Mid-list, newer than half its siblings: a collapse-driven re-sort would move it.
+      const key = scrollCase.singleHost ? '/work/proj-15' : `${target.hostId} /work/proj-15`;
+      const header = page.locator(`.workspace-group-header[data-cwd="${key}"]`);
+      const offset = () => header.evaluate(element => {
+        const list = fixtureElement(element.closest<HTMLElement>('#sessionList'), 'session list');
+        return { top: element.getBoundingClientRect().top - list.getBoundingClientRect().top, scrollTop: list.scrollTop };
+      });
+      await header.evaluate(element => {
+        const list = fixtureElement(element.closest<HTMLElement>('#sessionList'), 'session list');
+        list.scrollTop += element.getBoundingClientRect().top - list.getBoundingClientRect().top - list.clientHeight / 2;
+      });
+      const before = await offset();
+      expect(before.scrollTop).toBeGreaterThan(1000);
+      await header.click();
+      await expect(page.locator('.session-segment.collapsed > .workspace-group-header')).toHaveAttribute('data-cwd', key);
+      const collapsed = await offset();
+      expect(Math.abs(collapsed.top - before.top)).toBeLessThanOrEqual(1);
+      expect(collapsed.scrollTop).toBe(before.scrollTop);
+      await header.click();
+      await expect(page.locator('.session-segment.collapsed')).toHaveCount(0);
+      expect(Math.abs((await offset()).top - before.top)).toBeLessThanOrEqual(1);
     });
-    await header.evaluate(element => {
-      const list = fixtureElement(element.closest<HTMLElement>('#sessionList'), 'session list');
-      list.scrollTop += element.getBoundingClientRect().top - list.getBoundingClientRect().top - list.clientHeight / 2;
-    });
-    const before = await offset();
-    expect(before.scrollTop).toBeGreaterThan(1000);
-    await header.click();
-    await expect(page.locator('.session-segment.collapsed > .workspace-group-header')).toHaveAttribute('data-cwd', key);
-    const collapsed = await offset();
-    expect(Math.abs(collapsed.top - before.top)).toBeLessThanOrEqual(1);
-    expect(collapsed.scrollTop).toBeGreaterThan(1000);
-    await header.click();
-    await expect(page.locator('.session-segment.collapsed')).toHaveCount(0);
-    expect(Math.abs((await offset()).top - before.top)).toBeLessThanOrEqual(1);
-  });
+  }
 }
 
 export {};

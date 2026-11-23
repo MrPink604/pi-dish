@@ -650,8 +650,7 @@ body.sidebar-open {
   padding: 0 8px 8px;
 }
 
-/* Workspace group header — click toggles collapse (collapsed groups sink
-   to the bottom of the list) */
+/* Workspace group header — click toggles collapse; the group keeps its place */
 .workspace-group-header {
   display: flex;
   align-items: center;

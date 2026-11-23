@@ -2446,7 +2446,7 @@ let remoteHost = null;
             await desktop.waitForFunction(() => !document.querySelector('.ext-ui-widget'), { timeout: 5000 });
             fs.rmSync(path.join(registryDir, `${SESSION2_ID}.json`), { force: true });
             // Both workspaces share the tmp-HOME prefix: one flattened prefix node with
-            // proj-alpha/proj-beta. Collapsing sinks a child and pins float a section.
+            // proj-alpha/proj-beta. Collapsing keeps a child in place and pins float a section.
             console.log('session card layout & sidebar chrome:');
             await desktop.click('#tabAll');
             await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-tags`, { timeout: 5000 });
