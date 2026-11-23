@@ -367,12 +367,14 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
           return missedAt !== undefined && now - missedAt < BRIDGE_INDEX_TTL_MS;
         };
         const hasUnseen = bridgeIds.some(id => !bridgeIndex?.byId.has(id) && !isFreshMiss(id));
+        let scannedBridgeIndex = false;
         if ((!bridgeIndex || hasUnseen) && (lastBridgeScanAt === 0 || now - lastBridgeScanAt >= BRIDGE_INDEX_TTL_MS)) {
           try {
             const discovery = discoverHarnessSessions();
             sessionSources.refresh(discovery);
             bridgeIndex = { builtAt: now, byId: new Map(discovery.candidates.map(candidate => [candidate.routeId, candidate])) };
             bridgeMisses.clear();
+            scannedBridgeIndex = true;
           } catch {}
           lastBridgeScanAt = now;
         }
@@ -383,7 +385,12 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
         for (const bridgeId of bridgeIds) {
           if (isFreshMiss(bridgeId)) continue;
           const candidate = bridgeIndex?.byId.get(bridgeId);
-          if (!candidate) { recordMiss(bridgeId); continue; }
+          if (!candidate) {
+            // Only record a miss when we actually ran a discovery scan for this index;
+            // otherwise a bridge created during the TTL cooldown would be suppressed for another full TTL.
+            if (scannedBridgeIndex) recordMiss(bridgeId);
+            continue;
+          }
           try {
             history.push({ source: candidate, info: sessionIndex.getSessionInfo(candidate), liveChild: false, bridge: true, advice: historicalAdvice(candidate, false) });
           } catch {

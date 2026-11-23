@@ -1418,10 +1418,16 @@ async function main() {
       // `children` is what `--active` returns for subagents running inside a
       // live session: real sessions with transcripts, absent from `previous`
       // on that request (and already in it on a full list).
+      // `/api/sessions?active=1` may also include closed bridge ancestors in
+      // `previous` for sidebar tree nesting; `list --active` excludes those
+      // closed sessions from output while still judging refs against the full catalog.
       const catalog: SessionCatalog & Record<string, unknown> = core.record(data);
-      const rows = [...core.sessionRows(catalog.active), ...core.sessionRows(catalog.children), ...core.sessionRows(catalog.previous)];
+      const catalogPrevious = core.sessionRows(catalog.previous);
+      const previousRows = args.active ? [] : catalogPrevious;
+      const catalogRows = [...core.sessionRows(catalog.active), ...core.sessionRows(catalog.children), ...catalogPrevious];
+      const rows = [...core.sessionRows(catalog.active), ...core.sessionRows(catalog.children), ...previousRows];
       // Refs are judged against the whole catalog, never just the rows shown.
-      const refs = refIndex(rows, await entryForHostName(base, hostFlag));
+      const refs = refIndex(catalogRows, await entryForHostName(base, hostFlag));
       const rowCut = rows.length > limit ? `Showing ${limit} of ${rows.length} sessions (live first); --limit N or --full for more.` : null;
       if (args.json) {
         let left = limit;
@@ -1430,7 +1436,7 @@ async function main() {
           left -= kept.length;
           return kept.map(session => pickFields({ ...session, ref: refs.get(session.id) }, bounds.fields));
         };
-        const active = take(catalog.active), children = take(catalog.children), previous = take(catalog.previous);
+        const active = take(catalog.active), children = take(catalog.children), previous = take(previousRows);
         print({ ...catalog, active, previous, children, total: rows.length }, true);
         if (rowCut) cutNotice(true, rowCut);
         return;

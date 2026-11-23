@@ -657,3 +657,36 @@ test('peer-session CLI kb prints revision headers and includes the spawning bot 
         '',
     ].join('\n'));
 });
+test('peer-session CLI list --active excludes closed bridge ancestors returned in previous', async (t) => {
+    const server = http.createServer((req, res) => {
+        res.setHeader('Content-Type', 'application/json');
+        if (req.url === '/api/sessions?active=1' || req.url === '/api/sessions') {
+            res.end(JSON.stringify({
+                active: [{ id: 'leaf-1', isActive: true, name: 'Active Leaf', cwd: '/work', parentId: 'bridge-1' }],
+                children: [{ id: 'child-1', isActive: false, subagentLive: true, name: 'Live Child', cwd: '/work', parentId: 'leaf-1' }],
+                previous: [{ id: 'bridge-1', isActive: false, name: 'Closed Bridge', cwd: '/work' }],
+            }));
+            return;
+        }
+        if (req.url === '/api/hosts') {
+            res.end(JSON.stringify({ hosts: [{ self: true, label: 'self', reachable: true, capabilities: { sessions: true } }] }));
+            return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: 'not found' }));
+    });
+    const base = await listenServer(server);
+    t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+    const activeText = await run(['list', '--active'], base);
+    assert.match(activeText.stdout, /Active Leaf/);
+    assert.match(activeText.stdout, /Live Child/);
+    assert.doesNotMatch(activeText.stdout, /Closed Bridge|bridge-1/);
+    const activeJson = (0, test_types_js_1.record)(JSON.parse((await run(['list', '--active', '--json'], base)).stdout));
+    assert.deepEqual((0, test_types_js_1.records)(activeJson.active).map(r => r.id), ['leaf-1']);
+    assert.deepEqual((0, test_types_js_1.records)(activeJson.children).map(r => r.id), ['child-1']);
+    assert.deepEqual((0, test_types_js_1.records)(activeJson.previous), []);
+    assert.equal(activeJson.total, 2);
+    const fullJson = (0, test_types_js_1.record)(JSON.parse((await run(['list', '--json'], base)).stdout));
+    assert.deepEqual((0, test_types_js_1.records)(fullJson.previous).map(r => r.id), ['bridge-1']);
+    assert.equal(fullJson.total, 3);
+});

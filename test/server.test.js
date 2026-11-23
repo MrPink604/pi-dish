@@ -5121,3 +5121,50 @@ test('SSE stream handler sends periodic keepalive comments and stops them on clo
     assert.equal(chunks.length, countAtClose, 'keepalive timer stops after request close');
     assert.equal(viewers.size, 0);
 });
+test('GET /api/sessions?active=1 does not cache a bridge miss when discovery was skipped by TTL', async (t) => {
+    const remoteRoot = '11111111-2222-4333-8444-555555555555:remote-root';
+    const midId = '2026-11-23T11-00-00-bridge-mid';
+    const leafId = '2026-11-23T11-00-01-bridge-leaf';
+    const midFile = path.join(sessionDir, `${midId}.jsonl`);
+    const leafFile = path.join(sessionDir, `${leafId}.jsonl`);
+    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    fs.mkdirSync(registryDir, { recursive: true });
+    const socket = path.join(tmpHome, `${leafId}.sock`);
+    fs.writeFileSync(socket, 'stub');
+    const identity = (0, test_types_js_1.present)(processIdentity(process.pid));
+    const registryPath = path.join(registryDir, `${leafId}.json`);
+    let fakeNow = Date.now() + 10 * 60_000;
+    t.mock.method(Date, 'now', () => fakeNow);
+    try {
+        // 1. Prime bridgeIndex at T0 before midFile exists.
+        await get('/api/sessions');
+        // 2. Inside the 60s bridge-index TTL cooldown, midFile appears and a live leaf links to it.
+        fakeNow += 30_000;
+        fs.writeFileSync(midFile, JSON.stringify({ type: 'session', version: 3, id: midId, cwd: tmpHome, timestamp: '2026-11-23T11:00:00Z' }) + '\n');
+        fs.writeFileSync(leafFile, JSON.stringify({ type: 'session', version: 3, id: leafId, cwd: tmpHome, timestamp: '2026-11-23T11:00:01Z' }) + '\n');
+        sessionProvenance.recordLaunch(midId, remoteRoot, 'test-bridge-ttl');
+        sessionProvenance.recordLaunch(leafId, midId, 'test-bridge-ttl');
+        fs.writeFileSync(registryPath, JSON.stringify({
+            protocolVersion: 2, harnessId: 'pi', nativeSessionId: leafId, sessionId: leafId,
+            bridgeInstanceId: leafId, instanceId: leafId, socketPath: socket, cwd: tmpHome, sessionFile: leafFile,
+            pid: identity.pid, startTime: identity.startTime, capabilities: {}, spawnToken: null,
+        }));
+        invalidateRegistryCache();
+        // Poll during cooldown: scan is skipped, so midId is absent for now — must NOT be cached as a miss.
+        const duringCooldown = await get('/api/sessions?active=1');
+        assert.equal(duringCooldown.status, 200);
+        assert.equal((0, test_types_js_1.records)(duringCooldown.body.previous).some(row => row.id === midId), false);
+        // 3. Once the original 60s cooldown expires (only 31s after the skipped poll), midId is discovered immediately.
+        fakeNow += 31_000;
+        const afterCooldown = await get('/api/sessions?active=1');
+        assert.equal(afterCooldown.status, 200);
+        assert.equal((0, test_types_js_1.records)(afterCooldown.body.previous).some(row => row.id === midId), true, 'bridge session created during cooldown is discovered as soon as cooldown expires');
+    }
+    finally {
+        fs.rmSync(registryPath, { force: true });
+        fs.rmSync(socket, { force: true });
+        fs.rmSync(midFile, { force: true });
+        fs.rmSync(leafFile, { force: true });
+        invalidateRegistryCache();
+    }
+});
