@@ -384,6 +384,8 @@ export class AcpSession extends TransportSession {
   /** Sibling ACP session ids opened for ephemeral `/btw` side chats. */
   declare private sideSessionIds: Set<string>;
   declare private sideListeners: Map<string, (update: ProtocolRecord) => void>;
+  /** True once `_adoptSession` has bound `nativeSessionId` to the real ACP session id. */
+  declare private adopted: boolean;
 
   constructor(proc: ChildProcessWithoutNullStreams, cwd: string) {
     super();
@@ -392,6 +394,7 @@ export class AcpSession extends TransportSession {
     this.cwd = cwd;
     this.replaying = false;
     this.initialized = false;
+    this.adopted = false;
     this.id = crypto.randomUUID() as NativeSessionId;
     this.nativeSessionId = this.id;
     this.sessionFile = '';
@@ -601,11 +604,21 @@ export class AcpSession extends TransportSession {
     this.pending.settle(id as string | number, frame.error === undefined, frame.result, error, 'Antigravity request failed');
   }
 
+  /**
+   * True when an inbound ACP notification/request carries a sessionId that belongs
+   * to a side session (active, opening, closing, or already closed) rather than
+   * this session's adopted main conversation. Never let such frames fall through
+   * into the main session's transcript or UI dialogs.
+   */
+  private _isForeignSession(sid: string): boolean {
+    return !!sid && (this.sideSessionIds.has(sid) || (this.adopted && sid !== this.nativeSessionId));
+  }
+
   private _handleNotification(method: string, params: unknown): void {
     if (method !== 'session/update') return;
     const payload = asRecord(params);
     const sid = text(payload.sessionId);
-    if (sid && this.sideSessionIds.has(sid)) {
+    if (this._isForeignSession(sid)) {
       const listener = this.sideListeners.get(sid);
       if (listener) listener(asRecord(payload.update));
       return;
@@ -618,7 +631,7 @@ export class AcpSession extends TransportSession {
     const method = text(frame.method);
     const params = asRecord(frame.params);
     const sid = text(params.sessionId);
-    if (sid && this.sideSessionIds.has(sid)) {
+    if (this._isForeignSession(sid)) {
       if (method === 'elicitation/create') this._respond(id, { action: 'cancel' });
       else if (method === 'session/request_permission') this._respond(id, { outcome: { outcome: 'cancelled' } });
       else this._respondError(id, -32601, `Unsupported side-session ACP method: ${method}`);
@@ -1247,6 +1260,7 @@ export class AcpSession extends TransportSession {
     if (!validSessionId(sessionId)) throw new TypeError('Invalid Antigravity session id');
     this.id = sessionId as NativeSessionId;
     this.nativeSessionId = this.id;
+    this.adopted = true;
     this.sessionFile = sessionFile;
     this.configOptions = Array.isArray(result.configOptions) ? result.configOptions.filter(isRecord) as ProtocolRecord[] : [];
     this.modes = isRecord(result.modes) ? result.modes : null;
@@ -1413,9 +1427,13 @@ export class AcpSession extends TransportSession {
 
   async closeSideSession(sideId: string): Promise<void> {
     this.sideListeners.delete(sideId);
-    this.sideSessionIds.delete(sideId);
-    if (!this.alive) return;
-    await this._request('session/close', { sessionId: sideId }, { timeout: 5000 }).catch(() => {});
+    try {
+      if (this.alive) {
+        await this._request('session/close', { sessionId: sideId }, { timeout: 5000 }).catch(() => {});
+      }
+    } finally {
+      this.sideSessionIds.delete(sideId);
+    }
   }
 
   /**

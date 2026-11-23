@@ -106,6 +106,8 @@ export declare class AcpSession extends TransportSession {
     /** Sibling ACP session ids opened for ephemeral `/btw` side chats. */
     private sideSessionIds;
     private sideListeners;
+    /** True once `_adoptSession` has bound `nativeSessionId` to the real ACP session id. */
+    private adopted;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
     /** True while a blocking (non-daemon, non-schedule) tool call has started and not yet terminated. */
@@ -119,6 +121,13 @@ export declare class AcpSession extends TransportSession {
     private _respondError;
     private _handleFrame;
     private _handleResponse;
+    /**
+     * True when an inbound ACP notification/request carries a sessionId that belongs
+     * to a side session (active, opening, closing, or already closed) rather than
+     * this session's adopted main conversation. Never let such frames fall through
+     * into the main session's transcript or UI dialogs.
+     */
+    private _isForeignSession;
     private _handleNotification;
     private _handleRequest;
     private _isPassiveToolCompletion;

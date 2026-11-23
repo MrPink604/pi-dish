@@ -757,6 +757,9 @@ function handleRequest(id: unknown, method: string, params: Frame): void {
         usageUpdate(0);
       } else {
         sideSessions.add(freshId);
+        if (SCRIPT === 'side-trailing-close') {
+          notify('session/update', { sessionId: freshId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'EARLY SIDE CHUNK' } } });
+        }
         respond(id, sessionState(freshId));
       }
       return;
@@ -809,6 +812,24 @@ function handleRequest(id: unknown, method: string, params: Frame): void {
         if (openSide?.timer) clearTimeout(openSide.timer);
         sideOpenPrompts.delete(targetSid);
         sideSessions.delete(targetSid);
+        if (SCRIPT === 'side-trailing-close') {
+          notify('session/update', { sessionId: targetSid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'TRAILING SIDE CHUNK' } } });
+          write({
+            jsonrpc: '2.0',
+            id: 'side-perm-close-1',
+            method: 'session/request_permission',
+            params: {
+              sessionId: targetSid,
+              toolCall: { title: 'Side-session trailing command' },
+              options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' }],
+            },
+          });
+          respond(id, {});
+          setTimeout(() => {
+            notify('session/update', { sessionId: targetSid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'POST-CLOSE SIDE CHUNK' } } });
+          }, 15);
+          return;
+        }
         respond(id, {});
         return;
       }

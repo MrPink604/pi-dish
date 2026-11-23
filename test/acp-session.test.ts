@@ -1066,3 +1066,34 @@ test('plan widget clears on empty entries, tool results enrich from brain step o
   assert.ok(bgUpdates.some(text => text.includes('watching for changes...')),
     `expected running bash tool to stream task-7.log tail, got: ${JSON.stringify(bgUpdates)}`);
 });
+
+test('side-session notifications and requests arriving during open or after close never leak into the main session', async (t) => {
+  const session = await launch('side-trailing-close');
+  cleanup(t, session);
+  const events = capture(session);
+
+  const sideId = await session.openSideSession();
+  const controller = new AbortController();
+  const deltas: string[] = [];
+  const answer = await session.promptSideSession(sideId, 'quick check', {
+    signal: controller.signal,
+    onTextDelta: delta => { deltas.push(delta); },
+  });
+  assert.match(answer, /answered "quick check"/);
+  assert.ok(deltas.join('').includes('quick check'));
+
+  await session.closeSideSession(sideId);
+  await delay(60);
+
+  assert.equal(eventCount(events, 'message_start'), 0, 'no side chunk opened a main assistant message');
+  assert.equal(eventCount(events, 'message_update'), 0, 'no early, trailing, or post-close side chunk streamed to main');
+  const dialogEvents = events.filter(e => e.event === 'extension_ui_request' && asRecord(e.data).method === 'select');
+  assert.equal(dialogEvents.length, 0, 'trailing side-session permission request was cancelled instead of shown on main');
+
+  const rawMirror = fs.readFileSync(session.sessionFile, 'utf8');
+  assert.doesNotMatch(rawMirror, /EARLY SIDE CHUNK|TRAILING SIDE CHUNK|POST-CLOSE SIDE CHUNK/);
+
+  await session.prompt('main turn still works');
+  await until(() => events.some(e => e.event === 'turn_end'));
+  assert.ok(assistantText(messages(events, 'assistant')).length > 0);
+});
