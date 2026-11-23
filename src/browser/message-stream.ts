@@ -58,16 +58,20 @@ export function createMessageStream(options: {
 }) {
   const { document, sessionState, renderer, tools } = options;
   let source: EventSource | null = null, reconnect: ReturnType<typeof setTimeout> | null = null, connectionGeneration = 0, disposed = false;
-  let current: { owner: SelectionOwner; base: string } | null = null, failures = 0;
+  let current: { owner: SelectionOwner; base: string } | null = null, failures = 0, opened = false, statusActive = false;
   function ownsConnection(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number) {
     return !disposed && generation === connectionGeneration && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === target.base;
   }
+  function setErrorStatus(message: string) { statusActive = true; options.status(message, 'error'); }
+  function clearErrorStatus() { if (statusActive) { statusActive = false; options.status(''); } }
   function disconnect() { connectionGeneration++; clearTimeout(reconnect ?? undefined); reconnect = null; source?.close(); source = null; }
   function stop() {
     disconnect();
     if (current?.base === '') options.originFailure?.(null);
+    clearErrorStatus();
     current = null;
     failures = 0;
+    opened = false;
   }
   async function start(owner = sessionState.captureSelection()) {
     if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
@@ -81,13 +85,26 @@ export function createMessageStream(options: {
     if (!ownsConnection(owner, target, generation)) return;
     source?.close();
     source = null;
-    options.status(message, 'error');
+    // Hidden tabs (locked phone / backgrounded app) cannot reliably reconnect;
+    // pause until visibilitychange calls start() instead of churning failures.
+    if (document.hidden) {
+      clearTimeout(reconnect ?? undefined);
+      reconnect = null;
+      opened = false;
+      return;
+    }
+    // Reconnect a previously open stream quietly once before flashing an error
+    // in the header; initial connect failures surface immediately.
+    const transient = opened && failures === 0;
+    opened = false;
+    if (!transient) setErrorStatus(message);
     failures++;
     if (target.base === '' && failures >= 2) options.originFailure?.(failure);
+    const delayMs = transient ? 1000 : Math.min(3000 * 2 ** (failures - 1), 30000);
     reconnect = setTimeout(() => {
       reconnect = null;
-      if (ownsConnection(owner, target, generation)) void connect(owner, target, generation);
-    }, Math.min(3000 * 2 ** (failures - 1), 30000));
+      if (!document.hidden && ownsConnection(owner, target, generation)) void connect(owner, target, generation);
+    }, delayMs);
   }
   async function connect(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number) {
     const path = `${target.base}/api/sessions/${encodeURIComponent(owner.id)}/stream`;
@@ -120,7 +137,9 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
 
     evtSource.onopen = () => {
       if (!ownsStream()) return;
+      opened = true;
       failures = 0;
+      statusActive = false;
       if (target.base === '') options.originFailure?.(null);
       options.status('');
     };

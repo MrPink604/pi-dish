@@ -4947,6 +4947,7 @@ test('SSE replays remembered extension UI state to new connections', async () =>
       headers: { 'Accept-Encoding': 'gzip' },
     });
     assert.equal(streamHeaders.headers.get('content-encoding'), null);
+    assert.equal(streamHeaders.headers.get('x-accel-buffering'), 'no');
     await streamHeaders.body?.cancel();
 
     // First client: receives live emissions (and causes the server to connect).
@@ -5484,6 +5485,46 @@ test('DELETE /api/sessions/:id removes a closed transcript and its OMP subagents
     invalidateRegistryCache();
     await get('/api/sessions');
   }
+});
+
+test('SSE stream handler sends periodic keepalive comments and stops them on close', async () => {
+  const { EventEmitter } = require('node:events') as typeof import('node:events');
+  const { createSessionStreamHandler } = require('../lib/session-stream-handler') as typeof import('../lib/session-stream-handler');
+  const fakeSession = Object.assign(new EventEmitter(), {
+    turnInProgress: false,
+    compacting: false,
+    runningToolCalls: new Map(),
+    extUIState: null,
+  });
+  const viewers = new Map<string, number>();
+  const handler = createSessionStreamHandler({
+    getLiveSession: async () => fakeSession as never,
+    viewers,
+    heartbeatMs: 25,
+  });
+  const req = Object.assign(new EventEmitter(), { params: { id: 'heartbeat-test' }, destroyed: false });
+  const headers: Record<string, string> = {};
+  const chunks: string[] = [];
+  let flushCount = 0;
+  const res = {
+    destroyed: false,
+    writableEnded: false,
+    setHeader(name: string, value: string) { headers[name.toLowerCase()] = value; },
+    write(chunk: string) { chunks.push(chunk); return true; },
+    flush() { flushCount++; },
+    end() { this.writableEnded = true; },
+  };
+  await handler(req as never, res as never, () => {});
+  assert.equal(headers['x-accel-buffering'], 'no');
+  await new Promise(resolve => setTimeout(resolve, 90));
+  const keepalivesBeforeClose = chunks.filter(chunk => chunk === ': keepalive\n\n').length;
+  assert.ok(keepalivesBeforeClose >= 2, `expected >= 2 keepalive frames, got ${keepalivesBeforeClose}`);
+  assert.ok(flushCount >= keepalivesBeforeClose, 'keepalive frames are flushed');
+  req.emit('close');
+  const countAtClose = chunks.length;
+  await new Promise(resolve => setTimeout(resolve, 70));
+  assert.equal(chunks.length, countAtClose, 'keepalive timer stops after request close');
+  assert.equal(viewers.size, 0);
 });
 
 export {};

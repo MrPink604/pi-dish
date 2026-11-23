@@ -5,5 +5,7 @@ export interface SessionStreamPorts {
     getLiveSession(sessionId: string): Promise<LiveSession | null>;
     /** Open browser event streams per canonical session; hibernation reads it. */
     viewers: Map<string, number>;
+    /** Interval for SSE keepalive comments; keeps proxies (e.g. Cloudflare 100s read timeout) from dropping idle streams. */
+    heartbeatMs?: number;
 }
 export declare function createSessionStreamHandler(ports: SessionStreamPorts): RouteHandler;

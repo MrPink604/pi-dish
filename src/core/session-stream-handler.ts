@@ -12,6 +12,8 @@ export interface SessionStreamPorts {
   getLiveSession(sessionId: string): Promise<LiveSession | null>;
   /** Open browser event streams per canonical session; hibernation reads it. */
   viewers: Map<string, number>;
+  /** Interval for SSE keepalive comments; keeps proxies (e.g. Cloudflare 100s read timeout) from dropping idle streams. */
+  heartbeatMs?: number;
 }
 
 interface ExtensionUIPayload {
@@ -32,13 +34,17 @@ function extensionUIPayload(value: unknown): ExtensionUIPayload {
 // Deltas carry the full message so far; coalescing keeps slow (phone) links from flooding.
 const MESSAGE_UPDATE_COALESCE_MS = 50;
 const SIDE_CHAT_COALESCE_MS = 100;
+// Below reverse-proxy idle read timeouts (Cloudflare ~100s, nginx 60s) and mobile NAT timeouts.
+const DEFAULT_HEARTBEAT_MS = 25_000;
 
 export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHandler {
+  const heartbeatMs = ports.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   return async (req, res) => {
     const sessionId = req.params.id;
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.write(': connected\n\n');
     res.flush?.();
 
@@ -211,7 +217,20 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     sub('auto_retry_start', (data) => send('auto_retry_start', data));
     sub('auto_retry_end', (data) => send('auto_retry_end', data));
 
-    const onClose = () => { clearPendingUpdate(); clearSideChatTimer(); toolEvents.clear(); send('session_ended', {}); };
+    let heartbeat: NodeJS.Timeout | null = null;
+    const stopHeartbeat = () => {
+      if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    };
+    if (heartbeatMs > 0) {
+      heartbeat = setInterval(() => {
+        if (req.destroyed || res.destroyed || res.writableEnded) { stopHeartbeat(); return; }
+        res.write(': keepalive\n\n');
+        res.flush?.();
+      }, heartbeatMs);
+      heartbeat.unref();
+    }
+
+    const onClose = () => { stopHeartbeat(); clearPendingUpdate(); clearSideChatTimer(); toolEvents.clear(); send('session_ended', {}); };
     // Bridge and Prime events are application-level close; RPC and owned ACP
     // children report their stdio exit instead.
     if (session instanceof BridgeSession || session instanceof PrimeDaemonSession) {
@@ -222,6 +241,7 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     }
 
     req.on('close', () => {
+      stopHeartbeat();
       clearPendingUpdate();
       clearSideChatTimer();
       toolEvents.clear();

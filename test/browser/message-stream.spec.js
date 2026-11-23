@@ -125,3 +125,40 @@ async function setup(page, fleet) {
     await page.evaluate(() => fixtureElement(window.streamLoads[0], 'older stream load')());
     (0, fixtures_js_1.expect)(await page.evaluate(() => window.streamSelections.map(entry => entry[0]))).toEqual(['newer-transcript']);
 });
+(0, fixtures_js_1.test)('an established stream reconnects quietly once after a transient drop and pauses retries while hidden', async ({ page, fleet }) => {
+    await setup(page, fleet);
+    await page.clock.install();
+    await page.evaluate(() => {
+        window.streamEndpoint.token = null;
+        window.ownedStream.start();
+        const first = fixtureElement(window.streamSources[0], 'first stream');
+        fixtureElement(first.onopen, 'stream open').call(first, new Event('open'));
+        window.streamStatus.length = 0;
+        fixtureElement(first.onerror, 'transient drop').call(first, new Event('error'));
+    });
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.streamStatus)).toEqual([]);
+    await page.clock.runFor(1100);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.streamSources.length)).toBe(2);
+    // A second failure before the replacement opens surfaces the disconnect status and clears on stop().
+    await page.evaluate(() => {
+        const second = fixtureElement(window.streamSources[1], 'second stream');
+        fixtureElement(second.onerror, 'reconnect failure').call(second, new Event('error'));
+    });
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.streamStatus)).toEqual([['Stream disconnected', 'error']]);
+    await page.evaluate(() => window.ownedStream.stop());
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.streamStatus)).toEqual([['Stream disconnected', 'error'], ['']]);
+    // Backgrounded tabs close a dropped stream without flashing an error or looping retries.
+    await page.evaluate(() => {
+        window.streamStatus.length = 0;
+        window.ownedStream.start();
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        const third = fixtureElement(window.streamSources[2], 'third stream');
+        fixtureElement(third.onerror, 'hidden drop').call(third, new Event('error'));
+    });
+    await page.clock.runFor(10_000);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => ({ sources: window.streamSources.length, status: window.streamStatus }))).toEqual({ sources: 3, status: [] });
+    await page.evaluate(() => {
+        Reflect.deleteProperty(document, 'hidden');
+        window.ownedStream.dispose();
+    });
+});
