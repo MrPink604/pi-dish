@@ -358,3 +358,32 @@ test('a bot relay updates its registry claim atomically by replacement without t
   assert.ok(seenInos.size >= 2, `atomic rename replaces the claim inode (saw ${seenInos.size})`);
   await server.stop();
 });
+
+test('prompt and steer to a busy bot report queued: false so the UI does not enter compaction mode', { timeout: 180_000 }, async () => {
+  const home = makeHome();
+  const port = await freePort();
+  const server = await boot(home, port);
+  const fleet = await liveFleet(server, home);
+  fs.writeFileSync(path.join(home, 'hold'), '');
+  await prompt(server.base, fleet.route, 'First turn.');
+  await until(() => fs.existsSync(path.join(home, 'holding')), 'the bot is busy on its first turn');
+
+  const followUpRes = await post(server.base, fleet.route, { message: 'Second message.' });
+  assert.equal(followUpRes.status, 200);
+  assert.equal(record(record(await followUpRes.json()).result).queued, false, 'busy follow-up is not a compaction queue');
+
+  const steerRes = await fetch(`${server.base}/api/sessions/${encodeURIComponent(fleet.route)}/steer`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Urgent steer.' }),
+  });
+  assert.equal(steerRes.status, 200);
+  assert.equal(record(record(await steerRes.json()).result).queued, false, 'busy steer is not a compaction queue');
+
+  fs.rmSync(path.join(home, 'hold'));
+  await until(() => said(home, fleet.id, 'echo 1: First turn.') === 1
+    && said(home, fleet.id, 'echo 3: Urgent steer.') === 1, 'the held turn and queued messages are answered');
+  assert.deepEqual(
+    chat(home, fleet.id).filter(entry => entry.kind === 'user').map(entry => entry.text),
+    ['First turn.', 'Second message.', 'Urgent steer.'],
+  );
+  await server.stop();
+});

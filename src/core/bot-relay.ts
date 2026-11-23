@@ -247,11 +247,13 @@ async function main(): Promise<void> {
           // Images reach the model after the text; a message of images alone is a message.
           const images = botImages(cmd.images);
           if (!message && !images.length) return respond(sock, cmd, false, undefined, 'message required');
-          const queued = bot.busy;
           taking++;
           try { await bot.prompt(message, cmd.command === 'steer' || cmd.deliverAs === 'steer' ? 'steer' : 'followUp', images); } finally { taking--; }
           writeClaim();
-          return respond(sock, cmd, true, { queued });
+          // In the bridge protocol `queued: true` on prompt/steer specifically signals a
+          // compaction hold; bots never compact, so reporting `bot.busy` here would trap
+          // the browser UI in "Compacting context…".
+          return respond(sock, cmd, true, { queued: false });
         }
         case 'deliver': {
           // Durable input from pi-dish (room, cross-family conversation, routine, or CI).
