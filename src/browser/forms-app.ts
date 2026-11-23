@@ -486,7 +486,7 @@ function start(root: HTMLElement, token: string): void {
       const receipt = record(body) ? decodeReceipt(body.receipt) : null;
       if (receipt?.id === sent.submissionId && (response.status === 200 || response.status === 202)) return follow(sent, receipt);
       // Only the form API's own refusal ends this id: nothing was taken.
-      const refused = [400, 404, 409, 413].includes(response.status) && record(body) && typeof body.error === 'string';
+      const refused = [400, 401, 403, 404, 409, 413, 415].includes(response.status) && record(body) && typeof body.error === 'string';
       if (!refused) {
         // A success without a receipt, a proxy's page or a server error: ask whether this id was taken.
         const known = await lookup(sent.submissionId);

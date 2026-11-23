@@ -633,3 +633,34 @@ for (const [label, viewport, html] of [
     await tab.close();
   });
 }
+
+test('JSON 401/403/415 refusals clear pending state and re-enable submit', async ({ page, fleet }) => {
+  const { self } = fleet;
+  const published = await publish(self, 'json-refused', formHtml());
+  const prompts = () => self.commands.filter(command => command.command === 'prompt');
+  const formUrl = `${self.base}/forms/${published.token}`;
+  const tab = await page.context().newPage();
+  await tab.goto(formUrl);
+  const form = tab.locator('#pdfApp form.pdf');
+  const status = form.locator('.pdf-status');
+  const submit = form.locator('button[type="submit"]');
+  await expect(submit).toBeEnabled();
+
+  const refusedPost = `**/api/page-forms/${published.token}`;
+  for (const [httpStatus, message] of [
+    [401, 'Unauthorized: bearer token required'],
+    [403, 'this API answers only pi-dish\'s own pages'],
+    [415, 'expected application/json'],
+  ] as const) {
+    await tab.route(refusedPost, route => route.request().method() === 'POST'
+      ? route.fulfill({ status: httpStatus, contentType: 'application/json', body: JSON.stringify({ error: message }) })
+      : route.continue());
+    await submit.click();
+    await expect(status).toContainText(`Not sent: ${message}`);
+    expect(await pendingIn(tab, published.token), `JSON ${httpStatus} refusal clears pending id`).toBeNull();
+    await expect(submit, `Submit re-enables after ${httpStatus} refusal`).toBeEnabled();
+    await tab.unroute(refusedPost);
+  }
+  expect(prompts()).toHaveLength(0);
+  await tab.close();
+});
