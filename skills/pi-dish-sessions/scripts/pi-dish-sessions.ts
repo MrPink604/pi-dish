@@ -727,9 +727,10 @@ async function waitForSettled(base: string, host: string | null, id: string, sin
     const last = wireArray(window.messages).at(-1);
     const message = last === undefined ? null : core.record(last);
     const busy = session.turnInProgress === true || session.compacting === true;
-    if (!busy && (since === null || totalMessages > since)) {
+    if (since === null || totalMessages > since) {
+      // A question holds the agent mid-turn, so the bridge may still report it busy.
       if (session.askPending === true) return { state: 'waiting', totalMessages, message };
-      if (turnEnd(message, busy)) return { state: 'finished', totalMessages, message };
+      if (!busy && turnEnd(message, busy)) return { state: 'finished', totalMessages, message };
     }
     if (!session.isActive) return { state: 'inactive', totalMessages, message };
     const remaining = deadline - Date.now();

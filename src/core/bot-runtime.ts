@@ -256,9 +256,10 @@ export function settledWorker(session: unknown, window: unknown, since: number):
   const messages = Array.isArray(page.messages) ? page.messages : [];
   const last: unknown = messages.at(-1);
   const busy = row.turnInProgress === true || row.compacting === true;
-  if (!busy && totalMessages > since) {
+  if (totalMessages > since) {
+    // A question holds the agent mid-turn, so the bridge may still report it busy.
     if (row.askPending === true) return { state: 'waiting', totalMessages, text: messageText(last) };
-    const end = turnEnd(last, busy);
+    const end = busy ? null : turnEnd(last, busy);
     if (end) return { state: 'finished', totalMessages, ...turnAnswer(last, end) };
   }
   if (row.isActive !== true) return { state: 'inactive', totalMessages, text: messageText(last) };
@@ -1333,10 +1334,15 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         state: row.state === 'waiting' ? 'waiting' : 'finished', totalMessages: Number(row.totalMessages) || 0,
         ...(end ? turnAnswer(row.message, end) : { text: messageText(row.message) }),
       };
-    } finally {
+    } catch (error) {
       await mark(worker => { delete worker.waitingUntil; });
+      throw error;
     }
-    await mark(worker => { worker.seen = Math.max(worker.seen ?? 0, settled.totalMessages); });
+    // One commit: a watch poll between releasing the hold and recording `seen` would report this answer again.
+    await mark(worker => {
+      delete worker.waitingUntil;
+      worker.seen = Math.max(worker.seen ?? 0, settled.totalMessages);
+    });
     const shown = settled.state === 'waiting' ? 'waiting for an answer'
       : settled.failed === 'error' ? 'ended with an error' : settled.failed === 'aborted' ? 'aborted' : 'finished';
     return both(`# ${shown}: ${targetRef} · ${settled.totalMessages} messages\n${settled.text}`,

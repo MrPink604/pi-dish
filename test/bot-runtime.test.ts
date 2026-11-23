@@ -450,10 +450,14 @@ test('a worker that stops on a tool result is reported as stopped, and one with 
   other.respond(toolCall(other, 'spawn_worker', { name: 'asks', brief: 'Ask first.' }), other.faux.fauxAssistantMessage('Started asks.'), relay(other));
   await other.runtime.prompt('Ask first', 'followUp');
   await until(() => asking.polls() >= 1, 'the watcher polls');
+  // The dialog holds the agent mid-turn: the bridge publishes the question while the session is still busy.
+  asking.state.messages.push({ role: 'assistant', stopReason: 'toolUse', content: [{ type: 'text', text: 'Which branch?' }, { type: 'toolCall', id: 'q', name: 'ask', arguments: {} }] });
   asking.state.ask = true;
-  asking.step({ role: 'assistant', stopReason: 'toolUse', content: [{ type: 'text', text: 'Which branch?' }, { type: 'toolCall', id: 'q', name: 'ask', arguments: {} }] });
+  assert.equal(asking.state.busy, true);
   await until(() => reportsOf(other).length === 1, 'the question is reported');
   assert.equal(reportsOf(other)[0], `[worker report] "asks" (${WORKER_ID}) is waiting for an answer.\n\nWhich branch?`);
+  await severalPolls();
+  assert.equal(reportsOf(other).length, 1, 'the open question is reported once');
 });
 
 test('a worker turn that fails is reported as an error, not as finished', async t => {
@@ -596,6 +600,9 @@ test('the settle rule waits for the turn to end and for new messages', () => {
     { state: 'finished', totalMessages: 5, text: 'half', failed: 'aborted' });
   assert.equal(settledWorker({ isActive: false }, tail(bashResult), 4)?.state, 'inactive', 'a stopped session settles on any tail');
   assert.equal(settledWorker({ isActive: true, askPending: true }, tail(bashCall), 4)?.state, 'waiting', 'a pending question on a tool call');
+  assert.equal(settledWorker({ isActive: true, turnInProgress: true, askPending: true }, tail(bashCall), 4)?.state, 'waiting',
+    'a question while the dialog holds the turn');
+  assert.equal(settledWorker({ isActive: true, turnInProgress: true, askPending: true }, tail(bashCall), 5), null, 'an asked question, already reported');
 });
 
 test('a turn ends on an assistant message that is final', () => {

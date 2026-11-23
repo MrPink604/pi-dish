@@ -483,7 +483,7 @@ test('peer-session CLI wait exits non-zero when nothing new arrives in time', as
   });
 });
 
-interface WaitStep { busy?: boolean; active?: boolean; total: number; message: Record<string, unknown> }
+interface WaitStep { busy?: boolean; active?: boolean; ask?: boolean; total: number; message: Record<string, unknown> }
 
 /** A wait server whose n-th poll sees `steps[n]` (the last one from then on); the first resolve is the ref lookup. */
 function stepServer(steps: WaitStep[]) {
@@ -498,8 +498,8 @@ function stepServer(steps: WaitStep[]) {
     }
     if (url.startsWith('/api/sessions/resolve?')) {
       resolves++;
-      const { busy = false, active = true } = step();
-      res.end(JSON.stringify({ session: { id: 'w-1', isActive: active, name: 'Worker', turnInProgress: busy } }));
+      const { busy = false, active = true, ask = false } = step();
+      res.end(JSON.stringify({ session: { id: 'w-1', isActive: active, name: 'Worker', turnInProgress: busy, askPending: ask } }));
       return;
     }
     if (url === '/api/sessions/w-1/messages?limit=1') {
@@ -543,6 +543,18 @@ test('peer-session CLI wait shows a failed turn as such and refuses a stopped se
     assert.match(String(record(error).stderr ?? ''), /w-1 is not running and has no new answer/);
     return true;
   });
+});
+
+test('peer-session CLI wait returns a question the dialog holds while the turn is still busy', async t => {
+  const question = { role: 'assistant', stopReason: 'toolUse',
+    content: [{ type: 'text', text: 'Which branch?' }, { type: 'toolCall', id: 'q', name: 'ask', arguments: {} }] };
+  const { server, polls } = stepServer([{ busy: true, total: 3, message: bashResult }, { busy: true, ask: true, total: 4, message: question }]);
+  const base = await listenServer(server);
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+
+  const waited = await run(['wait', 'w-1', '--since', '2', '--timeout', '20'], base);
+  assert.equal(polls(), 2, 'a busy step waits; the question settles at once');
+  assert.equal(waited.stdout, '# waiting for an answer: w-1 · 4 messages\nWhich branch?\n');
 });
 
 test('peer-session CLI kb searches and reads the knowledge base on whichever host serves it', async t => {
