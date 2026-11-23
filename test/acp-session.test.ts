@@ -1097,3 +1097,30 @@ test('side-session notifications and requests arriving during open or after clos
   await until(() => events.some(e => e.event === 'turn_end'));
   assert.ok(assistantText(messages(events, 'assistant')).length > 0);
 });
+
+test('a reused import agent replays messages for every imported conversation, not only the first', async (t) => {
+  const sessionFiles: typeof import('../lib/session-files.js') = require('../lib/session-files.js');
+  const conv1 = { sessionId: '11111111-1111-4111-8111-111111111111', cwd: workDir, title: 'First import', updatedAt: '2026-11-23T10:00:00Z' };
+  const conv2 = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: workDir, title: 'Second import', updatedAt: '2026-11-23T10:05:00Z' };
+  const agent = await acp.createAcpImportAgent({
+    cwd: workDir,
+    command: process.execPath,
+    args: [FIXTURE],
+    env: { ...process.env, FAKE_AGY_SCRIPT: 'default', FAKE_AGY_LIST: JSON.stringify([conv1, conv2]) },
+  });
+  cleanup(t, agent);
+
+  const listed = await agent.listConversations();
+  assert.equal(listed.length, 2);
+
+  const file1 = path.join(tmp, 'import-1.jsonl');
+  const file2 = path.join(tmp, 'import-2.jsonl');
+  await agent.importConversation(listed[0], file1);
+  await agent.importConversation(listed[1], file2);
+
+  const msgs1 = sessionFiles.readSessionMessages(file1);
+  const msgs2 = sessionFiles.readSessionMessages(file2);
+  assert.ok(msgs1.length >= 6, `first imported mirror has messages (got ${msgs1.length})`);
+  assert.equal(msgs2.length, msgs1.length, `second imported mirror must preserve all messages (got ${msgs2.length} vs ${msgs1.length})`);
+  assert.ok(JSON.stringify(msgs2).includes('README.md contains a single heading.'));
+});

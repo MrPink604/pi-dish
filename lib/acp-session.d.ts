@@ -105,9 +105,13 @@ export declare class AcpSession extends TransportSession {
     private taskLogTimer;
     /** Sibling ACP session ids opened for ephemeral `/btw` side chats. */
     private sideSessionIds;
+    /** Tombstones for closed side-chat session ids so late/post-close frames stay isolated. */
+    private closedSideSessionIds;
+    /** Count of in-flight `openSideSession()` `session/new` requests. */
+    private openingSideSessions;
+    /** Session id currently being loaded by `_replayInto()`, never treated as a side session. */
+    private replayingSessionId;
     private sideListeners;
-    /** True once `_adoptSession` has bound `nativeSessionId` to the real ACP session id. */
-    private adopted;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
     /** True while a blocking (non-daemon, non-schedule) tool call has started and not yet terminated. */
@@ -122,12 +126,12 @@ export declare class AcpSession extends TransportSession {
     private _handleFrame;
     private _handleResponse;
     /**
-     * True when an inbound ACP notification/request carries a sessionId that belongs
-     * to a side session (active, opening, closing, or already closed) rather than
-     * this session's adopted main conversation. Never let such frames fall through
-     * into the main session's transcript or UI dialogs.
+     * True when an inbound ACP notification/request belongs to a known `/btw` side
+     * session (active, opening, closing, or closed tombstone). Never classifies an
+     * unrelated conversation (such as a second `session/load` replay on a reused
+     * import agent) as foreign.
      */
-    private _isForeignSession;
+    private _isSideSession;
     private _handleNotification;
     private _handleRequest;
     private _isPassiveToolCompletion;

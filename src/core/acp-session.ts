@@ -383,9 +383,13 @@ export class AcpSession extends TransportSession {
   declare private taskLogTimer: NodeJS.Timeout | null;
   /** Sibling ACP session ids opened for ephemeral `/btw` side chats. */
   declare private sideSessionIds: Set<string>;
+  /** Tombstones for closed side-chat session ids so late/post-close frames stay isolated. */
+  declare private closedSideSessionIds: Set<string>;
+  /** Count of in-flight `openSideSession()` `session/new` requests. */
+  declare private openingSideSessions: number;
+  /** Session id currently being loaded by `_replayInto()`, never treated as a side session. */
+  declare private replayingSessionId: string | null;
   declare private sideListeners: Map<string, (update: ProtocolRecord) => void>;
-  /** True once `_adoptSession` has bound `nativeSessionId` to the real ACP session id. */
-  declare private adopted: boolean;
 
   constructor(proc: ChildProcessWithoutNullStreams, cwd: string) {
     super();
@@ -394,7 +398,6 @@ export class AcpSession extends TransportSession {
     this.cwd = cwd;
     this.replaying = false;
     this.initialized = false;
-    this.adopted = false;
     this.id = crypto.randomUUID() as NativeSessionId;
     this.nativeSessionId = this.id;
     this.sessionFile = '';
@@ -430,6 +433,9 @@ export class AcpSession extends TransportSession {
     this.planEntries = [];
     this.taskLogTimer = null;
     this.sideSessionIds = new Set();
+    this.closedSideSessionIds = new Set();
+    this.openingSideSessions = 0;
+    this.replayingSessionId = null;
     this.sideListeners = new Map();
 
     // A failed spawn (ENOENT) emits only 'error': settle startup and drop timers.
@@ -605,20 +611,28 @@ export class AcpSession extends TransportSession {
   }
 
   /**
-   * True when an inbound ACP notification/request carries a sessionId that belongs
-   * to a side session (active, opening, closing, or already closed) rather than
-   * this session's adopted main conversation. Never let such frames fall through
-   * into the main session's transcript or UI dialogs.
+   * True when an inbound ACP notification/request belongs to a known `/btw` side
+   * session (active, opening, closing, or closed tombstone). Never classifies an
+   * unrelated conversation (such as a second `session/load` replay on a reused
+   * import agent) as foreign.
    */
-  private _isForeignSession(sid: string): boolean {
-    return !!sid && (this.sideSessionIds.has(sid) || (this.adopted && sid !== this.nativeSessionId));
+  private _isSideSession(sid: string): boolean {
+    if (!sid) return false;
+    if (this.replayingSessionId && sid === this.replayingSessionId) return false;
+    if (this.sideSessionIds.has(sid) || this.closedSideSessionIds.has(sid)) return true;
+    if (this.openingSideSessions > 0 && sid !== this.nativeSessionId) {
+      this.sideSessionIds.add(sid);
+      recordAgySideChatId(sid);
+      return true;
+    }
+    return false;
   }
 
   private _handleNotification(method: string, params: unknown): void {
     if (method !== 'session/update') return;
     const payload = asRecord(params);
     const sid = text(payload.sessionId);
-    if (this._isForeignSession(sid)) {
+    if (this._isSideSession(sid)) {
       const listener = this.sideListeners.get(sid);
       if (listener) listener(asRecord(payload.update));
       return;
@@ -631,7 +645,7 @@ export class AcpSession extends TransportSession {
     const method = text(frame.method);
     const params = asRecord(frame.params);
     const sid = text(params.sessionId);
-    if (this._isForeignSession(sid)) {
+    if (this._isSideSession(sid)) {
       if (method === 'elicitation/create') this._respond(id, { action: 'cancel' });
       else if (method === 'session/request_permission') this._respond(id, { outcome: { outcome: 'cancelled' } });
       else this._respondError(id, -32601, `Unsupported side-session ACP method: ${method}`);
@@ -1260,7 +1274,6 @@ export class AcpSession extends TransportSession {
     if (!validSessionId(sessionId)) throw new TypeError('Invalid Antigravity session id');
     this.id = sessionId as NativeSessionId;
     this.nativeSessionId = this.id;
-    this.adopted = true;
     this.sessionFile = sessionFile;
     this.configOptions = Array.isArray(result.configOptions) ? result.configOptions.filter(isRecord) as ProtocolRecord[] : [];
     this.modes = isRecord(result.modes) ? result.modes : null;
@@ -1368,11 +1381,17 @@ export class AcpSession extends TransportSession {
    */
   async openSideSession(): Promise<string> {
     if (!this.alive) throw new Error('Antigravity session is not running');
-    const result = asRecord(await this._request('session/new', { cwd: this.cwd, mcpServers: [] }, { timeout: 30000 }));
-    const sideId = text(result.sessionId);
-    if (!sideId) throw new Error('Antigravity did not return a side-chat session id');
-    this.sideSessionIds.add(sideId);
-    recordAgySideChatId(sideId);
+    this.openingSideSessions++;
+    let sideId: string;
+    try {
+      const result = asRecord(await this._request('session/new', { cwd: this.cwd, mcpServers: [] }, { timeout: 30000 }));
+      sideId = text(result.sessionId);
+      if (!sideId) throw new Error('Antigravity did not return a side-chat session id');
+      this.sideSessionIds.add(sideId);
+      recordAgySideChatId(sideId);
+    } finally {
+      this.openingSideSessions--;
+    }
     const model = this._currentModelId();
     const level = this._configValue('thought_level');
     if (model) {
@@ -1427,6 +1446,8 @@ export class AcpSession extends TransportSession {
 
   async closeSideSession(sideId: string): Promise<void> {
     this.sideListeners.delete(sideId);
+    this.closedSideSessionIds.add(sideId);
+    recordAgySideChatId(sideId);
     try {
       if (this.alive) {
         await this._request('session/close', { sessionId: sideId }, { timeout: 5000 }).catch(() => {});
@@ -1459,12 +1480,14 @@ export class AcpSession extends TransportSession {
       for (const frame of this.earlyFrames) transcript.appendRaw(frame.dir, frame.msg);
       this.earlyFrames = [];
       this.replaying = true;
+      this.replayingSessionId = sessionId;
       let result: ProtocolRecord;
       try {
         result = asRecord(await this._request('session/load',
           { sessionId, cwd, mcpServers: [] }, { timeout: 120000 }));
       } finally {
         this.replaying = false;
+        this.replayingSessionId = null;
       }
       transcript.flushReplay();
       if (!text(result.title) && options.title) result.title = options.title;
