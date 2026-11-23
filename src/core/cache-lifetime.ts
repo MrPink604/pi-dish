@@ -411,10 +411,14 @@ function extractObservations(entries: SessionEntries, file: string,
     const contextTokens = input + read + wrote;
     const anchor = chain.get(identity);
     const explicit = read > 0 || wrote > 0;
+    const explicitWriteProvider = isAnthropicCacheProvider(target.provider)
+      || target.api === 'bedrock-converse-stream'
+      || target.provider === 'amazon-bedrock';
     // Providers with implicit prompt caching (Gemini, OpenAI, DeepSeek, ZAI)
     // report cacheRead=0, cacheWrite=0, input=N on a cold miss. Treat that as
-    // a cold probe once the chain is already anchored (or for Gemini implicit caching).
-    const implicitMiss = !explicit && anchor !== undefined && input >= IMPLICIT_MISS_MIN_INPUT;
+    // a cold probe once the chain is already anchored (or for Gemini implicit caching),
+    // but never for explicit-cache providers where cacheRead=0, cacheWrite=0 means caching was off.
+    const implicitMiss = !explicit && !explicitWriteProvider && anchor !== undefined && input >= IMPLICIT_MISS_MIN_INPUT;
     if (!explicit && !implicitMiss && !hasCacheActivity(attributed)) continue;
     if (anchor && ts > anchor.ts) {
       // A sharp drop in total prompt size with zero cache read/write marks a

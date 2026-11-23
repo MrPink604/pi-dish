@@ -153,7 +153,7 @@ export function resolveCacheTarget(message: Record<string, unknown>): CacheTarge
 export function cacheTier1h(usage: Record<string, unknown>, anthropic = false): boolean {
   const write = cacheTokens(usage, 'cacheWrite');
   if (write <= 0) return false;
-  if (usage.cacheWrite1h !== undefined || !anthropic) return cacheTokens(usage, 'cacheWrite1h') >= write;
+  if (usage.cacheWrite1h !== undefined || !anthropic) return cacheTokens(usage, 'cacheWrite1h') > write / 2;
   const cost = isRecord(usage.cost) ? usage.cost : null;
   const input = finiteNumber(usage.input), writeCost = finiteNumber(cost?.cacheWrite), inputCost = finiteNumber(cost?.input);
   if (!input || input <= 0 || !writeCost || !inputCost || inputCost <= 0) return false;

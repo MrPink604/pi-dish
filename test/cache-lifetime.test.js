@@ -313,3 +313,31 @@ test('a bot on Claude Code serves Anthropic\'s 1h window until its context windo
     const next = SM.sessionInfoFromEntries([turn(t0, { write: 4_000, write1h: 4_000 }), rollover, turn(t0 + 3 * MIN, { read: 5_000, write: 9_000, write1h: 9_000 })]);
     assert.equal((0, test_types_js_1.present)(next.cacheExpiry).expiresAt, t0 + 3 * MIN + 60 * MIN, 'the new window warms its own cache');
 });
+test('mixed 1h/5m cache writes follow the dominating tier and explicit-cache providers ignore non-cached turns', () => {
+    const t0 = Date.now() - 20 * MIN;
+    // Mixed 1h + 5m write where 1h dominates (> 50%) still classifies as 1h; minority 1h stays 5m.
+    assert.equal(SM.cacheTier1h({ cacheWrite: 120_500, cacheWrite1h: 120_000 }, true), true);
+    assert.equal(SM.cacheTier1h({ cacheWrite: 1_000, cacheWrite1h: 200 }, true), false);
+    const mixed = SM.sessionInfoFromEntries([
+        cacheMsg(t0, { write: 120_500, write1h: 120_000 }, 'claude-code', 'claude-opus-5-5', 'claude-code-stream-json'),
+    ]);
+    const expiry = (0, test_types_js_1.present)(mixed.cacheExpiry);
+    assert.equal(expiry.retention, '1h');
+    assert.equal(expiry.tier, '1h');
+    // An explicit-cache provider (Anthropic) returning cacheRead=0, cacheWrite=0 with large input
+    // is a non-cached call, not an implicit-cache cold miss.
+    const model = 'claude-opus-explicit-guard';
+    observe([
+        cacheMsg(t0, { write: 50_000, write1h: 50_000 }, 'anthropic', model, 'anthropic-messages'),
+        {
+            type: 'message',
+            timestamp: t0 + 5 * MIN,
+            message: {
+                role: 'assistant', api: 'anthropic-messages', provider: 'anthropic', model, timestamp: t0 + 5 * MIN, content: [],
+                usage: { input: 20_000, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 },
+            },
+        },
+    ]);
+    const identity = ['anthropic-messages', 'anthropic', model].join(SEP);
+    assert.equal(snapshotFor(identity), undefined, 'non-cached Anthropic turn does not record a false miss');
+});
