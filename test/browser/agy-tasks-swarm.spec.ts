@@ -442,8 +442,13 @@ test('Interactive Swarm and Tasks controls inside Subagents view dispatch coordi
     return route.fulfill({ json: { ok: true } });
   });
   await page.route(`**/api/sessions/${ROOT}/model`, route => {
-    modelSwitches.push(route.request().postDataJSON());
-    return route.fulfill({ json: { ok: true } });
+    const body = route.request().postDataJSON() as { modelId?: unknown } | null;
+    modelSwitches.push(body);
+    const modelId = typeof body?.modelId === 'string' ? body.modelId : '';
+    if (!modelId.includes('/')) {
+      return route.fulfill({ status: 400, json: { error: `Invalid model ID: ${modelId}` } });
+    }
+    return route.fulfill({ json: { success: true } });
   });
 
   const confirms: string[] = [];
@@ -549,12 +554,12 @@ test('Interactive Swarm and Tasks controls inside Subagents view dispatch coordi
   expect(confirms[confirms.length - 1]).toContain('DELETE');
   expect(prompts[5].message).toContain('action:"kill"');
 
-  // Coordinator model switch hits /model directly.
+  // Coordinator model switch hits /model directly with a provider/id selector.
   await page.locator('#subagentsTree .lineage-row', { hasText: 'Coordinator' }).click();
   await expect(page.locator('#subagentsMemberModelSelect')).toBeEnabled();
   await page.locator('#subagentsMemberModelSelect').selectOption('gemini-3.8-flash');
   await expect.poll(() => modelSwitches.length).toBe(1);
-  expect(modelSwitches[0]).toEqual({ provider: 'google-antigravity', modelId: 'gemini-3.8-flash' });
+  expect(modelSwitches[0]).toEqual({ modelId: 'google-antigravity/gemini-3.8-flash' });
 
   // Waiting narrator worker: model switch routes via swarm(action:"model") and Ping button is visible.
   await page.locator('#subagentsTree .lineage-row', { hasText: '@narrator' }).click();

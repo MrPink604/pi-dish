@@ -430,8 +430,13 @@ const lineagePayload = {
         return route.fulfill({ json: { ok: true } });
     });
     await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/model`, route => {
-        modelSwitches.push(route.request().postDataJSON());
-        return route.fulfill({ json: { ok: true } });
+        const body = route.request().postDataJSON();
+        modelSwitches.push(body);
+        const modelId = typeof body?.modelId === 'string' ? body.modelId : '';
+        if (!modelId.includes('/')) {
+            return route.fulfill({ status: 400, json: { error: `Invalid model ID: ${modelId}` } });
+        }
+        return route.fulfill({ json: { success: true } });
     });
     const confirms = [];
     page.on('dialog', async (dialog) => {
@@ -519,12 +524,12 @@ const lineagePayload = {
     await fixtures_js_1.expect.poll(() => prompts.length).toBe(6);
     (0, fixtures_js_1.expect)(confirms[confirms.length - 1]).toContain('DELETE');
     (0, fixtures_js_1.expect)(prompts[5].message).toContain('action:"kill"');
-    // Coordinator model switch hits /model directly.
+    // Coordinator model switch hits /model directly with a provider/id selector.
     await page.locator('#subagentsTree .lineage-row', { hasText: 'Coordinator' }).click();
     await (0, fixtures_js_1.expect)(page.locator('#subagentsMemberModelSelect')).toBeEnabled();
     await page.locator('#subagentsMemberModelSelect').selectOption('gemini-3.8-flash');
     await fixtures_js_1.expect.poll(() => modelSwitches.length).toBe(1);
-    (0, fixtures_js_1.expect)(modelSwitches[0]).toEqual({ provider: 'google-antigravity', modelId: 'gemini-3.8-flash' });
+    (0, fixtures_js_1.expect)(modelSwitches[0]).toEqual({ modelId: 'google-antigravity/gemini-3.8-flash' });
     // Waiting narrator worker: model switch routes via swarm(action:"model") and Ping button is visible.
     await page.locator('#subagentsTree .lineage-row', { hasText: '@narrator' }).click();
     await (0, fixtures_js_1.expect)(page.locator('#subagentsMemberPingBtn')).toBeVisible();

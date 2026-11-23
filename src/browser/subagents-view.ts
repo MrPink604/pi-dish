@@ -1,4 +1,4 @@
-import { errorMessage, responseError, sameEndpoint, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
+import { errorMessage, responseError, sameEndpoint, sendJson, setSessionModel, type ApiRequest, type HostEndpoint } from './api-client';
 import { requiredElement } from './dom';
 import type { SelectionOwner, SessionState } from './session-state';
 import { formatRelativeTime } from './helper-format';
@@ -42,6 +42,7 @@ interface SwarmModelOption {
   readonly id: string;
   readonly name: string;
   readonly provider: string;
+  readonly selector: string;
 }
 
 interface MentionCandidate {
@@ -89,7 +90,9 @@ function decodeModelOptions(raw: unknown): SwarmModelOption[] {
     const id = text(row.id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, name: text(row.name) || id, provider: text(row.provider) || 'google-antigravity' });
+    const provider = text(row.provider) || 'google-antigravity';
+    const selector = text(row.selector) || `${provider}/${id}`;
+    out.push({ id, name: text(row.name) || id, provider, selector });
   }
   return out;
 }
@@ -925,12 +928,10 @@ export function createSubagentsView(options: {
     if (!owns() || !viewEndpoint || !swarmData.coordinatorId || !modelId || modelId === member.model) return;
     if (member.name === 'coordinator') {
       const chosen = coordModels.find(m => m.id === modelId);
+      const selector = chosen?.selector || `${chosen?.provider || 'google-antigravity'}/${modelId}`;
       const endpoint = viewEndpoint, coordId = swarmData.coordinatorId;
       try {
-        await sendJson(options.request, endpoint, `/api/sessions/${encodeURIComponent(coordId)}/model`, {
-          provider: chosen?.provider || 'google-antigravity',
-          modelId,
-        });
+        await setSessionModel(options.request, endpoint, coordId, selector);
         if (!owns()) return;
         options.status(`Switched coordinator model to ${chosen?.name || modelId}`, 'success');
         scheduleRapidRefresh(false);
