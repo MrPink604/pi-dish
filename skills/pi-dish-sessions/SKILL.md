@@ -67,7 +67,10 @@ a citation: `read` the session before reasoning about what it did, and
 - **Waiting.** `wait` settles when the turn is over and the transcript holds
   more than `--since` messages. Pass `--since 0` after a spawn, and after
   `send` the `totalMessages` that `show <ref> --limit 1 --json` reported
-  before it; without it an idle session returns its previous answer.
+  before it; without it an idle session returns its previous answer. Only a
+  final assistant message ends a turn: a tool result or a tool call between
+  steps keeps it waiting, and a failed turn prints `ended with an error` or
+  `aborted` instead of `finished`.
 - **Knowledge base.** Workers do not receive the bots' injected index, so run
   `kb read` (the topic index with one-line summaries) or `kb search <terms…>`
   before re-deriving how an unfamiliar host, service, or project is set up.

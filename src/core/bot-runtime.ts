@@ -28,6 +28,7 @@ import type { BotPlace, BotRow } from './bot-registry';
 import type { RosterBot } from './bot-handlers';
 import type { BotMirror } from './bot-mirror';
 import { record as isRecord } from './helper-values';
+import { turnEnd, type TurnEnd } from './session-api';
 import {
   MISSING_SCOPE_ERROR,
   type KnowledgeHit,
@@ -95,6 +96,8 @@ export interface SettledWorker {
   state: 'finished' | 'waiting' | 'inactive';
   totalMessages: number;
   text: string;
+  /** A finished turn that failed: its answer is the error, not a result. */
+  failed?: 'error' | 'aborted';
 }
 
 /** Text blocks of a Pi message, joined; tool calls and thinking are left out. */
@@ -239,9 +242,12 @@ export function botImageRefusal(images: readonly BotImage[], held: ImageLoad, in
 /**
  * The settle rule `pi-dish-sessions wait` uses: a worker has settled when it is
  * not working or compacting, its transcript holds more than `since` messages,
- * and its newest message is not the user's (a prompt not picked up yet). A
- * pending question counts as settled. `session` is the resolve row; `window` is
- * `/messages?limit=1`. Null means keep waiting.
+ * and its newest message ends the turn (`turnEnd`): a tool result, a notice or
+ * a tool call between steps does not, nor does a prompt not picked up yet. A
+ * pending question counts as settled. A stopped session without such an end
+ * settles as inactive. Only the newest message is read, so a step in
+ * between never brings back an older answer. `session` is the resolve row;
+ * `window` is `/messages?limit=1`. Null means keep waiting.
  */
 export function settledWorker(session: unknown, window: unknown, since: number): SettledWorker | null {
   const row = isRecord(session) ? session : {};
@@ -252,10 +258,19 @@ export function settledWorker(session: unknown, window: unknown, since: number):
   const busy = row.turnInProgress === true || row.compacting === true;
   if (!busy && totalMessages > since) {
     if (row.askPending === true) return { state: 'waiting', totalMessages, text: messageText(last) };
-    if (isRecord(last) && last.role !== 'user') return { state: 'finished', totalMessages, text: messageText(last) };
+    const end = turnEnd(last, busy);
+    if (end) return { state: 'finished', totalMessages, ...turnAnswer(last, end) };
   }
   if (row.isActive !== true) return { state: 'inactive', totalMessages, text: messageText(last) };
   return null;
+}
+
+/** The answer of a turn `message` ended: its text; for a failed turn, how it failed, and the error when it said nothing. */
+function turnAnswer(message: unknown, end: TurnEnd): Pick<SettledWorker, 'text' | 'failed'> {
+  const text = messageText(message);
+  if (end !== 'error' && end !== 'aborted') return { text };
+  const error = isRecord(message) && typeof message.errorMessage === 'string' ? message.errorMessage : '';
+  return { text: text || error, failed: end };
 }
 
 export interface WorkerRecord {
@@ -1126,9 +1141,11 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
           if (taken && !stopped && !expired) return later(fresh.totalMessages);
           const answered = taken ? null : fresh;
           const heading = answered?.state === 'waiting' ? 'is waiting for an answer'
+            : answered?.failed === 'error' ? 'ended with an error'
+            : answered?.failed === 'aborted' ? 'was aborted'
             : answered ? (number === 1 ? 'finished' : 'finished another turn')
-              : stopped ? (number === 1 && !taken ? 'stopped without a final answer' : 'has stopped')
-                : 'is still working after 24 hours';
+            : stopped ? (number === 1 && !taken ? 'stopped without a final answer' : 'has stopped')
+            : 'is still working after 24 hours';
           const parts = [`[worker report] "${name}" (${ref}) ${heading}.`];
           if (answered) {
             parts.push(answered.text.length > REPORT_CHARS
@@ -1306,17 +1323,23 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     }, callContext);
     // Past the wait, plus time for the CLI to start and answer, the watch reports as usual.
     await mark(worker => { worker.waitingUntil = api.now() + (secs + 30) * 1000; });
-    let settled: { state: 'finished' | 'waiting'; totalMessages: number; text: string };
+    let settled: { state: 'finished' | 'waiting'; totalMessages: number; text: string; failed?: 'error' | 'aborted' };
     try {
       const argv = ['wait', targetRef, '--timeout', String(secs), '--json', ...(since === undefined ? [] : ['--since', String(Math.max(0, Math.floor(since)))])];
       const data: unknown = JSON.parse(await sessions(argv, callContext.abortSignal));
       const row = isRecord(data) ? data : {};
-      settled = { state: row.state === 'waiting' ? 'waiting' : 'finished', totalMessages: Number(row.totalMessages) || 0, text: messageText(row.message) };
+      const end = row.state === 'waiting' ? null : turnEnd(row.message, false);
+      settled = {
+        state: row.state === 'waiting' ? 'waiting' : 'finished', totalMessages: Number(row.totalMessages) || 0,
+        ...(end ? turnAnswer(row.message, end) : { text: messageText(row.message) }),
+      };
     } finally {
       await mark(worker => { delete worker.waitingUntil; });
     }
     await mark(worker => { worker.seen = Math.max(worker.seen ?? 0, settled.totalMessages); });
-    return both(`# ${settled.state === 'waiting' ? 'waiting for an answer' : 'finished'}: ${targetRef} · ${settled.totalMessages} messages\n${settled.text}`,
+    const shown = settled.state === 'waiting' ? 'waiting for an answer'
+      : settled.failed === 'error' ? 'ended with an error' : settled.failed === 'aborted' ? 'aborted' : 'finished';
+    return both(`# ${shown}: ${targetRef} · ${settled.totalMessages} messages\n${settled.text}`,
       { action: 'wait', ref: targetRef, ...settled });
   }
 
@@ -1437,7 +1460,11 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       }),
       obj({ action: lit('send'), ref: str(), response: anyValue({ description: 'The host\'s answer: held and until when it holds the message' }) }),
       obj({ action: lit('close'), ref: str(), alreadyClosed: bool() }),
-      obj({ action: lit('wait'), ref: str(), state: oneOf(['finished', 'waiting'] as const), totalMessages: num(), text: str({ description: 'Its final answer' }) }),
+      obj({
+        action: lit('wait'), ref: str(), state: oneOf(['finished', 'waiting'] as const), totalMessages: num(),
+        text: str({ description: 'Its final answer; for a failed turn the error' }),
+        failed: opt(oneOf(['error', 'aborted'] as const, { description: 'Set when the turn ended with an error or was aborted' })),
+      }),
     ]),
     // Reads rerun after a restart, so a script's wait carries on; send guards itself below, and close is idempotent.
     replay: 'safe',

@@ -23,7 +23,7 @@ try {
 const {
   makeFail, print, defaultBase, discoverSession, fleetCallerId, request, api, jsonInit,
   requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef,
-  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, wireArray,
+  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, turnEnd, wireArray,
 } = core;
 
 const fail = makeFail('pi-dish-sessions');
@@ -713,7 +713,8 @@ interface SettledTurn {
 /**
  * Poll a session until its turn is over. `since` is a transcript length from
  * before the work was sent: without it, a prompt the host is still holding
- * would settle on the previous answer.
+ * would settle on the previous answer. The newest message must end the turn
+ * (`turnEnd`): a tool result or a tool call between steps keeps it waiting.
  */
 async function waitForSettled(base: string, host: string | null, id: string, since: number | null, timeoutMs: number): Promise<SettledTurn> {
   const deadline = Date.now() + timeoutMs;
@@ -728,8 +729,7 @@ async function waitForSettled(base: string, host: string | null, id: string, sin
     const busy = session.turnInProgress === true || session.compacting === true;
     if (!busy && (since === null || totalMessages > since)) {
       if (session.askPending === true) return { state: 'waiting', totalMessages, message };
-      // A user message on top means the prompt has not been picked up yet.
-      if (message && message.role !== 'user') return { state: 'finished', totalMessages, message };
+      if (turnEnd(message, busy)) return { state: 'finished', totalMessages, message };
     }
     if (!session.isActive) return { state: 'inactive', totalMessages, message };
     const remaining = deadline - Date.now();
@@ -1551,9 +1551,14 @@ async function main() {
       if (settled.state === 'inactive') throw new Error(`${shownRef} is not running and has no new answer; resume it first`);
       if (args.json) return print({ host, id, ref: target.ref || null, ...settled }, true);
       const content = settled.message?.content;
-      const text = typeof content === 'string' ? content
+      const said = typeof content === 'string' ? content
         : wireArray(content).flatMap(part => core.record(part).type === 'text' ? [String(core.record(part).text ?? '')] : []).join('\n');
-      process.stdout.write(`# ${settled.state === 'waiting' ? 'waiting for an answer' : 'finished'}: ${shownRef} · ${settled.totalMessages} messages\n`);
+      const failed = settled.state === 'finished' ? turnEnd(settled.message, false) : null;
+      const heading = settled.state === 'waiting' ? 'waiting for an answer'
+        : failed === 'error' ? 'ended with an error' : failed === 'aborted' ? 'aborted' : 'finished';
+      const error = failed === 'error' || failed === 'aborted' ? String(settled.message?.errorMessage ?? '') : '';
+      const text = said || error;
+      process.stdout.write(`# ${heading}: ${shownRef} · ${settled.totalMessages} messages\n`);
       writeCapped(`${text}\n`, outputBounds(args, null).chars, '--max-chars N or --full for more.');
       return;
     }

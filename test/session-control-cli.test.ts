@@ -483,6 +483,68 @@ test('peer-session CLI wait exits non-zero when nothing new arrives in time', as
   });
 });
 
+interface WaitStep { busy?: boolean; active?: boolean; total: number; message: Record<string, unknown> }
+
+/** A wait server whose n-th poll sees `steps[n]` (the last one from then on); the first resolve is the ref lookup. */
+function stepServer(steps: WaitStep[]) {
+  let resolves = 0;
+  const step = () => steps[Math.min(Math.max(resolves - 2, 0), steps.length - 1)]!;
+  const server = http.createServer((req, res) => {
+    const url = req.url ?? '';
+    res.setHeader('Content-Type', 'application/json');
+    if (url === '/api/hosts') {
+      res.end(JSON.stringify({ hosts: [{ self: true, name: null, label: 'self', reachable: true, capabilities: { sessions: true, resolve: true } }] }));
+      return;
+    }
+    if (url.startsWith('/api/sessions/resolve?')) {
+      resolves++;
+      const { busy = false, active = true } = step();
+      res.end(JSON.stringify({ session: { id: 'w-1', isActive: active, name: 'Worker', turnInProgress: busy } }));
+      return;
+    }
+    if (url === '/api/sessions/w-1/messages?limit=1') {
+      res.end(JSON.stringify({ totalMessages: step().total, messages: [step().message] }));
+      return;
+    }
+    res.statusCode = 404; res.end(JSON.stringify({ error: 'not found' }));
+  });
+  return { server, polls: () => resolves - 1 };
+}
+
+const bashResult = { role: 'toolResult', toolCallId: 'c1', toolName: 'bash', content: [{ type: 'text', text: 'ok 42 tests' }] };
+const bashCall = { role: 'assistant', stopReason: 'toolUse',
+  content: [{ type: 'text', text: 'Now the lint.' }, { type: 'toolCall', id: 'c2', name: 'bash', arguments: { command: 'npm run lint' } }] };
+
+test('peer-session CLI wait keeps polling past an idle-looking step until a turn-ending answer', async t => {
+  const { server, polls } = stepServer([
+    { total: 3, message: bashResult },
+    { total: 4, message: bashCall },
+    { total: 5, message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'All green.' }] } },
+  ]);
+  const base = await listenServer(server);
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+
+  const waited = await run(['wait', 'w-1', '--since', '2', '--timeout', '20'], base);
+  assert.equal(polls(), 3, 'a tool result and a tool call with prose do not settle it');
+  assert.equal(waited.stdout, '# finished: w-1 · 5 messages\nAll green.\n');
+});
+
+test('peer-session CLI wait shows a failed turn as such and refuses a stopped session on a tool result', async t => {
+  const failed = stepServer([{ total: 3, message: { role: 'assistant', stopReason: 'error', content: [], errorMessage: '429 rate limited' } }]);
+  const failedBase = await listenServer(failed.server);
+  t.after(() => new Promise<void>((resolve, reject) => failed.server.close(error => error ? reject(error) : resolve())));
+  const waited = await run(['wait', 'w-1', '--since', '2', '--timeout', '20'], failedBase);
+  assert.equal(waited.stdout, '# ended with an error: w-1 · 3 messages\n429 rate limited\n');
+
+  const dead = stepServer([{ active: false, total: 3, message: bashResult }]);
+  const deadBase = await listenServer(dead.server);
+  t.after(() => new Promise<void>((resolve, reject) => dead.server.close(error => error ? reject(error) : resolve())));
+  await assert.rejects(() => run(['wait', 'w-1', '--since', '2', '--timeout', '20'], deadBase), (error: unknown) => {
+    assert.match(String(record(error).stderr ?? ''), /w-1 is not running and has no new answer/);
+    return true;
+  });
+});
+
 test('peer-session CLI kb searches and reads the knowledge base on whichever host serves it', async t => {
   let hubServes = true;
   const server = http.createServer((req, res) => {

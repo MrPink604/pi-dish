@@ -42,7 +42,7 @@ __export(pi_dish_client_exports, {
   parseCommandLine: () => parseCommandLine,
   parseRef: () => parseRef,
   print: () => print,
-  record: () => record,
+  record: () => record2,
   registryEntries: () => registryEntries,
   registryRouteId: () => registryRouteId,
   renderTranscript: () => renderTranscript,
@@ -54,10 +54,16 @@ __export(pi_dish_client_exports, {
   sessionRows: () => sessionRows,
   stableSessionRef: () => stableSessionRef,
   stringValue: () => stringValue,
+  turnEnd: () => turnEnd,
   wireArray: () => wireArray
 });
 module.exports = __toCommonJS(pi_dish_client_exports);
 var import_node_child_process = require("node:child_process");
+
+// src/core/helper-values.ts
+function record(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
 
 // src/core/helper-refs.ts
 function uniqueSessionPrefix(id, peerIds, minLen = 8) {
@@ -157,25 +163,41 @@ var SESSION_REF_PREAMBLE = [
   "<ref>). Never guess what a referenced session holds \u2014 read it."
 ].join("\n");
 
+// src/core/session-api.ts
+function text(value) {
+  return typeof value === "string" && value.length > 0;
+}
+function turnEnd(message, busy) {
+  if (!record(message) || message.role !== "assistant") return null;
+  const reason = message.stopReason;
+  if (reason === "error" || reason === "aborted") return reason;
+  const blocks = Array.isArray(message.content) ? message.content : [];
+  if (blocks.some((block) => record(block) && (block.type === "toolCall" || block.type === "tool_use"))) return null;
+  if (reason === "length") return reason;
+  const said = typeof message.content === "string" ? message.content.trim() !== "" : blocks.some((block) => record(block) && block.type === "text" && text(block.text) && block.text.trim() !== "");
+  if (reason === "stop") return said || !busy ? "stop" : null;
+  return (reason === void 0 || reason === null || reason === "") && said ? "stop" : null;
+}
+
 // skills/lib/pi-dish-client.ts
 var fs = require("node:fs");
 var path = require("node:path");
 var os = require("node:os");
-function record(value) {
+function record2(value) {
   if (value == null) throw new TypeError(`Cannot read properties of ${value}`);
   return Object(value);
 }
 function errorMessage(value) {
-  return String(record(value ?? {}).message ?? value);
+  return String(record2(value ?? {}).message ?? value);
 }
 function errorStatus(value) {
-  return record(value ?? {}).status;
+  return record2(value ?? {}).status;
 }
 function errorBody(value) {
-  return record(record(value ?? {}).body ?? {});
+  return record2(record2(value ?? {}).body ?? {});
 }
 function isSessionRow(value) {
-  return typeof record(value ?? {}).id === "string" && !!record(value ?? {}).id;
+  return typeof record2(value ?? {}).id === "string" && !!record2(value ?? {}).id;
 }
 function sessionRows(value) {
   return Array.isArray(value) ? value.filter(isSessionRow) : [];
@@ -184,14 +206,14 @@ function wireArray(value) {
   return Array.isArray(value) ? value : [];
 }
 function fleetHost(value) {
-  return record(value);
+  return record2(value);
 }
 function stringValue(value, message) {
   if (typeof value !== "string") throw new TypeError(message);
   return value;
 }
 function isRegistryEntry(value) {
-  return !!record(value ?? {}).sessionId;
+  return !!record2(value ?? {}).sessionId;
 }
 var HttpError = class extends Error {
   constructor(message, status, body) {
@@ -262,7 +284,7 @@ function pidAlive(pid) {
     process.kill(pid, 0);
     return true;
   } catch (e) {
-    return record(e).code === "EPERM";
+    return record2(e).code === "EPERM";
   }
 }
 function registryEntries() {
@@ -286,7 +308,7 @@ function registryEntries() {
   });
 }
 function registryRouteId(entry) {
-  const harnessId = record(entry?.wrapper ?? {}).harnessId || entry?.harnessId || "pi";
+  const harnessId = record2(entry?.wrapper ?? {}).harnessId || entry?.harnessId || "pi";
   const nativeSessionId2 = entry?.nativeSessionId || entry?.sessionId;
   if (harnessId === "pi") return nativeSessionId2;
   return "~sk1_" + Buffer.from(JSON.stringify([harnessId, nativeSessionId2]), "utf8").toString("base64url");
@@ -351,7 +373,7 @@ function authHeaders(extra) {
   return headers;
 }
 function httpError(status, data, statusText) {
-  return new HttpError(String(record(data ?? {}).error || `HTTP ${status}${statusText ? ` ${statusText}` : ""}`), status, data);
+  return new HttpError(String(record2(data ?? {}).error || `HTTP ${status}${statusText ? ` ${statusText}` : ""}`), status, data);
 }
 async function request(base, pathname, init = {}) {
   const response = await fetch(new URL(pathname, base), { ...init, headers: authHeaders(init.headers) });
@@ -366,16 +388,16 @@ async function request(base, pathname, init = {}) {
 }
 async function requestText(base, pathname, init = {}) {
   const response = await fetch(new URL(pathname, base), { ...init, headers: authHeaders(init.headers) });
-  const text = await response.text();
+  const text2 = await response.text();
   if (!response.ok) {
     let data = null;
     try {
-      data = JSON.parse(text);
+      data = JSON.parse(text2);
     } catch {
     }
     throw httpError(response.status, data && typeof data === "object" ? data : null);
   }
-  return { text, status: response.status };
+  return { text: text2, status: response.status };
 }
 function hostPath(host, pathname) {
   return host ? `/hosts/${encodeURIComponent(String(host))}${pathname}` : pathname;
@@ -405,13 +427,13 @@ function jsonInit(body, headers = {}) {
 var fleetPromise = null;
 function fleetHosts(base) {
   if (!fleetPromise) {
-    fleetPromise = request(base, "/api/hosts").then(({ data }) => wireArray(record(data ?? {}).hosts)).catch(() => null);
+    fleetPromise = request(base, "/api/hosts").then(({ data }) => wireArray(record2(data ?? {}).hosts)).catch(() => null);
   }
   return fleetPromise;
 }
 function hostSupports(value, capability) {
-  const entry = record(value ?? {});
-  return !!(value && entry.capabilities && record(entry.capabilities)[capability]);
+  const entry = record2(value ?? {});
+  return !!(value && entry.capabilities && record2(entry.capabilities)[capability]);
 }
 var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function parseRef(raw) {
@@ -510,7 +532,7 @@ function ambiguousRefError(ref, matches) {
   );
 }
 function sessionCatalog(data) {
-  const catalog = record(data ?? {});
+  const catalog = record2(data ?? {});
   const list = [...sessionRows(catalog.active), ...sessionRows(catalog.previous)];
   const byId = /* @__PURE__ */ new Map();
   for (const session of list) if (session?.id && !byId.has(session.id)) byId.set(session.id, session);
@@ -546,7 +568,7 @@ async function resolveSessionRef(base, rawRef, hostFlag) {
   if (hostSupports(entry, "resolve")) {
     try {
       const response = await api(base, host, `/api/sessions/resolve?id=${encodeURIComponent(ref.id)}`);
-      const data = record(response.data ?? {});
+      const data = record2(response.data ?? {});
       if (isSessionRow(data.session)) {
         if (ref.hostIdForm && data.session.id !== ref.id) throw new Error(`Session not found: ${ref.id}`);
         return { host, id: data.session.id, session: data.session, ref: typeof data.ref === "string" ? data.ref : null };
@@ -600,8 +622,8 @@ var TOOL_ARG_PRIORITY = /* @__PURE__ */ new Set([
 function oneLine(value) {
   return String(value).replace(/\s+/g, " ").trim();
 }
-function clip(text, max) {
-  return text.length > max ? text.slice(0, Math.max(0, max - 1)).trimEnd() + "\u2026" : text;
+function clip(text2, max) {
+  return text2.length > max ? text2.slice(0, Math.max(0, max - 1)).trimEnd() + "\u2026" : text2;
 }
 function summarizeToolArgs(args, max = 120) {
   if (!args || typeof args !== "object") return "";
@@ -609,18 +631,18 @@ function summarizeToolArgs(args, max = 120) {
   const rest = [];
   for (const [key, value] of Object.entries(args)) {
     if (value == null) continue;
-    let text;
-    if (typeof value === "string") text = value;
-    else if (typeof value === "object") text = Array.isArray(value) ? `[${value.length} items]` : "{\u2026}";
-    else text = String(value);
-    text = oneLine(text);
-    if (!text) continue;
-    (TOOL_ARG_PRIORITY.has(key) ? first : rest).push(`${key}=${text}`);
+    let text2;
+    if (typeof value === "string") text2 = value;
+    else if (typeof value === "object") text2 = Array.isArray(value) ? `[${value.length} items]` : "{\u2026}";
+    else text2 = String(value);
+    text2 = oneLine(text2);
+    if (!text2) continue;
+    (TOOL_ARG_PRIORITY.has(key) ? first : rest).push(`${key}=${text2}`);
   }
   return clip(first.concat(rest).join(" "), max);
 }
-function truncateResult(text, maxLines = 8, maxChars = 600) {
-  const source = String(text ?? "");
+function truncateResult(text2, maxLines = 8, maxChars = 600) {
+  const source = String(text2 ?? "");
   const lines = source.split("\n");
   let body = lines.slice(0, maxLines).join("\n");
   let omitted = Math.max(0, lines.length - maxLines);
@@ -650,8 +672,8 @@ var ROLE_HEADINGS = {
   custom: "custom"
 };
 function renderTranscript(input, options = {}) {
-  const payload = record(input ?? {});
-  const session = record(payload.session ?? {});
+  const payload = record2(input ?? {});
+  const session = record2(payload.session ?? {});
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const out = [];
   const name = session.name || "Unnamed session";
@@ -673,7 +695,7 @@ function renderTranscript(input, options = {}) {
   }
   const sections = [];
   for (const value of messages) {
-    const message = record(value);
+    const message = record2(value);
     const heading = ROLE_HEADINGS[String(message.role)] || message.role || "message";
     const when = stamp(message.timestamp);
     const extra = [];
@@ -686,18 +708,18 @@ function renderTranscript(input, options = {}) {
     const content = Array.isArray(message.content) ? message.content : [];
     for (const value2 of content) {
       if (!value2 || typeof value2 !== "object") continue;
-      const block = record(value2);
+      const block = record2(value2);
       if (block.type === "text") {
-        const text = String(block.text ?? "");
-        if (message.role === "toolResult") body.push(truncateResult(text));
-        else if (text.trim()) body.push(text.replace(/\s+$/, ""));
+        const text2 = String(block.text ?? "");
+        if (message.role === "toolResult") body.push(truncateResult(text2));
+        else if (text2.trim()) body.push(text2.replace(/\s+$/, ""));
       } else if (block.type === "thinking" || block.type === "redacted_thinking") {
         if (!options.thinking) continue;
-        const text = String(block.thinking ?? block.text ?? "");
-        body.push(["<thinking>", text.replace(/\s+$/, ""), "</thinking>"].join("\n"));
+        const text2 = String(block.thinking ?? block.text ?? "");
+        body.push(["<thinking>", text2.replace(/\s+$/, ""), "</thinking>"].join("\n"));
       } else if (block.type === "toolCall") {
         let args = summarizeToolArgs(block.arguments);
-        const code = record(block.arguments ?? {}).code;
+        const code = record2(block.arguments ?? {}).code;
         if (block.name === "ipython" && typeof code === "string") {
           const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(code);
           const inner = m ? m[2].replace(/\\(['"\\])/g, "$1") : code.split("\n")[0];
@@ -777,5 +799,6 @@ function renderTranscript(input, options = {}) {
   sessionRows,
   stableSessionRef,
   stringValue,
+  turnEnd,
   wireArray
 });

@@ -123,6 +123,8 @@ function normalizeWorkerStatus(heading: string, state?: string): { label: string
   const lower = heading.toLowerCase();
   if (state === 'waiting' || lower.includes('waiting')) return { label: 'waiting', tone: 'warn' };
   if (lower.includes('still working')) return { label: 'still working', tone: 'warn' };
+  if (lower.includes('with an error')) return { label: 'error', tone: 'warn' };
+  if (lower.includes('aborted')) return { label: 'aborted', tone: 'warn' };
   if (lower.includes('stopped without')) return { label: 'stopped · no answer', tone: 'warn' };
   if (lower.includes('stopped')) return { label: 'stopped', tone: 'muted' };
   if (lower.includes('another turn')) return { label: 'new turn', tone: 'ok' };

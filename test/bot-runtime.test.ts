@@ -20,6 +20,7 @@ const {
 } = runtimeModule;
 const { openBotRegistry }: typeof import('../lib/bot-registry') = require('../lib/bot-registry');
 const { createBotHandlers, changeLines, ROOM_HOP_CAP }: typeof import('../lib/bot-handlers') = require('../lib/bot-handlers');
+const { turnEnd }: typeof import('../lib/session-api') = require('../lib/session-api');
 
 type Faux = typeof import('@earendil-works/pi-ai/providers/faux');
 type Step = import('@earendil-works/pi-ai/providers/faux').FauxResponseStep;
@@ -339,11 +340,13 @@ test('worker ownership resolves full, unique, host-qualified and disambiguated r
 /** A sessions port for one worker the test drives: it works until `answer`, and `close` stops it. */
 function scriptedWorker() {
   const calls: string[][] = [];
-  const state = { active: true, busy: true, messages: [{ role: 'user', content: 'brief' }] as Record<string, unknown>[] };
+  const state = { active: true, busy: true, ask: false, messages: [{ role: 'user', content: 'brief' }] as Record<string, unknown>[] };
   const port: SessionsPort = async args => {
     calls.push(args);
     if (args[0] === 'spawn') return JSON.stringify({ sessionId: WORKER_ID, harness: 'pi' });
-    if (args[0] === 'resolve') return JSON.stringify({ session: { id: WORKER_ID, isActive: state.active, turnInProgress: state.busy } });
+    if (args[0] === 'resolve') {
+      return JSON.stringify({ session: { id: WORKER_ID, isActive: state.active, turnInProgress: state.busy, askPending: state.ask } });
+    }
     if (args[0] === 'show') return JSON.stringify({ totalMessages: state.messages.length, messages: state.messages.slice(-1) });
     if (args[0] === 'close') {
       state.active = false;
@@ -356,7 +359,12 @@ function scriptedWorker() {
     port, calls, state,
     polls: () => calls.filter(args => args[0] === 'resolve').length,
     answer(text: string) {
-      state.messages.push({ role: 'assistant', content: [{ type: 'text', text }] });
+      state.messages.push({ role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop' });
+      state.busy = false;
+    },
+    /** Adds `message` and leaves the session looking idle, as OMP does between steps of one turn. */
+    step(message: Record<string, unknown>) {
+      state.messages.push(message);
       state.busy = false;
     },
   };
@@ -398,6 +406,65 @@ test('a worker that settles again with new messages reports again, each report o
   await severalPolls();
   assert.equal(reportsOf(bot).length, 2, 'each report once');
   assert.equal(worker.calls.filter(args => args[0] === 'spawn').length, 1);
+});
+
+// The incident: OMP clears its busy bit at each step's turn_end, so a poll can find the session idle on a tool result.
+const bashResult = { role: 'toolResult', toolCallId: 'call-1', toolName: 'bash', content: [{ type: 'text', text: 'ok 42 tests' }], isError: false };
+const bashCall = {
+  role: 'assistant', stopReason: 'toolUse',
+  content: [{ type: 'text', text: 'The tests pass; now the lint.' }, { type: 'toolCall', id: 'call-2', name: 'bash', arguments: { command: 'npm run lint' } }],
+};
+
+test('a worker idle between steps is not reported until a turn-ending answer, which is reported once as finished', async t => {
+  const worker = scriptedWorker();
+  const bot = await openTestBot(t, worker.port);
+  bot.respond(toolCall(bot, 'spawn_worker', { name: 'suite', brief: 'Run the suite.' }), bot.faux.fauxAssistantMessage('Started suite.'), relay(bot));
+  await bot.runtime.prompt('Run the suite', 'followUp');
+  await until(() => worker.polls() >= 1, 'the watcher polls');
+  worker.step(bashResult);
+  let seen = worker.polls();
+  await until(() => worker.polls() > seen + 2, 'the watcher keeps polling past a tool result');
+  worker.step(bashCall);
+  seen = worker.polls();
+  await until(() => worker.polls() > seen + 2, 'the watcher keeps polling past a tool call with prose');
+  assert.deepEqual(reportsOf(bot), [], 'no step is reported as the answer');
+  worker.answer('All green: 42 tests, lint clean.');
+  await until(() => reportsOf(bot).length === 1, 'the answer is reported');
+  await severalPolls();
+  assert.deepEqual(reportsOf(bot), [`[worker report] "suite" (${WORKER_ID}) finished.\n\nAll green: 42 tests, lint clean.`]);
+});
+
+test('a worker that stops on a tool result is reported as stopped, and one with a question as waiting', async t => {
+  const stopped = scriptedWorker();
+  const bot = await openTestBot(t, stopped.port);
+  bot.respond(toolCall(bot, 'spawn_worker', { name: 'dies', brief: 'Run it.' }), bot.faux.fauxAssistantMessage('Started dies.'), relay(bot));
+  await bot.runtime.prompt('Run it', 'followUp');
+  await until(() => stopped.polls() >= 1, 'the watcher polls');
+  stopped.step(bashResult);
+  stopped.state.active = false;
+  await until(() => reportsOf(bot).length === 1, 'the stop is reported');
+  assert.equal(reportsOf(bot)[0], `[worker report] "dies" (${WORKER_ID}) stopped without a final answer.\n\nThe session is closed; it is no longer watched.`);
+
+  const asking = scriptedWorker();
+  const other = await openTestBot(t, asking.port);
+  other.respond(toolCall(other, 'spawn_worker', { name: 'asks', brief: 'Ask first.' }), other.faux.fauxAssistantMessage('Started asks.'), relay(other));
+  await other.runtime.prompt('Ask first', 'followUp');
+  await until(() => asking.polls() >= 1, 'the watcher polls');
+  asking.state.ask = true;
+  asking.step({ role: 'assistant', stopReason: 'toolUse', content: [{ type: 'text', text: 'Which branch?' }, { type: 'toolCall', id: 'q', name: 'ask', arguments: {} }] });
+  await until(() => reportsOf(other).length === 1, 'the question is reported');
+  assert.equal(reportsOf(other)[0], `[worker report] "asks" (${WORKER_ID}) is waiting for an answer.\n\nWhich branch?`);
+});
+
+test('a worker turn that fails is reported as an error, not as finished', async t => {
+  const worker = scriptedWorker();
+  const bot = await openTestBot(t, worker.port);
+  bot.respond(toolCall(bot, 'spawn_worker', { name: 'fails', brief: 'Try it.' }), bot.faux.fauxAssistantMessage('Started fails.'), relay(bot));
+  await bot.runtime.prompt('Try it', 'followUp');
+  await until(() => worker.polls() >= 1, 'the watcher polls');
+  worker.step({ role: 'assistant', content: [], stopReason: 'error', errorMessage: '429 rate limited' });
+  await until(() => reportsOf(bot).length === 1, 'the failure is reported');
+  assert.equal(reportsOf(bot)[0], `[worker report] "fails" (${WORKER_ID}) ended with an error.\n\n429 rate limited`);
 });
 
 test('a worker whose session closes ends the watch with a last report that says so', async t => {
@@ -512,6 +579,34 @@ test('the settle rule waits for the turn to end and for new messages', () => {
   assert.equal(settledWorker({ isActive: false }, { totalMessages: 0, messages: [] }, 0)?.state, 'inactive');
   assert.equal(settledWorker({ isActive: true, messageCount: 1 }, { totalMessages: 0, messages: [] }, 0), null,
     'the resolve row\u2019s messageCount decides nothing');
+  const tail = (message: Record<string, unknown>) => ({ totalMessages: 5, messages: [message] });
+  const idle = { isActive: true };
+  assert.equal(settledWorker(idle, tail({ role: 'toolResult', content: [{ type: 'text', text: 'ok' }] }), 4), null, 'a tool result between steps');
+  assert.equal(settledWorker(idle, tail({ role: 'custom', customType: 'notice', content: 'Background job done' }), 4), null, 'a notice');
+  assert.equal(settledWorker(idle, tail({ role: 'developer', content: 'note' }), 4), null, 'a developer message');
+  assert.equal(settledWorker(idle, tail(bashCall), 4), null, 'a tool call with prose');
+  assert.equal(settledWorker(idle, tail({ role: 'assistant', content: [{ type: 'text', text: 'x' }, { type: 'toolCall', id: 'c', name: 'bash' }], stopReason: 'stop' }), 4),
+    null, 'a tool call under a stop reason still runs');
+  assert.equal(settledWorker(idle, tail({ role: 'assistant', content: [{ type: 'thinking', thinking: 'hm' }] }), 4), null, 'a thinking-only shell');
+  assert.deepEqual(settledWorker(idle, tail({ role: 'assistant', content: [{ type: 'text', text: 'cut' }], stopReason: 'length' }), 4),
+    { state: 'finished', totalMessages: 5, text: 'cut' });
+  assert.deepEqual(settledWorker(idle, tail({ role: 'assistant', content: [], stopReason: 'error', errorMessage: 'overloaded' }), 4),
+    { state: 'finished', totalMessages: 5, text: 'overloaded', failed: 'error' });
+  assert.deepEqual(settledWorker(idle, tail({ role: 'assistant', content: [{ type: 'text', text: 'half' }], stopReason: 'aborted' }), 4),
+    { state: 'finished', totalMessages: 5, text: 'half', failed: 'aborted' });
+  assert.equal(settledWorker({ isActive: false }, tail(bashResult), 4)?.state, 'inactive', 'a stopped session settles on any tail');
+  assert.equal(settledWorker({ isActive: true, askPending: true }, tail(bashCall), 4)?.state, 'waiting', 'a pending question on a tool call');
+});
+
+test('a turn ends on an assistant message that is final', () => {
+  const shell = { role: 'assistant', content: [], stopReason: 'stop', usage: { input: 1, output: 0 } };
+  assert.equal(turnEnd(shell, true), null, 'an agy usage-only stop while the session works');
+  assert.equal(turnEnd(shell, false), 'stop', 'an agy usage-only stop once it is idle: a real end');
+  assert.equal(turnEnd({ role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop' }, true), 'stop');
+  assert.equal(turnEnd({ role: 'assistant', content: [{ type: 'text', text: 'wait' }], stopReason: 'toolUse' }, false), null);
+  assert.equal(turnEnd({ role: 'assistant', content: [], usage: {} }, false), null, 'an unmarked usage-only shell');
+  assert.equal(turnEnd({ role: 'assistant', content: 'plain' }, false), 'stop', 'an unmarked answer');
+  assert.equal(turnEnd({ role: 'assistant', content: [{ type: 'text', text: 'x' }], stopReason: 'deferred' }, false), null, 'an unfinished stop reason');
 });
 
 test('new_context is refused without a saved notebook or new work', () => {

@@ -1,5 +1,6 @@
 // Generated edge from skills/lib/pi-dish-client.ts; edit that source and run npm run build:edges.
 import { stableSessionRef } from '../../src/core/helper-refs';
+import { turnEnd } from '../../src/core/session-api';
 /** Consumed wire fields only. Unconsumed payloads remain opaque. */
 export interface SessionFields {
     id?: unknown;
@@ -209,4 +210,4 @@ declare function mergeSearchResults(hostResults: readonly SearchBucket[] | null 
  * `session`) and `options`.
  */
 declare function renderTranscript(input: unknown, options?: TranscriptOptions): string;
-export { makeFail, print, parseCommandLine, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit, fleetHosts, hostSupports, parseRef, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, };
+export { makeFail, print, parseCommandLine, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit, fleetHosts, hostSupports, parseRef, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, turnEnd, };

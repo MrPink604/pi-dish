@@ -102,6 +102,9 @@ test('parseInjectedBotMessage handles every injected bot kind (custom and user-r
     assert.equal(report.status, 'finished');
     assert.equal(report.body, '# Findings\n\nAll good.');
     assert.equal(report.footer, 'The session is closed; it is no longer watched.');
+    const failed = parseInjectedBotMessage('bot-worker-report', '[worker report] "audit" (desktop/01a1fbe8) ended with an error.\n\n429 rate limited');
+    assert.equal(failed?.status, 'error');
+    assert.equal(failed?.statusTone, 'warn');
     const room = parseInjectedBotMessage('bot-room', '[room] Fleet to pi-dish: Both hosts are healthy.\n(Room message 2, hop 1 of at most 4. Reply with room_post only if Fleet needs an answer.)');
     assert.ok(room && room.kind === 'room');
     assert.equal(room.sender, 'Fleet');

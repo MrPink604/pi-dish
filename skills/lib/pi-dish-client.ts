@@ -11,6 +11,7 @@ import path = require('node:path');
 import os = require('node:os');
 import { execFileSync } from 'node:child_process';
 import { resolveSessionRefAmong, stableSessionRef } from '../../src/core/helper-refs';
+import { turnEnd } from '../../src/core/session-api';
 
 
 /** Consumed wire fields only. Unconsumed payloads remain opaque. */
@@ -805,5 +806,5 @@ export {
   TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit,
   fleetHosts, hostSupports, parseRef, entryForHostName, resolveSessionRef,
   resolveSessionClientSide, stableSessionRef,
-  mergeSearchResults, renderTranscript,
+  mergeSearchResults, renderTranscript, turnEnd,
 };

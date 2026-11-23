@@ -142,4 +142,16 @@ export declare function decodeFastModeResult(value: unknown): FastModeResult;
 export declare function decodeEnabledModelsResult(value: unknown): EnabledModelsResult;
 /** A harness can acknowledge the mutation without reporting a usable level. */
 export declare function thinkingResult(value: unknown, requested: string): ThinkingResult;
+/** How an assistant message ended its session's turn, in Pi's stop reason vocabulary. */
+export type TurnEnd = 'stop' | 'length' | 'error' | 'aborted';
+/**
+ * How `message`, the newest of a transcript, ended its turn, or null when the turn goes on. Only an assistant message
+ * ends a turn; a tool result, a notice (custom, developer, system), a summary or a user prompt never does. `error` and
+ * `aborted` end it whatever the message holds. Otherwise a message with a tool call goes on to run it (Pi runs every
+ * call a message holds, even under `stop` or `length`), as does `toolUse` or any other unfinished stop reason. `length`
+ * ends the turn; `stop` ends it with text, or, once the session is not `busy`, without: agy closes a turn that ended on
+ * a tool call with a usage-only shell (shown as "(no text)"). A message with no stop reason ends it only with text, so
+ * a thinking-only or usage-only shell does not. Pi, OMP and agy mirrors share this shape.
+ */
+export declare function turnEnd(message: unknown, busy: boolean): TurnEnd | null;
 export {};

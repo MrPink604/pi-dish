@@ -29,6 +29,8 @@ export interface SettledWorker {
     state: 'finished' | 'waiting' | 'inactive';
     totalMessages: number;
     text: string;
+    /** A finished turn that failed: its answer is the error, not a result. */
+    failed?: 'error' | 'aborted';
 }
 /** Text blocks of a Pi message, joined; tool calls and thinking are left out. */
 export declare function messageText(message: unknown): string;
@@ -82,9 +84,12 @@ export declare function botImageRefusal(images: readonly BotImage[], held: Image
 /**
  * The settle rule `pi-dish-sessions wait` uses: a worker has settled when it is
  * not working or compacting, its transcript holds more than `since` messages,
- * and its newest message is not the user's (a prompt not picked up yet). A
- * pending question counts as settled. `session` is the resolve row; `window` is
- * `/messages?limit=1`. Null means keep waiting.
+ * and its newest message ends the turn (`turnEnd`): a tool result, a notice or
+ * a tool call between steps does not, nor does a prompt not picked up yet. A
+ * pending question counts as settled. A stopped session without such an end
+ * settles as inactive. Only the newest message is read, so a step in
+ * between never brings back an older answer. `session` is the resolve row;
+ * `window` is `/messages?limit=1`. Null means keep waiting.
  */
 export declare function settledWorker(session: unknown, window: unknown, since: number): SettledWorker | null;
 export interface WorkerRecord {
