@@ -27,7 +27,7 @@ import { nextScheduledRun } from './routine-runner';
 import { claimBotRelayWhenFree } from './bot-supervisor';
 import { codeBuild } from './code-build';
 import { BOT_CAPABILITIES } from './session-capabilities';
-import { dishDir } from './dish-store';
+import { dishDir, replaceFile } from './dish-store';
 import { processIdentity } from './process-identity';
 import { relaySocketPath, relayWrapperVersion } from './relay-socket';
 import { runtimeResourcePath } from './runtime-resources';
@@ -192,12 +192,19 @@ async function main(): Promise<void> {
     return { idle: !activity.running, pendingMessages: activity.queued || taking > 0, pendingDialogs: 0, backgroundWork: false };
   }
 
+  let lastClaimBody = '';
   function writeClaim(): void {
     if (!socketReady) return;
     try {
+      const next = claim();
+      const body = JSON.stringify(next);
+      if (body === lastClaimBody) return;
       fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-      fs.writeFileSync(path.join(REGISTRY_DIR, `bot-${bot.id}.json`),
-        JSON.stringify({ ...claim(), updatedAt: new Date().toISOString() }, null, 2));
+      // Replace atomically so concurrent scanRegistry() reads never observe a
+      // truncated claim file and cache the live bot as absent for 500ms.
+      replaceFile(path.join(REGISTRY_DIR, `bot-${bot.id}.json`),
+        JSON.stringify({ ...next, updatedAt: new Date().toISOString() }, null, 2));
+      lastClaimBody = body;
     } catch (error) {
       log(`claim write failed: ${errorMessage(error)}`);
     }

@@ -319,3 +319,34 @@ test('a bot\u2019s relay passes images on to its model, with text or alone, and 
     assert.ok(!chat(home, fleet.id).some(entry => entry.text === 'And these'), 'nothing of it is in the chat');
     await server.stop();
 });
+test('a bot relay updates its registry claim atomically by replacement without truncated reads', { timeout: 180_000 }, async () => {
+    const home = makeHome();
+    const port = await freePort();
+    const server = await boot(home, port);
+    const fleet = await liveFleet(server, home);
+    const claimPath = path.join(home, '.pi', 'dish', 'sessions', `bot-${fleet.id}.json`);
+    const initialIno = fs.statSync(claimPath).ino;
+    const seenInos = new Set([initialIno]);
+    let stopReading = false;
+    let parseErrors = 0;
+    const reader = (async () => {
+        while (!stopReading) {
+            try {
+                const raw = fs.readFileSync(claimPath, 'utf8');
+                JSON.parse(raw);
+                seenInos.add(fs.statSync(claimPath).ino);
+            }
+            catch {
+                parseErrors++;
+            }
+            await new Promise(resolve => setImmediate(resolve));
+        }
+    })();
+    await prompt(server.base, fleet.route, 'First atomic check.');
+    await until(() => said(home, fleet.id, 'echo 1: First atomic check.') === 1, 'bot finishes turn');
+    stopReading = true;
+    await reader;
+    assert.equal(parseErrors, 0, 'concurrent readers never observe a truncated claim');
+    assert.ok(seenInos.size >= 2, `atomic rename replaces the claim inode (saw ${seenInos.size})`);
+    await server.stop();
+});
