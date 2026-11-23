@@ -106,7 +106,9 @@ export function createMessageStream(options: {
       if (failure !== null) options.originFailure?.(failure);
       else if (options.probeOrigin) {
         void options.probeOrigin().then(probed => {
-          if (ownsConnection(owner, target, generation)) options.originFailure?.(probed);
+          if (ownsConnection(owner, target, generation) && (source === null || failures > 0)) {
+            options.originFailure?.(probed);
+          }
         });
       } else options.originFailure?.('network');
     }

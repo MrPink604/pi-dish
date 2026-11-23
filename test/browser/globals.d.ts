@@ -333,6 +333,8 @@ declare global {
     __auditFailedPromptId: string | undefined;
     __auditFontLoadDescriptor: PropertyDescriptor | undefined;
     __auditNativeWebSocket: typeof WebSocket;
+    streamOriginFailures: Array<string | null>;
+    streamProbes: Array<(value: 'auth' | 'network' | 'server' | null) => void>;
     __auditOldCatchup: Promise<unknown>;
     __auditOldDiff: Promise<unknown>;
     __auditOldFile: Promise<unknown>;

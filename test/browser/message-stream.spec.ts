@@ -6,9 +6,12 @@ async function setup(page: Page, fleet: FleetFixture) {
   await page.evaluate(() => {
     fixtureApp.features.messageStreamController.stop();
     window.streamSources = []; window.streamTickets = []; window.streamLoads = []; window.streamSelections = []; window.streamStatus = [];
+    window.streamOriginFailures = []; window.streamProbes = [];
     window.streamEndpoint = { base: 'http://original', token: 'fixture-token' };
     window.ownedStream = PiDishBrowser.createMessageStream({ document, sessionState: fixtureApp.features.sessionState, endpoint: () => window.streamEndpoint,
       ticket: () => new Promise<string>((resolve, reject) => window.streamTickets.push({ resolve, reject })),
+      originFailure: failure => { window.streamOriginFailures.push(failure); },
+      probeOrigin: () => new Promise(resolve => { window.streamProbes.push(resolve); }),
       source: url => {
         class FixtureSource extends EventTarget implements EventSource {
           readonly CONNECTING = 0; readonly OPEN = 1; readonly CLOSED = 2;
@@ -136,6 +139,32 @@ test('an established stream reconnects quietly once after a transient drop and p
     Reflect.deleteProperty(document, 'hidden');
     window.ownedStream.dispose();
   });
+});
+
+test('a slow origin probe landing after the stream reopens does not report a stale failure', async ({ page, fleet }) => {
+  await setup(page, fleet);
+  await page.clock.install();
+  await page.evaluate(() => {
+    window.streamEndpoint = { base: '', token: null };
+    window.ownedStream.start();
+    const first = fixtureElement(window.streamSources[0], 'first stream');
+    fixtureElement(first.onerror, 'first failure').call(first, new Event('error'));
+  });
+  await page.clock.runFor(3_000);
+  await page.evaluate(() => {
+    const second = fixtureElement(window.streamSources[1], 'second stream');
+    fixtureElement(second.onerror, 'second failure').call(second, new Event('error'));
+  });
+  expect(await page.evaluate(() => window.streamProbes.length)).toBe(1);
+  // Stream reconnects and opens before the slow probe settles.
+  await page.clock.runFor(6_000);
+  await page.evaluate(() => {
+    const third = fixtureElement(window.streamSources[2], 'third stream');
+    fixtureElement(third.onopen, 'stream reopen').call(third, new Event('open'));
+    fixtureElement(window.streamProbes[0], 'slow probe')('auth');
+  });
+  expect(await page.evaluate(() => window.streamOriginFailures)).toEqual([null]);
+  await page.evaluate(() => window.ownedStream.dispose());
 });
 
 export {};
