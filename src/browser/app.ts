@@ -5,7 +5,7 @@ import { harnessBadgeInfo, hostDisplayLabel, hostSupportsCapability, hostSupport
 import { createHostView } from './host-view';
 import { createHostDirectory } from './host-directory';
 import { createHostTransport, createSessionApi, sendJson, type ApiRequest, type ApiUpload, type HostTarget } from './api-client';
-import { createOriginRequest, type OriginFailure } from './origin-reachability';
+import { createOriginRequest, probeOriginFailure, type OriginFailure } from './origin-reachability';
 import { createHostConnections, hostKeyOf } from './host-connections';
 import { createHostDiscovery } from './host-discovery';
 import { createHostPresentation, resolveColorToHex } from './host-presentation';
@@ -907,6 +907,7 @@ const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools(
 const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: resolveHost, ticket: host => mintHostTicket(host, 'stream'),
   withUnlock: (url, base) => privateSessions.withUnlock(url, base),
   originFailure: failure => noteReachability('stream', failure),
+  probeOrigin: () => probeOriginFailure(requestOrigin),
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
   status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: refreshSessions, artifacts: owner => sessionInfo.refreshArtifacts(owner),
   ...chromeScroll, follow: () => appChrome.following, highlight: root => richText.highlight(root),
@@ -1170,6 +1171,7 @@ const terminalController: ReturnType<typeof createTerminalController> = createTe
   socket: url => new WebSocket(url), socketUrl: (host, path) => privateSessions.withUnlock(hostWsUrl(host, path), resolveHost(host).base),
   ticket: (host, purpose) => mintHostTicket(host, purpose),
   originFailure: failure => noteReachability('terminal', failure),
+  probeOrigin: () => probeOriginFailure(requestOrigin),
   theme: () => terminalTheme(document), applySize: panel => panelResize.terminalSize(panel), confirm: message => confirm(message),
 });
 

@@ -4,7 +4,7 @@ import test = require('node:test');
 import assert = require('node:assert/strict');
 import http = require('node:http');
 const { createHostTransport, createSessionApi, setSessionModel, setSessionThinking, renameSession, sendJson, withFetchTimeout,
-  classifyOriginResponse, classifyOriginError, createOriginRequest, ApiHttpError,
+  classifyOriginResponse, classifyOriginError, createOriginRequest, probeOriginFailure, ApiHttpError,
 } = loadBrowser({ Headers, Response, AbortSignal, URLSearchParams, TypeError, DOMException });
 
 test('browser transport snapshots host routing and preserves supported header/signal forms', async () => {
@@ -124,7 +124,7 @@ test('classifies auth signals separately from ordinary server outages', () => {
     [new Response('<html>', { headers: html }), 'auth'],
     [new Response(null, { status: 401 }), 'auth'],
     [new Response(null, { status: 403 }), 'auth'],
-    [new Response('<html>', { status: 502, headers: html }), 'auth'],
+    [new Response('<html>', { status: 502, headers: html }), 'server'],
     [Response.json({ error: 'Bad gateway' }, { status: 502 }), 'server'],
     [Response.error(), 'network'],
     [new Response(null, { status: 404 }), null],
@@ -134,11 +134,24 @@ test('classifies auth signals separately from ordinary server outages', () => {
 });
 
 test('classifies fetch rejections and HTTP errors, not intentional cancellation', () => {
-  assert.equal(classifyOriginError(new TypeError('Failed to fetch')), 'auth');
+  assert.equal(classifyOriginError(new TypeError('Failed to fetch')), 'network');
   assert.equal(classifyOriginError(new DOMException('Request timed out', 'TimeoutError')), 'network');
   assert.equal(classifyOriginError(new DOMException('Request canceled', 'AbortError')), null);
   assert.equal(classifyOriginError(new ApiHttpError('Denied', 403)), 'auth');
   assert.equal(classifyOriginError(new ApiHttpError('Unavailable', 503)), 'server');
+});
+
+test('probeOriginFailure distinguishes healthy origin, server HTML 502, network errors, and auth redirects', async () => {
+  const origin = 'https://dish.example';
+  const probe = (responder: () => Promise<Response>) => probeOriginFailure(createOriginRequest(async (_host, path, init) => {
+    assert.equal(path, '/api/host');
+    assert.equal(init?.redirect, 'manual');
+    return responder();
+  }, origin));
+  assert.equal(await probe(async () => Response.json({ hostId: 'self' })), null);
+  assert.equal(await probe(async () => Object.defineProperty(new Response(), 'type', { value: 'opaqueredirect' })), 'auth');
+  assert.equal(await probe(async () => new Response('<html>502</html>', { status: 502, headers: { 'Content-Type': 'text/html' } })), 'server');
+  assert.equal(await probe(async () => { throw new TypeError('Failed to fetch'); }), 'network');
 });
 
 test('origin requests surface a manual redirect before parsing but preserve ordinary HTTP responses', async () => {

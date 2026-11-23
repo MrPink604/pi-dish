@@ -49,6 +49,7 @@ export function createMessageStream(options: {
   /** Adds the private-session unlock query; EventSource cannot send its header. */
   withUnlock?: (url: string, base: string) => string;
   originFailure?: (failure: OriginFailure | null) => void;
+  probeOrigin?: () => Promise<OriginFailure | null>;
   activity: MessageStreamActivity; renderer: MessageStreamRenderer; streaming: MessageStreamRendering;
   tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI; sideChat: MessageStreamSideChat;
   status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
@@ -76,12 +77,14 @@ export function createMessageStream(options: {
   async function start(owner = sessionState.captureSelection()) {
     if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
     const target = Object.freeze({ ...options.endpoint(owner.host) });
-    if (current?.base === target.base && sessionState.ownsSelection(current.owner)) disconnect();
-    else stop();
+    if (current?.base === target.base && sessionState.ownsSelection(current.owner)) {
+      disconnect();
+      failures = 0;
+    } else stop();
     current = { owner, base: target.base };
     return connect(owner, target, connectionGeneration);
   }
-  function retry(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number, message: string, failure: OriginFailure) {
+  function retry(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number, message: string, failure: OriginFailure | null) {
     if (!ownsConnection(owner, target, generation)) return;
     source?.close();
     source = null;
@@ -99,7 +102,14 @@ export function createMessageStream(options: {
     opened = false;
     if (!transient) setErrorStatus(message);
     failures++;
-    if (target.base === '' && failures >= 2) options.originFailure?.(failure);
+    if (target.base === '' && failures >= 2) {
+      if (failure !== null) options.originFailure?.(failure);
+      else if (options.probeOrigin) {
+        void options.probeOrigin().then(probed => {
+          if (ownsConnection(owner, target, generation)) options.originFailure?.(probed);
+        });
+      } else options.originFailure?.('network');
+    }
     const delayMs = transient ? 1000 : Math.min(3000 * 2 ** (failures - 1), 30000);
     reconnect = setTimeout(() => {
       reconnect = null;
@@ -388,8 +398,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     });
 
     evtSource.onerror = () => {
-      // A repeated failure can be an Access redirect; EventSource hides the HTTP response.
-      if (ownsStream()) retry(owner, target, generation, 'Stream disconnected', 'auth');
+      // EventSource hides the HTTP response; probe /api/host before claiming lost auth.
+      if (ownsStream()) retry(owner, target, generation, 'Stream disconnected', null);
     };
   } catch (err) {
     retry(owner, target, generation, 'Stream failed', classifyOriginError(err) ?? 'network');

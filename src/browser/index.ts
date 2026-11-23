@@ -1,5 +1,5 @@
 export { createHostTransport, createSessionApi, setSessionModel, setSessionThinking, renameSession, sendJson, withFetchTimeout, modelCatalogUrl, ApiHttpError } from './api-client';
-export { classifyOriginResponse, classifyOriginError, createOriginRequest } from './origin-reachability';
+export { classifyOriginResponse, classifyOriginError, createOriginRequest, probeOriginFailure } from './origin-reachability';
 export { decodeModelCatalog } from '../core/session-api';
 export { mountModelSelector } from './model-selector';
 export { createSessionState } from './session-state';

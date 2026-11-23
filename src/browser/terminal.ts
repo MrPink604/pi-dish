@@ -35,6 +35,7 @@ export function createTerminalController(options: {
   socket: (url: string) => WebSocket; socketUrl: (host: Readonly<HostEndpoint>, path: string) => string;
   ticket: (host: Readonly<HostEndpoint>, purpose: 'terminal') => Promise<string>;
   originFailure?: (failure: OriginFailure | null) => void;
+  probeOrigin?: () => Promise<OriginFailure | null>;
   theme: () => ITheme; applySize: (panel: HTMLElement) => void; confirm: (message: string) => boolean;
 }) {
   const { document, storage, sessionState } = options, window = document.defaultView!;
@@ -130,10 +131,17 @@ export function createTerminalController(options: {
     void options.ticket(current.endpoint, 'terminal').then(ticket => { if (ready()) openSocket(current, `${url}${url.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`, sequence); })
       .catch(error => { if (ready()) retry(current, sequence, classifyOriginError(error) ?? 'network'); });
   }
-  function retry(current: TerminalState, sequence: number, failure: OriginFailure) {
+  function retry(current: TerminalState, sequence: number, failure: OriginFailure | null) {
     const delay = Math.min(8000, 1000 * 2 ** current.attempts++);
     status('disconnected — reconnecting…', 'reconnecting');
-    if (current.endpoint.base === '' && current.attempts >= 2) options.originFailure?.(failure);
+    if (current.endpoint.base === '' && current.attempts >= 2) {
+      if (failure !== null) options.originFailure?.(failure);
+      else if (options.probeOrigin) {
+        void options.probeOrigin().then(probed => {
+          if (owns(current) && current.connection === sequence) options.originFailure?.(probed);
+        });
+      } else options.originFailure?.('network');
+    }
     clearTimeout(current.reconnectTimer);
     current.reconnectTimer = setTimeout(() => { if (owns(current) && current.connection === sequence) connect(); }, delay);
   }
@@ -159,7 +167,7 @@ export function createTerminalController(options: {
       else { current.exited = true; status(message.error, 'error'); }
     };
     socket.onclose = () => {
-      if (active() && !current.exited) retry(current, sequence, 'auth');
+      if (active() && !current.exited) retry(current, sequence, null);
     };
   }
   function close(): void {
