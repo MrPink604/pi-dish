@@ -7,6 +7,7 @@ import { sendRangedFile } from './range-response';
 import { agyBrainDir, readAgyBrainArtifactMeta } from './agy-brain';
 import { readSessionMessages } from './session-files';
 import { createDiffView } from './git-diff';
+import { sessionUploadDir } from './upload-handlers';
 
 type FileRequest = Request<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 type FileResponse = Response<unknown, Record<string, unknown>>;
@@ -15,6 +16,7 @@ type FileHandler = RequestHandler<Record<string, string>, unknown, unknown, Reco
 export interface FileHandlerPorts {
   resolveSessionCwd(sessionId: string): unknown;
   findSessionSource(sessionId: string): SessionSource | null;
+  uploadRoot(): string;
 }
 
 export interface FileHandlers {
@@ -79,9 +81,12 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     if (!cwd && !session) return { status: 404, body: { error: 'Unknown session' } } as const;
     let messages: readonly unknown[] = [];
     if (session) { try { messages = readSessionMessages(session); } catch {} }
+    const extraRoots: Array<{ root: string; denySubdirs?: readonly string[] }> = [];
     const brainRoot = session?.harnessId === 'agy' ? agyBrainDir(session.nativeSessionId) : null;
-    const extraRoots = brainRoot ? [{ root: brainRoot, denySubdirs: ['.system_generated'] }] : undefined;
-    const resolved = await resolveFileMention(mention, { cwd, messages, extraRoots });
+    if (brainRoot) extraRoots.push({ root: brainRoot, denySubdirs: ['.system_generated'] });
+    const uploadDir = sessionUploadDir(ports.uploadRoot(), sessionId);
+    if (uploadDir) extraRoots.push({ root: uploadDir });
+    const resolved = await resolveFileMention(mention, { cwd, messages, extraRoots: extraRoots.length ? extraRoots : undefined });
     if (!resolved) {
       return { status: 404, body: { error: `Couldn't find "${mention}" among this session's files` } } as const;
     }

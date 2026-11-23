@@ -5,6 +5,7 @@ type FileHandler = RequestHandler<Record<string, string>, unknown, unknown, Reco
 export interface FileHandlerPorts {
     resolveSessionCwd(sessionId: string): unknown;
     findSessionSource(sessionId: string): SessionSource | null;
+    uploadRoot(): string;
 }
 export interface FileHandlers {
     searchDirectories: FileHandler;

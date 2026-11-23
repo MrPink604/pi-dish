@@ -17,6 +17,7 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const upload_handlers_1 = require("../lib/upload-handlers");
+const file_handlers_1 = require("../lib/file-handlers");
 const attachment_text_1 = require("../lib/attachment-text");
 const SESSION = '2026-11-21T10-00-00-uploads';
 const MAX_BYTES = 64;
@@ -125,4 +126,42 @@ test('upload names, sizes and limits are formatted for people and agents', () =>
     assert.equal((0, upload_handlers_1.uploadMaxBytes)({}), 512 * 1024 * 1024);
     assert.equal((0, upload_handlers_1.uploadMaxBytes)({ PI_DISH_UPLOAD_MAX_MB: '2' }), 2 * 1024 * 1024);
     assert.equal((0, upload_handlers_1.uploadMaxBytes)({ PI_DISH_UPLOAD_MAX_MB: 'nope' }), 512 * 1024 * 1024);
+});
+test('uploaded text and video files resolve in the file viewer for their own session only', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-upload-view-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-upload-cwd-'));
+    t.after(() => {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(cwd, { recursive: true, force: true });
+    });
+    const uploads = (0, upload_handlers_1.createUploadHandlers)({ root: () => root, maxBytes: () => 4096 });
+    const files = (0, file_handlers_1.createFileHandlers)({
+        resolveSessionCwd: () => cwd,
+        findSessionSource: () => null,
+        uploadRoot: () => root,
+    });
+    const app = express();
+    app.post('/api/sessions/:id/uploads', uploads.upload);
+    app.get('/api/sessions/:id/file', files.filePreview);
+    app.get('/api/sessions/:id/file/content', files.fileContent);
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise(resolve => server.once('listening', () => resolve()));
+    t.after(() => new Promise(resolve => server.close(() => resolve())));
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const txtUp = await (await fetch(`${origin}/api/sessions/${SESSION}/uploads?name=notes.txt&type=text%2Fplain`, {
+        method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: 'uploaded note',
+    })).json();
+    const mp4Up = await (await fetch(`${origin}/api/sessions/${SESSION}/uploads?name=clip.mp4&type=video%2Fmp4`, {
+        method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: Buffer.from('000000186674797069736f6d', 'hex'),
+    })).json();
+    const previewRes = await fetch(`${origin}/api/sessions/${SESSION}/file?path=${encodeURIComponent(String(txtUp.path))}`);
+    assert.equal(previewRes.status, 200);
+    const preview = await previewRes.json();
+    assert.equal(preview.content, 'uploaded note');
+    const videoRes = await fetch(`${origin}/api/sessions/${SESSION}/file/content?path=${encodeURIComponent(String(mp4Up.path))}`);
+    assert.equal(videoRes.status, 200);
+    assert.equal(videoRes.headers.get('content-type'), 'video/mp4');
+    // Another session must never read this session's uploads.
+    const otherRes = await fetch(`${origin}/api/sessions/2026-11-21T10-00-00-other/file?path=${encodeURIComponent(String(txtUp.path))}`);
+    assert.equal(otherRes.status, 404);
 });

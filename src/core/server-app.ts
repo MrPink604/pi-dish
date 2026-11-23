@@ -274,7 +274,8 @@ export function startServer(rootDirectory: string): Server {
     return null;
   }
 
-  const fileHandlers = createFileHandlers({ resolveSessionCwd, findSessionSource });
+  const uploadRoot = () => path.join(dishDir(), 'uploads');
+  const fileHandlers = createFileHandlers({ resolveSessionCwd, findSessionSource, uploadRoot });
   const sessionReadHandlers = createSessionReadHandlers({ ownership, catalog, findSessionSource });
   const publicationHandlers = createPublicationHandlers({
     ownership, catalog, findSessionSource,
@@ -374,7 +375,7 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/:id/steer', sessionCommandHandlers.steer);
   app.post('/api/sessions/:id/follow-up', sessionCommandHandlers.followUp);
   // Non-image attachments: streamed to `~/.pi/dish/uploads/<session>/` before the prompt names them.
-  const uploadHandlers = createUploadHandlers({ root: () => path.join(dishDir(), 'uploads'), maxBytes: () => uploadMaxBytes() });
+  const uploadHandlers = createUploadHandlers({ root: uploadRoot, maxBytes: () => uploadMaxBytes() });
   app.get('/api/sessions/:id/uploads', uploadHandlers.limits);
   app.post('/api/sessions/:id/uploads', uploadHandlers.upload);
 
