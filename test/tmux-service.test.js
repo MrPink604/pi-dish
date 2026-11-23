@@ -226,8 +226,45 @@ test('start bootstraps the default tmux server in its own systemd scope, falling
         if (scenario.systemdRun === 1)
             assert.match(start.stderr, /starting tmux unscoped/);
         // The managed window joins the running server and never gets a scope.
-        assert.ok(calls.some(line => /^tmux new-session -d -s pi-dish -n server /.test(line)), scenario.name);
+        assert.ok(calls.some(line => /^tmux -N new-session -d -s pi-dish -n server /.test(line)), scenario.name);
     }
+});
+test('start scopes the replacement tmux server when stop_service kills the last session', async (t) => {
+    const root = fixtureRoot(t);
+    const bin = path.join(root, 'bin');
+    const log = path.join(root, 'tmux-env.log');
+    const stateFile = path.join(root, 'tmux-alive');
+    fs.writeFileSync(stateFile, '1');
+    await fakeUserManager(t, root);
+    fs.writeFileSync(path.join(bin, 'systemd-run'), systemdRunStub(null), { mode: 0o755 });
+    // Simulate a server whose only window is pi-dish:server: kill-window shuts the server down.
+    fs.writeFileSync(path.join(bin, 'tmux'), [
+        '#!/bin/sh',
+        'printf "tmux %s\\n" "$*" >> "$TMUX_LOG"',
+        'case "$1" in',
+        `  list-sessions|has-session) [ -f "${stateFile}" ] ;;`,
+        `  kill-window) rm -f "${stateFile}" ;;`,
+        `  new-session) : > "${stateFile}" ;;`,
+        'esac',
+    ].join('\n'), { mode: 0o755 });
+    // First health probe fails (triggering recovery), later wait_until_healthy probes succeed.
+    const probeFile = path.join(root, 'curl-probed');
+    fs.writeFileSync(path.join(bin, 'curl'), [
+        '#!/bin/sh',
+        `if [ ! -f "${probeFile}" ]; then : > "${probeFile}"; exit 22; fi`,
+        'exit 0',
+    ].join('\n'), { mode: 0o755 });
+    const start = (0, node_child_process_1.spawnSync)(path.join(root, 'scripts', 'pi-dish-tmux.sh'), ['start'], {
+        cwd: root,
+        env: { ...fixtureEnv(root, 3333), PI_DISH_TMUX_STARTUP_DELAY: '0' },
+        encoding: 'utf8',
+        timeout: 20000,
+    });
+    assert.equal(start.status, 0, start.stderr);
+    const calls = fs.readFileSync(log, 'utf8').trim().split('\n');
+    const scopeCalls = calls.filter(line => line.startsWith('systemd-run '));
+    assert.equal(scopeCalls.length, 1, calls.join('\n'));
+    assert.match(scopeCalls[0], /^systemd-run --user --scope --quiet --collect --unit=pi-dish-tmux-default-\d+-\d+\.scope -- tmux new-session -d -s pi-dish -n server /);
 });
 test('tmux server scope argv needs a user manager, systemd-run and no opt-out', async (t) => {
     const { tmuxServerScopeArgv } = tmux;

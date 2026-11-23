@@ -173,9 +173,13 @@ start_service() {
     if tmux has-session -t "=$session" 2>/dev/null; then
       tmux new-window -d -t "=$session:" -n "$window" -c "$root" \
         -e "PI_DISH_ENV_FILE=$env_file" "$runner"
+    elif [[ -n $bootstrap_session ]] || tmux list-sessions >/dev/null 2>&1; then
+      tmux -N new-session -d -s "$session" -n "$window" -c "$root" \
+        -e "PI_DISH_ENV_FILE=$env_file" "$runner"
     else
-      # The last session may have disappeared during stop_service.
-      (cd / && tmux new-session -d -s "$session" -n "$window" -c "$root" \
+      # The last session disappeared during stop_service; start the replacement
+      # server in its own systemd scope and outside the deployment tree.
+      (cd / && start_tmux_server new-session -d -s "$session" -n "$window" -c "$root" \
         -e "PI_DISH_ENV_FILE=$env_file" "$runner")
     fi
     wait_until_healthy || rc=$?
