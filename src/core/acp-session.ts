@@ -365,6 +365,8 @@ export class AcpSession extends TransportSession {
   declare private lastOutputAt: number;
   /** Usage reported by prompts that handed their turn to a steer; added to the turn's total. */
   declare private handoverUsage: ProtocolRecord | null;
+  /** Prompt-response time of usage carried past `end_turn`; it covers every brain step before then. */
+  declare private handoverUsageAt: number | null;
   /** Request-start timestamp of the in-flight or upcoming LLM step (includes TTFT). */
   declare private nextStepStartedAt: number | null;
   /** Distinguishes a new LLM step from sibling `tool_call`s emitted in one batch. */
@@ -416,6 +418,7 @@ export class AcpSession extends TransportSession {
     this.lastOutputWasProse = false;
     this.lastOutputAt = 0;
     this.handoverUsage = null;
+    this.handoverUsageAt = null;
     this.nextStepStartedAt = null;
     this.sawStepSignal = false;
     this.turnGenMs = 0;
@@ -459,8 +462,9 @@ export class AcpSession extends TransportSession {
     proc.on('exit', (code) => {
       this._clearAutonomousTimer();
       this._clearTaskLogTimer();
-      // Keep whatever the agent already said: an open segment would be lost otherwise.
-      if (this.segment) this._closeSegment('error', this._takeHandoverUsage(), `agy exited with code ${code}`, true);
+      // Keep whatever the agent already said, and usage carried past end_turn:
+      // both would be lost otherwise. The error marks the turn as interrupted.
+      if (this.segment || this.handoverUsage) this._closeSegment('error', this._takeHandoverUsage(), `agy exited with code ${code}`, true);
       this.alive = false;
       this.turnInProgress = false;
       this.segment = null;
@@ -576,6 +580,7 @@ export class AcpSession extends TransportSession {
       // mid-turn; the turn's next assistant message takes it instead.
       if (continues && !this.segment && stopReason === 'stop') {
         this.handoverUsage = usage;
+        this.handoverUsageAt = Date.now();
         usage = null;
       }
       this._closeSegment(stopReason, usage,
@@ -1027,7 +1032,9 @@ export class AcpSession extends TransportSession {
     this._armAutonomousTimer();
   }
 
-  private _armAutonomousTimer(ms = autonomousIdleMs()): void {
+  private _armAutonomousTimer(ms = this.lastOutputWasProse
+    ? autonomousIdleMs()
+    : Math.min(autonomousIdleMs(), autonomousUnfinishedIdleMs())): void {
     this._clearAutonomousTimer();
     this.autonomousTimer = setTimeout(() => this._autonomousIdle(), ms);
     this.autonomousTimer.unref();
@@ -1104,10 +1111,13 @@ export class AcpSession extends TransportSession {
         return;
       }
     }
+    const carriedAt = this.handoverUsageAt;
     let usage = this._takeHandoverUsage();
-    if (this.segment) {
+    if (this.segment && (!usage || carriedAt !== null)) {
       const segStart = finite(this.segment.timestamp) ? this.segment.timestamp - 5000 : undefined;
-      usage = sumUsage(usage, readLatestAgyBrainStepUsage(this.nativeSessionId, segStart));
+      // Usage carried from the prompt response already counts the steps before it.
+      const since = carriedAt === null ? segStart : Math.max(carriedAt + 1, segStart ?? 0);
+      usage = sumUsage(usage, readLatestAgyBrainStepUsage(this.nativeSessionId, since));
     }
     this._closeSegment('stop', usage, null, true);
     this._endTurn();
@@ -1171,6 +1181,7 @@ export class AcpSession extends TransportSession {
   private _takeHandoverUsage(final: ProtocolRecord | null = null): ProtocolRecord | null {
     const usage = sumUsage(this.handoverUsage, final);
     this.handoverUsage = null;
+    this.handoverUsageAt = null;
     return usage;
   }
 

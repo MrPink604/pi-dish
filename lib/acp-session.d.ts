@@ -87,6 +87,8 @@ export declare class AcpSession extends TransportSession {
     private lastOutputAt;
     /** Usage reported by prompts that handed their turn to a steer; added to the turn's total. */
     private handoverUsage;
+    /** Prompt-response time of usage carried past `end_turn`; it covers every brain step before then. */
+    private handoverUsageAt;
     /** Request-start timestamp of the in-flight or upcoming LLM step (includes TTFT). */
     private nextStepStartedAt;
     /** Distinguishes a new LLM step from sibling `tool_call`s emitted in one batch. */

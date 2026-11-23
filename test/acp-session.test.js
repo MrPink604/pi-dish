@@ -355,6 +355,64 @@ test('after end_turn, a thinking-only pause still ends the turn at the long wind
     assert.deepEqual(last.content.map(block => asRecord(block).type), ['thinking']);
     assert.equal(asRecord(last.usage).totalTokens, 130, 'carried prompt usage is kept when the turn ends');
 });
+for (const [label, overlapping, expected] of [
+    ['a brain step the prompt response already counted', true, 130],
+    ['a brain step after the prompt response', false, 180],
+]) {
+    test(`usage carried past end_turn adds ${label} only when it is new`, async (t) => {
+        const brainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-acp-carried-'));
+        t.after(() => fs.rmSync(brainDir, { recursive: true, force: true }));
+        withEnv(t, {
+            PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '80',
+            PI_DISH_AGY_UNFINISHED_IDLE_MS: '5000',
+            PI_DISH_AGY_BRAIN_DIR: brainDir,
+            FAKE_AGY_FINAL_DELAY_MS: '300',
+        });
+        const session = await launch('background-unfinished');
+        cleanup(t, session);
+        const events = capture(session);
+        const transcriptFile = path.join(brainDir, session.nativeSessionId, '.system_generated', 'logs', 'transcript.jsonl');
+        const writeStep = (input, output) => {
+            fs.mkdirSync(path.dirname(transcriptFile), { recursive: true });
+            fs.writeFileSync(transcriptFile, JSON.stringify({
+                step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: new Date().toISOString(),
+                input_tokens: input, output_tokens: output, cache_read_tokens: 0,
+            }) + '\n');
+        };
+        // The step the prompt's 130-token response covers starts before that response.
+        if (overlapping)
+            writeStep(120, 10);
+        await session.prompt('run the tests and report');
+        await until(() => events.some(event => event.event === 'message_update' && JSON.stringify(event.data).includes('Checking the result.')));
+        if (!overlapping)
+            writeStep(40, 10);
+        await until(() => eventCount(events, 'turn_end') > 0, 5000);
+        assert.equal(asRecord(messages(events, 'assistant').at(-1).usage).totalTokens, expected);
+    });
+}
+test('usage carried past end_turn survives the child exiting in the quiet window', async (t) => {
+    withEnv(t, {
+        PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '80',
+        PI_DISH_AGY_UNFINISHED_IDLE_MS: '5000',
+        FAKE_AGY_SKIP_THOUGHT: '1',
+    });
+    const session = await launch('background-unfinished');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('run the tests and report');
+    await until(() => events.some(event => event.event === 'tool_execution_end' && asRecord(event.data).toolCallId === 'call-read-u'));
+    await (0, promises_1.setTimeout)(150);
+    assert.equal(session.turnInProgress, true, 'the quiet window after a tool result holds the turn');
+    await session.close();
+    const last = mirrorEntries(session.sessionFile)
+        .filter(entry => entry.type === 'message').map(entry => asRecord(entry.message)).at(-1);
+    assert.equal(last.role, 'assistant');
+    assert.equal(last.stopReason, 'error', 'an exit is an interrupted turn, not a completed one');
+    assert.match(String(last.errorMessage), /agy exited/);
+    assert.equal(asRecord(last.usage).totalTokens, 130);
+    assert.equal(eventCount(events, 'turn_end'), 0);
+    assert.equal(eventCount(events, 'agent_end'), 0);
+});
 test('after end_turn, closing prose still ends the turn at the short window', async (t) => {
     withEnv(t, { PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '120', PI_DISH_AGY_UNFINISHED_IDLE_MS: '10000' });
     const session = await launch('background');

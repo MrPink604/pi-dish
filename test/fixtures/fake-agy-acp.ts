@@ -12,8 +12,9 @@
  *   steer     - the first prompt hands over to the second (no usage)
  *   steer-usage - like steer, but the handed-over prompt reports its own usage
  *   background - the turn ends while a command runs; agy resumes on its own
- *   background-unfinished - after end_turn: a tool and a thought, then prose
- *               after FAKE_AGY_FINAL_DELAY_MS (never when unset)
+ *   background-unfinished - after end_turn: a tool and a thought (no thought with
+ *               FAKE_AGY_SKIP_THOUGHT), then prose after FAKE_AGY_FINAL_DELAY_MS
+ *               (never when unset)
  *   max-turn-requests - a text reply answered with stopReason max_turn_requests
  *   slow      - a prompt stays open until session/cancel
  *   tool      - read_file + run_command completed tool calls
@@ -382,7 +383,9 @@ function handlePrompt(id: number, params: Frame): void {
             kind: 'read',
             content: [{ type: 'content', content: { type: 'text', text: '# scratch\n' } }],
           });
-          sessionUpdate({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Checking the result.' } });
+          if (!process.env.FAKE_AGY_SKIP_THOUGHT) {
+            sessionUpdate({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Checking the result.' } });
+          }
           if (!(finalDelay > 0)) return;
           setTimeout(() => {
             textChunk('Final report.');
