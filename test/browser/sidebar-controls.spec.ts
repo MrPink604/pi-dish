@@ -316,4 +316,44 @@ test('pinning a cross-host child preserves an unrelated pinned session sharing t
   ]);
 });
 
+for (const viewport of [{ width: 1280, height: 900 }, { width: 412, height: 915 }]) {
+  test(`toggling a workspace group keeps its header in place in a scrolled list (${viewport.width}px)`, async ({ page, fleet }) => {
+    await page.setViewportSize(viewport);
+    await page.evaluate(({ self, peer }) => {
+      fixtureApp.features.sidebarLists.dispose(); // polls would replace the injected lists
+      fixtureApp.features.sessionState.setSessionLists([self, peer].map(hostId => ({ hostId, active: Array.from({ length: 60 }, (_, index) => ({
+        id: `scroll-${index}`, host: hostId, name: `Scroll ${index}`, isActive: true,
+        cwd: `/work/proj-${String(Math.floor(index / 2)).padStart(2, '0')}`, lastActivity: Date.now() - index * 1000,
+      })) })));
+    }, { self: fleet.self.hostId, peer: fleet.peer.hostId });
+    if (viewport.width <= 768) {
+      await page.locator('.header-menu-btn:visible, .empty-menu-btn:visible').first().click();
+      await expect(page.locator('#sidebar')).toHaveClass(/\bopen\b/);
+      // A click during the slide-in retries after scrolling the header to the top.
+      await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.x).toBe(0);
+    }
+    const key = `${fleet.self.hostId} /work/proj-15`;
+    const header = page.locator(`.workspace-group-header[data-cwd="${key}"]`);
+    // Collapsed groups sink below every expanded sibling, far outside this viewport.
+    const offset = () => header.evaluate(element => {
+      const list = fixtureElement(element.closest<HTMLElement>('#sessionList'), 'session list');
+      return { top: element.getBoundingClientRect().top - list.getBoundingClientRect().top, scrollTop: list.scrollTop };
+    });
+    await header.evaluate(element => {
+      const list = fixtureElement(element.closest<HTMLElement>('#sessionList'), 'session list');
+      list.scrollTop += element.getBoundingClientRect().top - list.getBoundingClientRect().top - list.clientHeight / 2;
+    });
+    const before = await offset();
+    expect(before.scrollTop).toBeGreaterThan(1000);
+    await header.click();
+    await expect(page.locator('.session-segment.collapsed > .workspace-group-header')).toHaveAttribute('data-cwd', key);
+    const collapsed = await offset();
+    expect(Math.abs(collapsed.top - before.top)).toBeLessThanOrEqual(1);
+    expect(collapsed.scrollTop).toBeGreaterThan(1000);
+    await header.click();
+    await expect(page.locator('.session-segment.collapsed')).toHaveCount(0);
+    expect(Math.abs((await offset()).top - before.top)).toBeLessThanOrEqual(1);
+  });
+}
+
 export {};

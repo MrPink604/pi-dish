@@ -28,9 +28,18 @@ export function createSidebarControls(options: {
   const render = () => { if (!disposed) options.render(); };
   let layout = '', renderedRows = new Map<string, { html: string; element: HTMLElement }>();
   let lastProjection: SidebarProjection | null = null;
+  // A toggle re-sorts the list (collapsed workspace groups sink below expanded
+  // siblings); the next paint keeps the toggled control where the user clicked it.
+  let anchor: { top: number; find: () => HTMLElement | undefined } | null = null;
+  function keepInPlace(control: HTMLElement, selector: string, attribute: string) {
+    const value = control.dataset[attribute], host = control.closest<HTMLElement>('.session-item')?.dataset.host;
+    anchor = { top: control.getBoundingClientRect().top, find: () => Array.from(list.querySelectorAll<HTMLElement>(selector))
+      .find(element => element.dataset[attribute] === value && element.closest<HTMLElement>('.session-item')?.dataset.host === host) };
+  }
   /** Keep unchanged cards alive; parse only new/changed cards and small group headings. */
   function updateList(projection: SidebarProjection) {
     if (disposed || drag) return false;
+    const kept = anchor; anchor = null;
     // An unchanged poll hands back the very projection it rendered last time
     // (the renderer's memo), so there is nothing to compare row by row.
     if (projection === lastProjection) return false;
@@ -88,6 +97,8 @@ export function createSidebarControls(options: {
       Array.from(list.querySelectorAll<HTMLElement>('.workspace-new-btn')).find(button =>
         button.dataset.path === focused.dataset.path && button.dataset.host === focused.dataset.host)?.focus({ preventScroll: true });
     }
+    const moved = kept?.find();
+    if (kept && moved) list.scrollTop += moved.getBoundingClientRect().top - kept.top;
     return true;
   }
   function savePins() { write('pi-dish-pinned-sessions', pinned); }
@@ -266,9 +277,9 @@ export function createSidebarControls(options: {
     list.addEventListener('click', event => {
       if (!(event.target instanceof Element) || !list.contains(event.target)) return;
       const target = event.target, item = target.closest<HTMLElement>('.session-item'), id = item?.dataset.id, host = item?.dataset.host || null;
-      const botToggle = target.closest<HTMLElement>('.bot-tree-toggle'); if (botToggle) { if (botToggle.dataset.botToggle) toggleGroup(botCollapseKey(botToggle.dataset.botToggle)); return; }
-      const botClosedToggle = target.closest<HTMLElement>('.bot-closed-toggle'); if (botClosedToggle) { if (botClosedToggle.dataset.botClosed) toggleBotClosed(botClosedToggle.dataset.botClosed); return; }
-      const familyToggle = target.closest<HTMLElement>('.session-family-toggle'); if (familyToggle) { if (familyToggle.dataset.familyId) toggleFamily(familyToggle.dataset.familyId, host); return; }
+      const botToggle = target.closest<HTMLElement>('.bot-tree-toggle'); if (botToggle) { if (botToggle.dataset.botToggle) { keepInPlace(botToggle, '.bot-tree-toggle', 'botToggle'); toggleGroup(botCollapseKey(botToggle.dataset.botToggle)); } return; }
+      const botClosedToggle = target.closest<HTMLElement>('.bot-closed-toggle'); if (botClosedToggle) { if (botClosedToggle.dataset.botClosed) { keepInPlace(botClosedToggle, '.bot-closed-toggle', 'botClosed'); toggleBotClosed(botClosedToggle.dataset.botClosed); } return; }
+      const familyToggle = target.closest<HTMLElement>('.session-family-toggle'); if (familyToggle) { if (familyToggle.dataset.familyId) { keepInPlace(familyToggle, '.session-family-toggle', 'familyId'); toggleFamily(familyToggle.dataset.familyId, host); } return; }
       if (target.closest('.session-pin-btn')) {
         if (id && item) {
           const family = item.closest<HTMLElement>('.session-family-root');
@@ -284,8 +295,8 @@ export function createSidebarControls(options: {
       if (target.closest('.session-close-btn')) { event.stopPropagation(); if (id) closeClick(id, host); return; }
       if (target.closest('.session-drag-handle')) return;
       const newButton = target.closest<HTMLElement>('.workspace-new-btn'); if (newButton) { if (newButton.dataset.path) options.create(newButton.dataset.path, newButton.dataset.host || null); return; }
-      const hostHeader = target.closest<HTMLElement>('.host-section-header'); if (hostHeader) { if (hostHeader.dataset.hostSection) toggleGroup(hostHeader.dataset.hostSection); return; }
-      const header = target.closest<HTMLElement>('.workspace-group-header'); if (header) { if (header.dataset.cwd) toggleGroup(header.dataset.cwd); return; }
+      const hostHeader = target.closest<HTMLElement>('.host-section-header'); if (hostHeader) { if (hostHeader.dataset.hostSection) { keepInPlace(hostHeader, '.host-section-header', 'hostSection'); toggleGroup(hostHeader.dataset.hostSection); } return; }
+      const header = target.closest<HTMLElement>('.workspace-group-header'); if (header) { if (header.dataset.cwd) { keepInPlace(header, '.workspace-group-header', 'cwd'); toggleGroup(header.dataset.cwd); } return; }
       if (!item) return;
       if (item.classList.contains('starting')) { if (item.dataset.spawnId) options.pending(item.dataset.spawnId); }
       else if (id) options.select(id, host);
@@ -297,7 +308,7 @@ export function createSidebarControls(options: {
       event.preventDefault(); openMenu(session, event.clientX, event.clientY);
     }, { signal });
   }
-  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); renderedRows.clear(); lastProjection = null; rootMap.clear(); rootLists = null; }
+  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); renderedRows.clear(); lastProjection = null; anchor = null; rootMap.clear(); rootLists = null; }
   return { mount, dispose, updateList, migrate, reloadPreferences, toggleGroup, toggleFamily, familyRoots, reveal, togglePin, closeClick, performClose, openMenu, closeMenu,
     get menuOpen() { return !!menuOwner; }, get dragging() { return !!drag; }, get closeConfirm() { return confirm?.key || null; }, get closeBusy() { return busy?.key || null; },
     get collapsed(): ReadonlySet<string> { return collapsed; }, get expanded(): ReadonlySet<string> { return expanded; }, get pinned(): readonly string[] { return pinned; } };
