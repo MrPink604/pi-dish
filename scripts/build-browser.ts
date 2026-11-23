@@ -49,8 +49,16 @@ const prepared: GeneratedOutput[] = entries.map(entry => {
 const shellFile = 'public/index.html';
 const shellPath = path.join(root, shellFile);
 const shell = readFileSync(shellPath, 'utf8');
+if (/^(?:<{7}|={7}|>{7})(?:\s|$)/m.test(shell)) {
+  throw new Error(`${shellFile} contains unresolved merge conflict markers`);
+}
+const seenShellAssets = new Set<string>();
 const versioned = shell.replace(/\b(src|href)="([\w./-]+\.(?:js|css))(?:\?v=[0-9a-f]+)?"/g,
   (_match, attribute: string, asset: string) => {
+    if (seenShellAssets.has(asset)) {
+      throw new Error(`${shellFile} references local asset "${asset}" more than once`);
+    }
+    seenShellAssets.add(asset);
     const file = `public/${asset}`;
     const content = prepared.find(output => output.file === file)?.content ?? readFileSync(path.join(root, file));
     const version = createHash('sha256').update(content).digest('hex').slice(0, 16);

@@ -81,6 +81,18 @@ test('browser build detects stale output and preserves it on type failure', () =
         fs.writeFileSync(style, 'body { color: blue; }');
         assert.equal(run().status, 0);
         assert.notEqual(fs.readFileSync(shell, 'utf8'), firstShell, 'a CSS-only change must get a new stylesheet URL');
+        const cleanShell = fs.readFileSync(shell, 'utf8');
+        // Unresolved merge conflict markers or duplicate app.js tags must never pass build or check.
+        fs.writeFileSync(shell, '<<<<<<< HEAD\n<script src="app.js" defer></script>\n=======\n<script src="app.js" defer></script>\n>>>>>>> other\n');
+        const conflicted = run('--check');
+        assert.notEqual(conflicted.status, 0);
+        assert.match(conflicted.stderr, /merge conflict markers/);
+        fs.writeFileSync(shell, '<link href="style.css" rel="stylesheet"><script src="app.js" defer></script><script src="app.js" defer></script>');
+        const duplicated = run('--check');
+        assert.notEqual(duplicated.status, 0);
+        assert.match(duplicated.stderr, /references local asset "app\.js" more than once/);
+        fs.writeFileSync(shell, cleanShell);
+        assert.equal(run('--check').status, 0);
         fs.mkdirSync(path.join(root, 'src/core'));
         const sharedSource = path.join(root, 'src/core/helper-fixture.ts');
         fs.writeFileSync(sharedSource, "export { answer } from '../browser/index';");
