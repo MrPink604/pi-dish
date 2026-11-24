@@ -35,6 +35,30 @@ export function signalBootFailed(document: Document): void {
   dialog.showModal();
 }
 
+function isAppBundleScript(target: EventTarget | null, view: Window): boolean {
+  if (!(target instanceof HTMLScriptElement) || !target.src) return false;
+  try {
+    const url = new URL(target.src, view.location.href);
+    return url.origin === view.location.origin && url.pathname.endsWith('/app.js');
+  } catch {
+    return false;
+  }
+}
+
+function isBootErrorEvent(event: ErrorEvent, view: Window): boolean {
+  // ResizeObserver loop warnings are benign layout notifications, not boot failures.
+  if (/^ResizeObserver loop\b/i.test(event.message || '')) return false;
+  // Ignore errors thrown by browser extensions or cross-origin scripts.
+  if (event.filename) {
+    try {
+      if (new URL(event.filename, view.location.href).origin !== view.location.origin) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Show a self-contained failure surface with a real reload control. It is
  * installed by theme-prepaint.ts, before the deferred application bundle, so
@@ -48,13 +72,18 @@ export function installStartupGuard(document: Document): void {
   let started = false;
   document.addEventListener(STARTED_EVENT, () => { started = true; }, { signal });
   document.addEventListener(READY_EVENT, () => lifetime.abort(), { signal });
-  view.addEventListener('error', event => {
-    const target = event.target;
-    if (event instanceof ErrorEvent || (target instanceof HTMLScriptElement && new URL(target.src).pathname.endsWith('/app.js'))) {
-      signalBootFailed(document);
+  view.addEventListener('error', (event: Event) => {
+    if (event instanceof ErrorEvent) {
+      if (isBootErrorEvent(event, view)) signalBootFailed(document);
+      return;
     }
+    if (isAppBundleScript(event.target, view)) signalBootFailed(document);
   }, { capture: true, signal });
-  view.addEventListener('unhandledrejection', () => signalBootFailed(document), { signal });
+  // Once the bundle signals STARTED_EVENT, runApp() catches startApp() rejections
+  // directly; don't let unrelated extension or background promise rejections brick boot.
+  view.addEventListener('unhandledrejection', () => {
+    if (!started) signalBootFailed(document);
+  }, { signal });
   // A pre-upgrade bundle doesn't announce readiness. Catch its deferred startup
   // exceptions, but don't turn later runtime errors into startup failures.
   view.addEventListener('load', () => {

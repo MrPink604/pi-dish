@@ -155,6 +155,53 @@ test.describe('startup failure recovery', () => {
     await page.locator('#tabAll').click();
     await expect(fleet.row(fleet.self)).toBeVisible();
   });
+
+  test('ignores ResizeObserver warnings, extension errors, and post-start unhandled rejections during boot', async ({ page, fleet }) => {
+    let releaseHost!: () => void;
+    const hostPending = new Promise<void>(resolve => { releaseHost = resolve; });
+    let blockedOnce = false;
+    await page.route(`${fleet.self.base}/api/host`, async route => {
+      if (!blockedOnce) {
+        blockedOnce = true;
+        await hostPending;
+      }
+      await route.fallback();
+    });
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    // Wait until app.js has started (dispatched pi-dish-boot-started) while /api/host is still pending.
+    await page.waitForFunction(() => !!document.querySelector('script[src*="app.js"]'));
+    await page.evaluate(() => {
+      window.dispatchEvent(new ErrorEvent('error', {
+        message: 'ResizeObserver loop completed with undelivered notifications.',
+        filename: `${window.location.origin}/app.js`,
+      }));
+      window.dispatchEvent(new ErrorEvent('error', {
+        message: 'Extension injected script error',
+        filename: 'chrome-extension://abcdefghijklmnop/content.js',
+      }));
+      window.dispatchEvent(new ErrorEvent('error', {
+        message: 'Cross-origin widget error',
+        filename: 'https://third-party.example/widget.js',
+      }));
+      // An empty-src script error must not throw inside the guard or trigger boot failure.
+      const orphan = document.createElement('script');
+      orphan.dispatchEvent(new Event('error'));
+      // Unrelated promise rejection after STARTED_EVENT must not brick boot.
+      window.dispatchEvent(new PromiseRejectionEvent('unhandledrejection', {
+        promise: Promise.resolve(),
+        reason: new Error('background extension rejection'),
+      }));
+    });
+
+    const failure = page.getByRole('alertdialog', { name: 'pi-dish failed to start' });
+    await expect(failure).toHaveCount(0);
+
+    releaseHost();
+    await page.locator('#tabAll').click();
+    await expect(fleet.row(fleet.self)).toBeVisible();
+    await expect(failure).toHaveCount(0);
+  });
 });
 
 export {};
