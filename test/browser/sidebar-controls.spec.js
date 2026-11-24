@@ -390,3 +390,364 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 412, height: 915 
         });
     }
 }
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    (0, fixtures_js_1.test)(`closing a session mid-list preserves sidebar scroll and DOM continuity (${viewport.width}px)`, async ({ page, fleet }) => {
+        await page.setViewportSize(viewport);
+        const now = Date.now();
+        const state = {
+            active: Array.from({ length: 40 }, (_, index) => ({
+                id: `close-${String(index).padStart(2, '0')}`,
+                name: `Close ${index}`,
+                isActive: true,
+                capabilities: { close: true },
+                cwd: `/work/proj-${String(Math.floor(index / 2)).padStart(2, '0')}`,
+                lastActivity: new Date(now - index * 60_000).toISOString(),
+                model: 'claude-sonnet-4',
+            })),
+            previous: [],
+        };
+        await page.route(`${fleet.self.base}/api/sessions?*`, route => {
+            const url = new URL(route.request().url());
+            const activeOnly = url.searchParams.get('active') === '1';
+            return route.fulfill({ json: { active: state.active, previous: activeOnly ? [] : state.previous, indexing: false } });
+        });
+        await page.route(`${fleet.peer.base}/api/sessions?*`, route => route.fulfill({ json: { active: [], previous: [], indexing: false } }));
+        await page.route(`${fleet.self.base}/api/sessions/*/close`, route => {
+            const match = /\/api\/sessions\/([^/]+)\/close/.exec(route.request().url());
+            const id = decodeURIComponent(match?.[1] || '');
+            const idx = state.active.findIndex(entry => entry.id === id);
+            if (idx !== -1) {
+                const [removed] = state.active.splice(idx, 1);
+                state.previous.unshift({ ...removed, isActive: false });
+            }
+            return route.fulfill({ json: { ok: true } });
+        });
+        await page.route('**/api/sessions/*/messages*', route => route.fulfill({ json: { messages: [], total: 0, hasMore: false } }));
+        await page.route('**/api/sessions/*/relations*', route => route.fulfill({ json: { parent: null, children: [], subagents: [] } }));
+        await page.route('**/api/sessions/*/stream*', route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'event: init\ndata: {"turnInProgress":false}\n\n' }));
+        await page.route('**/api/sessions/*/commands*', route => route.fulfill({ json: { commands: [] } }));
+        await page.route('**/api/sessions/*/models*', route => route.fulfill({ json: { models: [] } }));
+        await page.route('**/api/sessions/*/reviews*', route => route.fulfill({ json: { reviews: [] } }));
+        await page.route('**/api/sessions/*/stats', route => route.fulfill({ json: { model: 'claude-sonnet-4', cwd: '/work', hardCacheMisses: 0, costs: { total: 0 } } }));
+        await page.route('**/api/sessions/*/share*', route => route.fulfill({ status: 404, json: {} }));
+        await page.route('**/api/pages?*', route => route.fulfill({ json: [] }));
+        await page.evaluate(() => fixtureApp.features.sidebarQuery.switchTab('active'));
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="close-20"]')).toHaveCount(1);
+        await page.evaluate(host => fixtureApp.features.sessionView.select('close-00', { host }), fleet.self.hostId);
+        if (viewport.width <= 768) {
+            await page.locator('.header-menu-btn:visible, .empty-menu-btn:visible').first().click();
+            await (0, fixtures_js_1.expect)(page.locator('#sidebar')).toHaveClass(/\bopen\b/);
+            await fixtures_js_1.expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.x).toBe(0);
+        }
+        const measure = () => page.evaluate(() => {
+            const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+            const lr = list.getBoundingClientRect();
+            const topOf = (id) => {
+                const el = list.querySelector(`.session-item[data-id="${id}"]`);
+                return el ? el.getBoundingClientRect().top - lr.top : null;
+            };
+            return {
+                scrollTop: list.scrollTop,
+                clientHeight: list.clientHeight,
+                s18: topOf('close-18'),
+                s20: topOf('close-20'),
+                s21: topOf('close-21'),
+                s22: topOf('close-22'),
+            };
+        });
+        await page.evaluate(() => {
+            const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+            const target = fixtureElement(list.querySelector('.session-item[data-id="close-20"]'), 'close-20');
+            list.scrollTop += target.getBoundingClientRect().top - list.getBoundingClientRect().top - 220;
+        });
+        const before = await measure();
+        (0, fixtures_js_1.expect)(before.scrollTop).toBeGreaterThan(1000);
+        (0, fixtures_js_1.expect)(before.s20).not.toBeNull();
+        // Keep a reference to an unaffected sibling segment; a full list.replaceChildren teardown detaches it.
+        await page.evaluate(() => {
+            const seg = fixtureElement(document.querySelector('.session-item[data-id="close-18"]')?.closest('.session-segment'), 'close-18 segment');
+            window.__keptSeg = seg;
+        });
+        // 1. Close a non-selected session mid-list via the sidebar two-tap close button.
+        const close20 = page.locator('.session-item[data-id="close-20"] .session-close-btn');
+        await close20.hover();
+        await close20.click();
+        await (0, fixtures_js_1.expect)(close20).toHaveClass(/\bconfirm\b/);
+        await close20.click();
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="close-20"]')).toHaveCount(0);
+        const afterNonSelected = await measure();
+        (0, fixtures_js_1.expect)(Math.abs(afterNonSelected.scrollTop - before.scrollTop)).toBeLessThanOrEqual(2);
+        (0, fixtures_js_1.expect)(Math.abs((afterNonSelected.s18 ?? 0) - (before.s18 ?? 0))).toBeLessThanOrEqual(1);
+        // The next session moves into close-20's place and stays inside the viewport.
+        (0, fixtures_js_1.expect)(afterNonSelected.s21).not.toBeNull();
+        (0, fixtures_js_1.expect)(Math.abs((afterNonSelected.s21 ?? 0) - (before.s20 ?? 0))).toBeLessThanOrEqual(2);
+        (0, fixtures_js_1.expect)(afterNonSelected.s21).toBeGreaterThanOrEqual(0);
+        (0, fixtures_js_1.expect)(afterNonSelected.s21).toBeLessThan(afterNonSelected.clientHeight);
+        (0, fixtures_js_1.expect)(await page.evaluate(() => window.__keptSeg?.isConnected)).toBe(true);
+        // 2. Close the SELECTED session via the sidebar close button.
+        await page.evaluate(host => fixtureApp.features.sessionView.select('close-21', { host }), fleet.self.hostId);
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="close-21"]')).toHaveClass(/\bactive\b/);
+        const beforeSelected = await measure();
+        const close21 = page.locator('.session-item[data-id="close-21"] .session-close-btn');
+        await close21.hover();
+        await close21.click();
+        await (0, fixtures_js_1.expect)(close21).toHaveClass(/\bconfirm\b/);
+        await close21.click();
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="close-21"]')).toHaveCount(0);
+        const afterSelected = await measure();
+        (0, fixtures_js_1.expect)(Math.abs(afterSelected.scrollTop - beforeSelected.scrollTop)).toBeLessThanOrEqual(2);
+        (0, fixtures_js_1.expect)(Math.abs((afterSelected.s18 ?? 0) - (beforeSelected.s18 ?? 0))).toBeLessThanOrEqual(1);
+        (0, fixtures_js_1.expect)(afterSelected.s22).not.toBeNull();
+        (0, fixtures_js_1.expect)(afterSelected.s22).toBeGreaterThanOrEqual(0);
+        (0, fixtures_js_1.expect)(afterSelected.s22).toBeLessThan(afterSelected.clientHeight);
+        // 3. Close the selected session from the stats modal (header/context close path).
+        await page.evaluate(host => fixtureApp.features.sessionView.select('close-22', { host }), fleet.self.hostId);
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="close-22"]')).toHaveClass(/\bactive\b/);
+        const beforeModal = await measure();
+        if (viewport.width <= 768) {
+            await page.evaluate(() => fixtureApp.features.sidebarQuery.close());
+            await (0, fixtures_js_1.expect)(page.locator('#sidebar')).not.toHaveClass(/\bopen\b/);
+        }
+        page.once('dialog', dialog => dialog.accept());
+        await page.evaluate(() => fixtureApp.features.sessionInfo.openStats());
+        await page.locator('#sessionCloseBtn').click();
+        await (0, fixtures_js_1.expect)(page.locator('#statsModal')).toBeHidden();
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="close-22"]')).toHaveCount(0);
+        if (viewport.width <= 768) {
+            await page.locator('.header-menu-btn:visible, .empty-menu-btn:visible').first().click();
+            await (0, fixtures_js_1.expect)(page.locator('#sidebar')).toHaveClass(/\bopen\b/);
+            await fixtures_js_1.expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.x).toBe(0);
+        }
+        const afterModal = await measure();
+        (0, fixtures_js_1.expect)(Math.abs(afterModal.scrollTop - beforeModal.scrollTop)).toBeLessThanOrEqual(2);
+        (0, fixtures_js_1.expect)(Math.abs((afterModal.s18 ?? 0) - (beforeModal.s18 ?? 0))).toBeLessThanOrEqual(1);
+    });
+    (0, fixtures_js_1.test)(`background-spawned sessions and closed rows above the viewport keep scrolled sidebar rows in place (${viewport.width}px)`, async ({ page, fleet }) => {
+        await page.setViewportSize(viewport);
+        const now = Date.now();
+        const bot = { id: 'fleet', parentId: null, name: 'Fleet', status: 'active', model: 'claude-sonnet-4', thinking: null, identity: 'Fleet', places: [], sessionId: 'route-fleet' };
+        const selfState = {
+            active: [
+                { id: 'route-fleet', host: fleet.self.hostId, name: 'Fleet', harnessId: 'bot', cwd: '/home', isActive: true, lastActivity: new Date(now).toISOString() },
+                { id: 'w-0', host: fleet.self.hostId, name: 'Worker 0', cwd: '/repo', parentId: 'route-fleet', isActive: true, capabilities: { close: true }, lastActivity: new Date(now - 5000).toISOString() },
+                ...Array.from({ length: 16 }, (_, index) => ({
+                    id: `self-${String(index).padStart(2, '0')}`,
+                    host: fleet.self.hostId,
+                    name: `Self ${index}`,
+                    isActive: true,
+                    capabilities: { close: true },
+                    cwd: `/work/self-${String(Math.floor(index / 2)).padStart(2, '0')}`,
+                    lastActivity: new Date(now - (index + 1) * 60_000).toISOString(),
+                })),
+            ],
+            previous: [],
+        };
+        const peerState = {
+            active: Array.from({ length: 24 }, (_, index) => ({
+                id: `peer-${String(index).padStart(2, '0')}`,
+                host: fleet.peer.hostId,
+                name: `Peer ${index}`,
+                isActive: true,
+                capabilities: { close: true },
+                cwd: `/work/peer-${String(Math.floor(index / 2)).padStart(2, '0')}`,
+                lastActivity: new Date(now - (index + 1) * 60_000).toISOString(),
+            })),
+            previous: [],
+        };
+        await page.evaluate(({ selfHost, peerHost, selfActive, peerActive, bot }) => {
+            fixtureApp.features.sidebarLists.dispose();
+            fixtureApp.features.sidebarQuery.switchTab('active');
+            fixtureApp.features.sessionState.setSessionLists([
+                { hostId: selfHost, active: selfActive, previous: [] },
+                { hostId: peerHost, active: peerActive, previous: [] },
+            ]);
+            // Expose a helper to re-publish lists with bots via updateList-driving state writes.
+            window.__bgBot = bot;
+        }, { selfHost: fleet.self.hostId, peerHost: fleet.peer.hostId, selfActive: selfState.active, peerActive: peerState.active, bot });
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="peer-14"]')).toHaveCount(1);
+        if (viewport.width <= 768) {
+            await page.locator('.header-menu-btn:visible, .empty-menu-btn:visible').first().click();
+            await (0, fixtures_js_1.expect)(page.locator('#sidebar')).toHaveClass(/\bopen\b/);
+            await fixtures_js_1.expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.x).toBe(0);
+        }
+        const rowPos = (id) => page.evaluate(targetId => {
+            const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+            const el = fixtureElement(list.querySelector(`.session-item[data-id="${targetId}"]`), targetId);
+            return {
+                scrollTop: list.scrollTop,
+                top: el.getBoundingClientRect().top - list.getBoundingClientRect().top,
+            };
+        }, id);
+        // Scroll down into the peer host section.
+        await page.evaluate(() => {
+            const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+            const target = fixtureElement(list.querySelector('.session-item[data-id="peer-14"]'), 'peer-14');
+            list.scrollTop += target.getBoundingClientRect().top - list.getBoundingClientRect().top - 220;
+        });
+        const before = await rowPos('peer-14');
+        (0, fixtures_js_1.expect)(before.scrollTop).toBeGreaterThan(1000);
+        // 1. Background spawn above the viewport (new workers + new workspace at top of self host).
+        selfState.active.unshift({ id: 'w-bg-1', host: fleet.self.hostId, name: 'Background Worker 1', cwd: '/repo', parentId: 'route-fleet', isActive: true, capabilities: { close: true }, lastActivity: new Date(now + 1000).toISOString() }, { id: 'w-bg-2', host: fleet.self.hostId, name: 'Background Worker 2', cwd: '/repo', parentId: 'route-fleet', isActive: true, capabilities: { close: true }, lastActivity: new Date(now + 2000).toISOString() }, { id: 'self-bg-new', host: fleet.self.hostId, name: 'Background Session', cwd: '/work/self-new', isActive: true, capabilities: { close: true }, lastActivity: new Date(now + 3000).toISOString() });
+        await page.evaluate(({ selfHost, peerHost, selfActive, peerActive }) => {
+            fixtureApp.features.sessionState.setSessionLists([
+                { hostId: selfHost, active: selfActive, previous: [] },
+                { hostId: peerHost, active: peerActive, previous: [] },
+            ]);
+        }, { selfHost: fleet.self.hostId, peerHost: fleet.peer.hostId, selfActive: selfState.active, peerActive: peerState.active });
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="self-bg-new"]')).toHaveCount(1);
+        const afterSpawnAbove = await rowPos('peer-14');
+        (0, fixtures_js_1.expect)(Math.abs(afterSpawnAbove.top - before.top)).toBeLessThanOrEqual(1);
+        (0, fixtures_js_1.expect)(afterSpawnAbove.scrollTop).toBeGreaterThan(before.scrollTop);
+        // 2. Background spawn in an EXISTING workspace near the top of the viewport causes that workspace to jump to top;
+        // the surrounding visible rows must stay put rather than following that workspace to the top.
+        const beforePeer16 = await rowPos('peer-16');
+        peerState.active.unshift({
+            id: 'peer-bg-reordered',
+            host: fleet.peer.hostId,
+            name: 'Peer Reorder Spawn',
+            isActive: true,
+            capabilities: { close: true },
+            cwd: '/work/peer-06', // workspace of peer-12 & peer-13 (right above peer-14)
+            lastActivity: new Date(now + 4000).toISOString(),
+        });
+        await page.evaluate(({ selfHost, peerHost, selfActive, peerActive }) => {
+            fixtureApp.features.sessionState.setSessionLists([
+                { hostId: selfHost, active: selfActive, previous: [] },
+                { hostId: peerHost, active: peerActive, previous: [] },
+            ]);
+        }, { selfHost: fleet.self.hostId, peerHost: fleet.peer.hostId, selfActive: selfState.active, peerActive: peerState.active });
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="peer-bg-reordered"]')).toHaveCount(1);
+        const afterReorderSpawn = await rowPos('peer-16');
+        (0, fixtures_js_1.expect)(Math.abs(afterReorderSpawn.top - beforePeer16.top)).toBeLessThanOrEqual(1);
+        (0, fixtures_js_1.expect)(afterReorderSpawn.scrollTop).toBeGreaterThan(1000);
+        // 3. Background close of sessions ABOVE the viewport keeps visible rows pinned in place.
+        const beforeCloseAbove = await rowPos('peer-16');
+        selfState.active.splice(0, 3);
+        await page.evaluate(({ selfHost, peerHost, selfActive, peerActive }) => {
+            fixtureApp.features.sessionState.setSessionLists([
+                { hostId: selfHost, active: selfActive, previous: [] },
+                { hostId: peerHost, active: peerActive, previous: [] },
+            ]);
+        }, { selfHost: fleet.self.hostId, peerHost: fleet.peer.hostId, selfActive: selfState.active, peerActive: peerState.active });
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="self-bg-new"]')).toHaveCount(0);
+        const afterCloseAbove = await rowPos('peer-16');
+        (0, fixtures_js_1.expect)(Math.abs(afterCloseAbove.top - beforeCloseAbove.top)).toBeLessThanOrEqual(1);
+        (0, fixtures_js_1.expect)(afterCloseAbove.scrollTop).toBeGreaterThan(1000);
+        // 4. When already at scrollTop === 0, a new background spawn at the top stays at 0 so the user sees it.
+        await page.evaluate(() => { fixtureElement(document.getElementById('sessionList'), '#sessionList').scrollTop = 0; });
+        selfState.active.unshift({
+            id: 'self-top-check',
+            host: fleet.self.hostId,
+            name: 'Top Check',
+            isActive: true,
+            capabilities: { close: true },
+            cwd: '/work/self-top',
+            lastActivity: new Date(now + 5000).toISOString(),
+        });
+        await page.evaluate(({ selfHost, peerHost, selfActive, peerActive }) => {
+            fixtureApp.features.sessionState.setSessionLists([
+                { hostId: selfHost, active: selfActive, previous: [] },
+                { hostId: peerHost, active: peerActive, previous: [] },
+            ]);
+        }, { selfHost: fleet.self.hostId, peerHost: fleet.peer.hostId, selfActive: selfState.active, peerActive: peerState.active });
+        await (0, fixtures_js_1.expect)(page.locator('.session-item[data-id="self-top-check"]')).toHaveCount(1);
+        (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureElement(document.getElementById('sessionList'), '#sessionList').scrollTop)).toBe(0);
+    });
+}
+(0, fixtures_js_1.test)('bot-worker spawns, bot-worker closes, and filtered-list closes keep scrolled sidebar rows anchored', async ({ page, fleet }) => {
+    await setup(page);
+    const result = await page.evaluate(() => {
+        const HUB = '11111111-1111-4111-8111-111111111111';
+        const PEER = '22222222-2222-4222-8222-222222222222';
+        const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+        const state = window.controlsState, controls = window.customSidebar;
+        const now = Date.now();
+        const botList = [
+            { id: 'fleet', parentId: null, name: 'Fleet', status: 'active', model: 'claude-sonnet-4', thinking: null, identity: 'Fleet', places: [], sessionId: 'route-fleet' },
+        ];
+        const hosts = [
+            { hostId: HUB, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+            { hostId: PEER, self: false, label: 'tycho', state: 'reachable', key: 'tycho', color: '#fa1', dot: '', hasCache: true },
+        ];
+        const selfActive = [
+            { id: 'route-fleet', host: HUB, name: 'Fleet', harnessId: 'bot', cwd: '/home', isActive: true, lastActivity: now },
+            ...Array.from({ length: 12 }, (_, index) => ({
+                id: `worker-${String(index).padStart(2, '0')}`, host: HUB, name: `Worker ${index}`, cwd: '/repo',
+                parentId: 'route-fleet', isActive: true, capabilities: { close: true }, lastActivity: now - (index + 1) * 1000,
+            })),
+        ];
+        const peerActive = Array.from({ length: 30 }, (_, index) => ({
+            id: `peer-${String(index).padStart(2, '0')}`, host: PEER, name: `Peer ${index}`, cwd: `/srv/app-${String(Math.floor(index / 2)).padStart(2, '0')}`,
+            isActive: true, capabilities: { close: true }, lastActivity: now - (index + 1) * 60_000,
+        }));
+        const render = (query = '') => {
+            state.setSessionLists([{ hostId: HUB, active: selfActive }, { hostId: PEER, active: peerActive }]);
+            controls.updateList(PiDishBrowser.renderSidebar({
+                ...state.sessions, selected: null, tab: 'active', view: 'workspace', query, queriedFor: query, scope: '', indexing: false,
+                contextMetric: 'percent', pending: [], selectedSpawn: null,
+                expanded: controls.expanded, collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
+                closeConfirm: null, closeBusy: null, multiHost: true, hosts, bots: botList, botRetireArmed: null,
+                botsHostId: HUB, selfHostId: HUB, unread: () => false, hostChip: () => '',
+            }));
+        };
+        render();
+        const topOf = (id) => {
+            const el = fixtureElement(list.querySelector(`.session-item[data-id="${id}"]`), id);
+            return el.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        };
+        // Scroll down into the peer host section well below the Bots segment.
+        const peer15 = fixtureElement(list.querySelector('.session-item[data-id="peer-15"]'), 'peer-15');
+        list.scrollTop += peer15.getBoundingClientRect().top - list.getBoundingClientRect().top - 220;
+        const beforeScroll = list.scrollTop;
+        const beforeTop = topOf('peer-15');
+        const botsSeg = fixtureElement(list.querySelector('.bots-segment'), '.bots-segment');
+        const hostSeg = fixtureElement(peer15.closest('.host-section'), 'peer host section');
+        // 1. Bot spawns 3 new workers nested inside .bots-segment above the scrolled viewport.
+        for (let index = 1; index <= 3; index++) {
+            selfActive.push({
+                id: `worker-new-${index}`, host: HUB, name: `New Worker ${index}`, cwd: '/repo',
+                parentId: 'route-fleet', isActive: true, capabilities: { close: true }, lastActivity: now + index * 1000,
+            });
+        }
+        render();
+        const afterBotSpawnTop = topOf('peer-15');
+        const afterBotSpawnScroll = list.scrollTop;
+        const keptAfterBotSpawn = botsSeg.isConnected && hostSeg.isConnected;
+        // 2. Close a bot worker inside .bots-segment above the viewport.
+        selfActive.splice(1, 2);
+        render();
+        const afterBotCloseTop = topOf('peer-15');
+        const keptAfterBotClose = botsSeg.isConnected && hostSeg.isConnected;
+        // 3. Switch to filtered search (.ranked-segment), scroll mid-list, close a mid-list row.
+        render('Peer');
+        const filteredTarget = fixtureElement(list.querySelector('.session-item[data-id="peer-15"]'), 'filtered peer-15');
+        list.scrollTop += filteredTarget.getBoundingClientRect().top - list.getBoundingClientRect().top - 220;
+        const beforeFilteredScroll = list.scrollTop;
+        const beforeFiltered13 = topOf('peer-13');
+        const beforeFiltered15 = topOf('peer-15');
+        const idx = peerActive.findIndex(entry => entry.id === 'peer-15');
+        peerActive.splice(idx, 1);
+        render('Peer');
+        const afterFilteredScroll = list.scrollTop;
+        const afterFiltered13 = topOf('peer-13');
+        const afterFiltered16 = topOf('peer-16');
+        return {
+            beforeScroll, afterBotSpawnScroll,
+            botSpawnDelta: Math.abs(afterBotSpawnTop - beforeTop),
+            botCloseDelta: Math.abs(afterBotCloseTop - beforeTop),
+            keptAfterBotSpawn, keptAfterBotClose,
+            filteredScrollDelta: Math.abs(afterFilteredScroll - beforeFilteredScroll),
+            filtered13Delta: Math.abs(afterFiltered13 - beforeFiltered13),
+            filtered16SlotDelta: Math.abs(afterFiltered16 - beforeFiltered15),
+        };
+    });
+    (0, fixtures_js_1.expect)(result.beforeScroll).toBeGreaterThan(1000);
+    (0, fixtures_js_1.expect)(result.afterBotSpawnScroll).toBeGreaterThan(result.beforeScroll);
+    (0, fixtures_js_1.expect)(result.botSpawnDelta).toBeLessThanOrEqual(1);
+    (0, fixtures_js_1.expect)(result.botCloseDelta).toBeLessThanOrEqual(1);
+    (0, fixtures_js_1.expect)(result.keptAfterBotSpawn).toBe(true);
+    (0, fixtures_js_1.expect)(result.keptAfterBotClose).toBe(true);
+    (0, fixtures_js_1.expect)(result.filteredScrollDelta).toBeLessThanOrEqual(1);
+    (0, fixtures_js_1.expect)(result.filtered13Delta).toBeLessThanOrEqual(1);
+    (0, fixtures_js_1.expect)(result.filtered16SlotDelta).toBeLessThanOrEqual(2);
+});

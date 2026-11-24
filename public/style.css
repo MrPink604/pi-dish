@@ -647,6 +647,7 @@ body.sidebar-open {
 .session-list {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 0 8px 8px;
 }
 

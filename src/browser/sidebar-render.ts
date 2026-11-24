@@ -29,6 +29,7 @@ export interface SidebarProjection {
   readonly layout: string;
   readonly rows: readonly { key: string; html: string }[];
   readonly count: number;
+  readonly mode?: string;
   readonly html: string;
 }
 const MAX_VISUAL_INDENT_DEPTH = 3;
@@ -557,7 +558,8 @@ function renderSessions() {
     html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
   }
 
-  return { layout: html, rows, count: active.length + pending.length,
+  const mode = `${options.tab}\0${options.view}\0${options.query}\0${options.scope}`;
+  return { layout: html, rows, count: active.length + pending.length, mode,
     // String consumers get complete markup; the DOM controller only parses changed rows.
     get html() { let index = 0; return html.replace(/<template data-sidebar-row="[^"]*"><\/template>/g, () => rows[index++].html); } };
 }

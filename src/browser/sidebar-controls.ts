@@ -27,8 +27,173 @@ export function createSidebarControls(options: {
   let pinned = read('pi-dish-pinned-sessions');
   const render = () => { if (!disposed) options.render(); };
   let layout = '', renderedRows = new Map<string, { html: string; element: HTMLElement }>();
+  const rowKeys = new WeakMap<Element, string>();
   let lastProjection: SidebarProjection | null = null;
-  /** Keep unchanged cards alive; parse only new/changed cards and small group headings. */
+  let lastMode: string | undefined | null = null;
+  function syncAttributes(target: Element, source: Element) {
+    for (const { name } of Array.from(target.attributes)) {
+      if (!source.hasAttribute(name)) target.removeAttribute(name);
+    }
+    for (const { name, value } of Array.from(source.attributes)) {
+      if (target.getAttribute(name) !== value) target.setAttribute(name, value);
+    }
+  }
+  function reconcileKey(el: Element): { key: string; leaf: boolean } | null {
+    if (el.tagName === 'TEMPLATE' && el.hasAttribute('data-sidebar-row')) return null;
+    const classes = el.classList;
+    if (classes.contains('session-family-root')) {
+      const key = el.getAttribute('data-family-key');
+      return key ? { key: 'fam:' + key, leaf: false } : null;
+    }
+    if (classes.contains('session-family-child')) {
+      const first = el.firstElementChild;
+      const rowKey = first?.getAttribute('data-sidebar-row') || (first ? rowKeys.get(first) : undefined);
+      return rowKey ? { key: 'fam-child:' + rowKey, leaf: false } : null;
+    }
+    if (classes.contains('session-family-children')) return { key: 'fam-children', leaf: false };
+    if (classes.contains('host-section')) {
+      const header = el.firstElementChild;
+      const key = header?.classList.contains('host-section-header') ? header.getAttribute('data-host-section') : null;
+      return key ? { key: 'host:' + key, leaf: false } : null;
+    }
+    if (classes.contains('host-section-body')) return { key: 'host-body', leaf: false };
+    if (classes.contains('host-section-header')) {
+      const key = el.getAttribute('data-host-section');
+      return key ? { key: 'hdr:host:' + key, leaf: true } : null;
+    }
+    if (classes.contains('session-segment')) {
+      if (classes.contains('pinned-segment')) return { key: 'seg:pinned', leaf: false };
+      if (classes.contains('starting-segment')) return { key: 'seg:starting', leaf: false };
+      if (classes.contains('ranked-segment')) return { key: 'seg:ranked', leaf: false };
+      const header = el.firstElementChild;
+      const key = header?.classList.contains('workspace-group-header') ? header.getAttribute('data-cwd') : null;
+      return key ? { key: 'seg:' + key, leaf: false } : null;
+    }
+    if (classes.contains('workspace-group-header')) {
+      const key = el.getAttribute('data-cwd');
+      if (key) return { key: 'hdr:ws:' + key, leaf: true };
+      if (classes.contains('pinned-header')) return { key: 'hdr:pinned', leaf: true };
+      if (classes.contains('starting-header')) return { key: 'hdr:starting', leaf: true };
+      return null;
+    }
+    if (classes.contains('workspace-children')) return { key: 'ws-children', leaf: false };
+    if (classes.contains('bots-segment')) return { key: 'bots-segment', leaf: false };
+    if (classes.contains('bots-header')) return { key: 'hdr:bots', leaf: true };
+    if (classes.contains('bot-branch')) {
+      const key = el.getAttribute('data-bot-branch');
+      return key ? { key: 'bot-branch:' + key, leaf: false } : null;
+    }
+    if (classes.contains('bot-node')) {
+      const key = el.getAttribute('data-bot-id');
+      return key ? { key: 'bot-node:' + key, leaf: false } : null;
+    }
+    if (classes.contains('bot-children')) {
+      const key = el.getAttribute('data-bot-children');
+      return key ? { key: 'bot-children:' + key, leaf: false } : null;
+    }
+    if (classes.contains('bot-worker-node')) {
+      const family = el.firstElementChild;
+      const key = family?.getAttribute('data-family-key');
+      return key ? { key: 'bot-worker:' + key, leaf: false } : null;
+    }
+    if (classes.contains('bot-closed-workers')) {
+      const key = el.getAttribute('data-bot-closed-group');
+      return key ? { key: 'hdr:bot-closed:' + key, leaf: true } : null;
+    }
+    if (classes.contains('bot-closed-list')) return { key: 'bot-closed-list', leaf: false };
+    if (classes.contains('bot-item')) return { key: 'bot-stopped', leaf: true };
+    if (classes.contains('starting')) {
+      const key = el.getAttribute('data-spawn-id');
+      return key ? { key: 'spawn:' + key, leaf: true } : null;
+    }
+    if (classes.contains('indexing-note')) return { key: 'indexing-note', leaf: true };
+    if (classes.contains('empty-session')) return { key: 'empty-session', leaf: true };
+    if (classes.contains('host-section-empty')) return { key: 'host-section-empty', leaf: true };
+    if (classes.contains('host-offline-note')) return { key: 'host-offline:' + (el.textContent || ''), leaf: true };
+    if (classes.contains('scope-hidden-note')) return { key: 'scope-hidden:' + (el.textContent || ''), leaf: true };
+    return null;
+  }
+  function liveChildKey(el: Element): string | null {
+    const rowKey = rowKeys.get(el);
+    if (rowKey !== undefined) return 'row:' + rowKey;
+    return reconcileKey(el)?.key ?? null;
+  }
+  function hydrateSlots(node: ParentNode, next: ReadonlyMap<string, { html: string; element: HTMLElement }>) {
+    for (const slot of Array.from(node.querySelectorAll<HTMLElement>('[data-sidebar-row]'))) {
+      slot.replaceWith(next.get(slot.dataset.sidebarRow!)!.element);
+    }
+  }
+  /** Reconcile sidebar containers and rows in place so unchanged sections and cards stay attached. */
+  function reconcileChildren(
+    parent: Element,
+    desiredParent: ParentNode,
+    next: ReadonlyMap<string, { html: string; element: HTMLElement }>,
+    prev: ReadonlyMap<string, { html: string; element: HTMLElement }>,
+  ) {
+    const liveByKey = new Map<string, Element>();
+    for (const child of Array.from(parent.children)) {
+      const info = reconcileKey(child);
+      if (info && !liveByKey.has(info.key)) liveByKey.set(info.key, child);
+    }
+    const desiredList = Array.from(desiredParent.children);
+    const desiredKeys = new Set<string>();
+    for (const desired of desiredList) {
+      const rowKey = desired.tagName === 'TEMPLATE' ? desired.getAttribute('data-sidebar-row') : null;
+      if (rowKey !== null) desiredKeys.add('row:' + rowKey);
+      else {
+        const info = reconcileKey(desired);
+        if (info) desiredKeys.add(info.key);
+      }
+    }
+    let cursor: Element | null = parent.firstElementChild;
+    const dropRemovedCursor = () => {
+      while (cursor) {
+        const key = liveChildKey(cursor);
+        if (key !== null && desiredKeys.has(key)) break;
+        const following = cursor.nextElementSibling;
+        cursor.remove();
+        cursor = following;
+      }
+    };
+    for (const desired of desiredList) {
+      dropRemovedCursor();
+      const rowKey = desired.tagName === 'TEMPLATE' ? desired.getAttribute('data-sidebar-row') : null;
+      if (rowKey !== null) {
+        const rowEl = next.get(rowKey)!.element;
+        if (rowEl === cursor) {
+          cursor = cursor.nextElementSibling;
+        } else if (cursor && cursor === prev.get(rowKey)?.element) {
+          cursor.replaceWith(rowEl);
+          cursor = rowEl.nextElementSibling;
+        } else {
+          parent.insertBefore(rowEl, cursor);
+        }
+        continue;
+      }
+      const info = reconcileKey(desired);
+      const existing = info ? liveByKey.get(info.key) : undefined;
+      if (existing && info && existing.parentElement === parent) {
+        liveByKey.delete(info.key);
+        if (existing === cursor) cursor = cursor.nextElementSibling;
+        else parent.insertBefore(existing, cursor);
+        syncAttributes(existing, desired);
+        if (info.leaf) {
+          if (existing.innerHTML !== desired.innerHTML) existing.innerHTML = desired.innerHTML;
+        } else {
+          reconcileChildren(existing, desired, next, prev);
+        }
+      } else {
+        hydrateSlots(desired, next);
+        parent.insertBefore(desired, cursor);
+      }
+    }
+    while (cursor) {
+      const following = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = following;
+    }
+  }
+  /** Keep unchanged cards and containers alive, preserving scroll position and viewport anchoring. */
   function updateList(projection: SidebarProjection) {
     if (disposed || drag) return false;
     // An unchanged poll hands back the very projection it rendered last time
@@ -42,7 +207,7 @@ export function createSidebarControls(options: {
     const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : null;
     let focusKey: string | null = null;
     if (focused) for (const [key, row] of renderedRows) if (row.element.contains(focused)) { focusKey = key; break; }
-    const focusSelector = focused && ['.session-pin-btn', '.session-close-btn', '.bot-tree-toggle', '.session-family-toggle'].find(selector => focused.matches(selector));
+    const focusSelector = focused && ['.session-pin-btn', '.session-close-btn', '.bot-tree-toggle', '.session-family-toggle', '.bot-edit-btn', '.bot-retire-btn'].find(selector => focused.matches(selector));
     const focusedBotToggle = focused?.matches('.bot-tree-toggle') ? focused.dataset.botToggle || null : null;
     const focusedBotClosed = focused?.matches('.bot-closed-toggle') ? focused.dataset.botClosed || null : null;
     const template = document.createElement('template');
@@ -51,33 +216,87 @@ export function createSidebarControls(options: {
     const replacements = new Map(changed.map((row, index) => [row.key, { html: row.html, element: elements[index] }]));
     const next = new Map<string, { html: string; element: HTMLElement }>();
     for (const row of projection.rows) next.set(row.key, replacements.get(row.key) || renderedRows.get(row.key)!);
-    const slotPattern = /<template data-sidebar-row="[^"]*"><\/template>/g;
-    const ranked = structureChanged && projection.layout.replace(slotPattern, '') === layout.replace(slotPattern, '')
-      ? list.querySelector<HTMLElement>('.ranked-segment') : null;
-    if (ranked) {
-      // Search ranking/filtering changes just this sequence, not its wrapper.
-      // Move the affected cards instead of detaching every matching result.
-      for (const [key, row] of renderedRows) if (!next.has(key)) row.element.remove();
-      for (const [key, row] of replacements) renderedRows.get(key)?.element.replaceWith(row.element);
-      let cursor = ranked.firstElementChild;
-      for (const row of next.values()) {
-        if (cursor && cursor !== row.element && cursor.nextElementSibling === row.element) {
-          const displaced = cursor; cursor = row.element; ranked.append(displaced);
+    const nextMode = projection.mode;
+    const preserveScroll = lastMode !== null && nextMode === lastMode;
+    const savedScrollTop = preserveScroll ? list.scrollTop : 0;
+    let anchorCandidates: { key: string; top: number }[] = [];
+    const headerAnchors: { attr: 'data-cwd' | 'data-host-section' | 'data-bot-id'; value: string; top: number }[] = [];
+    if (savedScrollTop > 0) {
+      const listTop = list.getBoundingClientRect().top, listBottom = listTop + list.clientHeight;
+      let aboveAnchor: { key: string; top: number } | null = null;
+      let firstVisibleKey: string | null = null;
+      for (const [key, row] of renderedRows) {
+        if (!row.element.isConnected) continue;
+        const rect = row.element.getBoundingClientRect();
+        if (!rect.height) continue;
+        if (rect.bottom <= listTop) {
+          if (next.has(key)) aboveAnchor = { key, top: rect.top - listTop };
+          continue;
         }
-        if (row.element === cursor) cursor = cursor.nextElementSibling;
-        else ranked.insertBefore(row.element, cursor);
+        if (rect.top >= listBottom) break;
+        if (firstVisibleKey === null) firstVisibleKey = key;
+        if (next.has(key)) anchorCandidates.push({ key, top: rect.top - listTop });
       }
-      while (cursor) { const following = cursor.nextElementSibling; cursor.remove(); cursor = following; }
-    } else if (structureChanged) {
+      if (aboveAnchor && (firstVisibleKey === null || !next.has(firstVisibleKey))) {
+        anchorCandidates = [aboveAnchor, ...anchorCandidates];
+      }
+      if (!anchorCandidates.length) {
+        for (const el of Array.from(list.querySelectorAll<HTMLElement>('.workspace-group-header[data-cwd], .host-section-header[data-host-section], .bot-node[data-bot-id]'))) {
+          const rect = el.getBoundingClientRect();
+          if (!rect.height || rect.bottom <= listTop) continue;
+          if (rect.top >= listBottom) break;
+          const attr = el.hasAttribute('data-cwd') ? 'data-cwd' : el.hasAttribute('data-host-section') ? 'data-host-section' : 'data-bot-id';
+          const value = el.getAttribute(attr);
+          if (value) headerAnchors.push({ attr, value, top: rect.top - listTop });
+        }
+      }
+    }
+    if (structureChanged) {
       template.innerHTML = projection.layout;
-      for (const slot of Array.from(template.content.querySelectorAll<HTMLElement>('[data-sidebar-row]'))) {
-        slot.replaceWith(next.get(slot.dataset.sidebarRow!)!.element);
+      if (list.childElementCount === 0) {
+        hydrateSlots(template.content, next);
+        list.append(template.content);
+      } else {
+        reconcileChildren(list, template.content, next, renderedRows);
       }
-      list.replaceChildren(template.content);
     } else {
       for (const [key, row] of replacements) renderedRows.get(key)!.element.replaceWith(row.element);
     }
-    layout = projection.layout; renderedRows = next;
+    for (const [key, row] of replacements) rowKeys.set(row.element, key);
+    layout = projection.layout; renderedRows = next; lastMode = nextMode;
+    if (savedScrollTop > 0) {
+      if (list.scrollTop !== savedScrollTop) list.scrollTop = savedScrollTop;
+      const nextListTop = list.getBoundingClientRect().top;
+      let bestDelta: number | null = null;
+      for (const candidate of anchorCandidates) {
+        const element = renderedRows.get(candidate.key)?.element;
+        if (!element?.isConnected) continue;
+        const rect = element.getBoundingClientRect();
+        if (!rect.height) continue;
+        const delta = (rect.top - nextListTop) - candidate.top;
+        if (bestDelta === null || Math.abs(delta) < Math.abs(bestDelta)) {
+          bestDelta = delta;
+          if (Math.abs(bestDelta) < 0.5) break;
+        }
+      }
+      if (bestDelta === null && headerAnchors.length) {
+        const headers = Array.from(list.querySelectorAll<HTMLElement>('.workspace-group-header[data-cwd], .host-section-header[data-host-section], .bot-node[data-bot-id]'));
+        for (const candidate of headerAnchors) {
+          const element = headers.find(el => el.getAttribute(candidate.attr) === candidate.value);
+          if (!element) continue;
+          const rect = element.getBoundingClientRect();
+          if (!rect.height) continue;
+          const delta = (rect.top - nextListTop) - candidate.top;
+          if (bestDelta === null || Math.abs(delta) < Math.abs(bestDelta)) {
+            bestDelta = delta;
+            if (Math.abs(bestDelta) < 0.5) break;
+          }
+        }
+      }
+      if (bestDelta !== null && Math.abs(bestDelta) >= 0.5) {
+        list.scrollTop = Math.max(0, list.scrollTop + bestDelta);
+      }
+    }
     if (focusKey && focusSelector && document.activeElement !== focused) {
       renderedRows.get(focusKey)?.element.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true });
     } else if (focusedBotToggle && document.activeElement !== focused) {
@@ -297,7 +516,7 @@ export function createSidebarControls(options: {
       event.preventDefault(); openMenu(session, event.clientX, event.clientY);
     }, { signal });
   }
-  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); renderedRows.clear(); lastProjection = null; rootMap.clear(); rootLists = null; }
+  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); layout = ''; renderedRows.clear(); lastProjection = null; lastMode = null; rootMap.clear(); rootLists = null; }
   return { mount, dispose, updateList, migrate, reloadPreferences, toggleGroup, toggleFamily, familyRoots, reveal, togglePin, closeClick, performClose, openMenu, closeMenu,
     get menuOpen() { return !!menuOwner; }, get dragging() { return !!drag; }, get closeConfirm() { return confirm?.key || null; }, get closeBusy() { return busy?.key || null; },
     get collapsed(): ReadonlySet<string> { return collapsed; }, get expanded(): ReadonlySet<string> { return expanded; }, get pinned(): readonly string[] { return pinned; } };
