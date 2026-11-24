@@ -176,6 +176,15 @@ test('a routine\u2019s run to a bot that is not running starts it and is deliver
     let polls = 0;
     assert.deepEqual(await deliverStartingBot('fleet', {}, refusedFirst, { everyMs: 1, deliver: async () => ++polls === 5 ? { queued: true } : null }), { queued: true });
     assert.equal(attempts, 2);
+    // A start that saw a dying relay still holding the lock (returned false) is retried once the lock clears.
+    let lockChecks = 0;
+    let deliverPolls = 0;
+    const waitedForLock = async () => {
+        lockChecks += 1;
+        return lockChecks >= 3;
+    };
+    assert.deepEqual(await deliverStartingBot('fleet', {}, waitedForLock, { everyMs: 1, deliver: async () => ++deliverPolls >= 4 ? { queued: false } : null }), { queued: false });
+    assert.equal(lockChecks, 3, 'retries start when earlier attempts returned false for a dying lock');
     // A relay that never comes up fails the delivery.
     await assert.rejects(deliverStartingBot('fleet', {}, async () => { }, { waitMs: 5, everyMs: 1, deliver: async () => null }), /did not take the message within 0s/);
 });

@@ -16,6 +16,10 @@ export interface SessionStreamPorts {
   heartbeatMs?: number;
   /** A session's review deck changes (`review_updated`); returns the unsubscribe. */
   reviewUpdates?(sessionId: string, listener: (data: unknown) => void): () => void;
+  /** True while a session is restarting transparently (e.g. stale bot relay) and SSE should reconnect instead of ending. */
+  isRestarting?(sessionId: string): boolean;
+  /** Wait for an in-flight transparent restart to finish before resolving the live session. */
+  waitForRestart?(sessionId: string): Promise<void>;
 }
 
 interface ExtensionUIPayload {
@@ -56,7 +60,15 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
       res.flush?.();
     };
 
-    const session = await ports.getLiveSession(sessionId).catch((error: unknown) => errorMessage(error));
+    let session = await ports.getLiveSession(sessionId).catch((error: unknown) => errorMessage(error));
+    if ((!session || typeof session === 'string') && ports.isRestarting?.(sessionId)) {
+      await Promise.race([
+        ports.waitForRestart?.(sessionId) ?? Promise.resolve(),
+        new Promise<void>(resolve => { res.once('close', resolve); }),
+      ]);
+      if (res.destroyed || res.writableEnded) return res.end();
+      session = await ports.getLiveSession(sessionId).catch((error: unknown) => errorMessage(error));
+    }
     if (!session || typeof session === 'string') {
       send('stream_error', { error: typeof session === 'string' ? session : 'Session not active' });
       return res.end();
@@ -233,7 +245,18 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
       heartbeat.unref();
     }
 
-    const onClose = () => { stopHeartbeat(); clearPendingUpdate(); clearSideChatTimer(); toolEvents.clear(); send('session_ended', {}); };
+    const onClose = () => {
+      stopHeartbeat();
+      clearPendingUpdate();
+      clearSideChatTimer();
+      toolEvents.clear();
+      if (ports.isRestarting?.(sessionId)) {
+        // Close without `session_ended` so EventSource automatically reconnects to the replacement relay.
+        res.end();
+        return;
+      }
+      send('session_ended', {});
+    };
     // Bridge and Prime events are application-level close; RPC and owned ACP
     // children report their stdio exit instead.
     if (session instanceof BridgeSession || session instanceof PrimeDaemonSession) {

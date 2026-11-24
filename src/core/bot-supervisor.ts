@@ -63,7 +63,7 @@ export function deliverToBot(botId: string, delivery: Record<string, unknown>, t
  * relay takes it or `waitMs` passes. A start that fails (refused while a restart is under way) is tried again.
  */
 export async function deliverStartingBot(
-  botId: string, delivery: Record<string, unknown>, start: () => Promise<void>,
+  botId: string, delivery: Record<string, unknown>, start: () => Promise<boolean | void>,
   { waitMs = 60_000, everyMs = 1000, deliver = deliverToBot }: { waitMs?: number; everyMs?: number; deliver?: typeof deliverToBot } = {},
 ): Promise<{ queued: boolean }> {
   const deadline = Date.now() + waitMs;
@@ -73,7 +73,10 @@ export async function deliverStartingBot(
     const taken = await deliver(botId, delivery);
     if (taken) return taken;
     if (!started) {
-      try { await start(); started = true; } catch (error) { failure = errorMessage(error); }
+      try {
+        const launched = await start();
+        if (launched !== false) started = true;
+      } catch (error) { failure = errorMessage(error); }
     }
     if (Date.now() >= deadline) {
       throw new Error(`the bot's relay did not take the message within ${Math.round(waitMs / 1000)}s${failure && !started ? ` (start: ${failure})` : ''}`);
@@ -191,14 +194,16 @@ export function botRoute(id: string): string {
 
 /**
  * Starts one bot: writes its mirror's header when it has never run, then
- * resumes its route. A bot whose relay is running already is left alone.
+ * resumes its route. Returns `true` when it launched a relay, or `false` when
+ * a live relay already holds the lock (left alone).
  */
 export async function startBot(bot: BotRow, {
   resume, log, sessionsDir = getHarness('bot')!.rootPath(), botsDir = path.join(dishDir(), 'bots'),
-}: Omit<BotStartPorts, 'registry'>): Promise<void> {
+}: Omit<BotStartPorts, 'registry'>): Promise<boolean> {
   const route = botRoute(bot.id);
   const running = liveBotRelay(path.join(botsDir, bot.id));
-  if (running !== null) { log(`bot ${bot.name}: relay ${running.pid} is already running`); return; }
+  if (running !== null) { log(`bot ${bot.name}: relay ${running.pid} is already running`); return false; }
   new BotMirror(path.join(sessionsDir, `${bot.id}.jsonl`), { id: bot.id, cwd: os.homedir(), name: bot.name });
   await resume(route);
+  return true;
 }

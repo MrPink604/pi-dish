@@ -426,3 +426,63 @@ test('a bot relay decodes multi-byte UTF-8 frames split across chunks and recrea
     await until(() => said(home, fleet.id, `echo 1: ${text}`) === 1, 'bot receives uncorrupted multi-byte UTF-8 text');
     await server.stop();
 });
+test('a stale bot restart does not emit session_ended on SSE or reject concurrent prompts with 409', { timeout: 180_000 }, async () => {
+    const home = makeHome();
+    const port = await freePort();
+    let server = await boot(home, port);
+    const before = await liveFleet(server, home);
+    fs.writeFileSync(path.join(home, 'hold'), '');
+    await prompt(server.base, before.route, 'Hold until restart test opens stream.');
+    await until(() => fs.existsSync(path.join(home, 'holding')), 'the run waits on its model');
+    await server.stop();
+    forgetBuild(home, before.id);
+    server = await boot(home, port);
+    await untilAsync(async () => (await bounces(server.base)).some(target => target.status === 'waiting'), 'stale restart is queued');
+    // Open an SSE stream to the stale bot before releasing the held turn.
+    const streamCtrl = new AbortController();
+    const streamRes = await fetch(`${server.base}/api/sessions/${encodeURIComponent(before.route)}/stream`, { signal: streamCtrl.signal });
+    assert.equal(streamRes.status, 200);
+    let sseText = '';
+    const streamDone = (async () => {
+        const reader = streamRes.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+            const { value, done } = await reader.read();
+            if (done)
+                break;
+            sseText += decoder.decode(value, { stream: true });
+        }
+    })().catch(() => { });
+    await until(() => sseText.includes('event: init'), 'SSE stream connected to old relay');
+    // Release the hold so the stale restart executes; once it starts executing, send a prompt concurrently!
+    fs.rmSync(path.join(home, 'hold'));
+    await untilAsync(async () => (await bounces(server.base)).some(target => target.status === 'executing'), 'stale restart entered executing state');
+    // Both a prompt and a reconnecting SSE stream during the restart window must succeed cleanly.
+    const promptPromise = post(server.base, before.route, { message: 'Sent during stale restart.' });
+    const reconnectCtrl = new AbortController();
+    const reconnectRes = await fetch(`${server.base}/api/sessions/${encodeURIComponent(before.route)}/stream`, { signal: reconnectCtrl.signal });
+    let reconnectText = '';
+    const reconnectReader = (async () => {
+        const reader = reconnectRes.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+            const { value, done } = await reader.read();
+            if (done)
+                break;
+            reconnectText += decoder.decode(value, { stream: true });
+            if (reconnectText.includes('event: init'))
+                reconnectCtrl.abort();
+        }
+    })().catch(() => { });
+    const promptRes = await promptPromise;
+    assert.equal(promptRes.status, 200, `prompt during stale restart must not 409: ${await promptRes.text()}`);
+    await streamDone;
+    assert.ok(!sseText.includes('event: session_ended'), `old SSE stream must not emit session_ended during stale restart (got: ${sseText})`);
+    await until(() => reconnectText.includes('event: init'), 'reconnecting SSE attaches to restarted relay');
+    assert.ok(!reconnectText.includes('event: stream_error'), `reconnecting SSE must not emit stream_error (got: ${reconnectText})`);
+    reconnectCtrl.abort();
+    await reconnectReader;
+    await until(() => said(home, before.id, 'echo 2: Sent during stale restart.') === 1, 'restarted relay answers prompt sent during restart');
+    assert.notEqual(relayLock(home, before.id)?.pid, before.pid);
+    await server.stop();
+});

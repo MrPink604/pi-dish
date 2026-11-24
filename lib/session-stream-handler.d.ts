@@ -9,5 +9,9 @@ export interface SessionStreamPorts {
     heartbeatMs?: number;
     /** A session's review deck changes (`review_updated`); returns the unsubscribe. */
     reviewUpdates?(sessionId: string, listener: (data: unknown) => void): () => void;
+    /** True while a session is restarting transparently (e.g. stale bot relay) and SSE should reconnect instead of ending. */
+    isRestarting?(sessionId: string): boolean;
+    /** Wait for an in-flight transparent restart to finish before resolving the live session. */
+    waitForRestart?(sessionId: string): Promise<void>;
 }
 export declare function createSessionStreamHandler(ports: SessionStreamPorts): RouteHandler;

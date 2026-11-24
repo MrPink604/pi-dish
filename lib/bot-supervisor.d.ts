@@ -13,7 +13,7 @@ export declare function deliverToBot(botId: string, delivery: Record<string, unk
  * arrives while its relay restarts: when no relay takes it, the bot is started and the delivery tried again until a
  * relay takes it or `waitMs` passes. A start that fails (refused while a restart is under way) is tried again.
  */
-export declare function deliverStartingBot(botId: string, delivery: Record<string, unknown>, start: () => Promise<void>, { waitMs, everyMs, deliver }?: {
+export declare function deliverStartingBot(botId: string, delivery: Record<string, unknown>, start: () => Promise<boolean | void>, { waitMs, everyMs, deliver }?: {
     waitMs?: number;
     everyMs?: number;
     deliver?: typeof deliverToBot;
@@ -75,6 +75,7 @@ export declare function startBots(ports: BotStartPorts): Promise<void>;
 export declare function botRoute(id: string): string;
 /**
  * Starts one bot: writes its mirror's header when it has never run, then
- * resumes its route. A bot whose relay is running already is left alone.
+ * resumes its route. Returns `true` when it launched a relay, or `false` when
+ * a live relay already holds the lock (left alone).
  */
-export declare function startBot(bot: BotRow, { resume, log, sessionsDir, botsDir, }: Omit<BotStartPorts, 'registry'>): Promise<void>;
+export declare function startBot(bot: BotRow, { resume, log, sessionsDir, botsDir, }: Omit<BotStartPorts, 'registry'>): Promise<boolean>;
