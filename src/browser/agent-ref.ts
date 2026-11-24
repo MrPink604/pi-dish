@@ -14,7 +14,7 @@ import { shortModelName } from './helper-usage';
 import type { EffectiveHost } from './host-catalog';
 import { sessionEntryFromRow, type SessionEntry, type SessionState } from './session-state';
 
-export type AgentRefState = 'working' | 'waiting' | 'idle' | 'finished' | 'closed' | 'unavailable' | 'unknown';
+export type AgentRefState = 'working' | 'waiting' | 'idle' | 'finished' | 'closed' | 'ambiguous' | 'unavailable' | 'unknown';
 export type AgentRefTone = 'working' | 'ok' | 'warn' | 'muted';
 
 export interface AgentRefSession {
@@ -73,7 +73,7 @@ export interface AgentStateHint {
   readonly reportStatus?: string;
   readonly reportTone?: 'ok' | 'warn' | 'muted';
   readonly spawnHint?: boolean;
-  readonly resolveStatus?: 'resolved' | 'missing' | 'error';
+  readonly resolveStatus?: 'resolved' | 'missing' | 'ambiguous' | 'error';
 }
 
 export interface DerivedAgentState {
@@ -125,6 +125,22 @@ const TRAILING_TOKEN_CHAR_RE = /[A-Za-z0-9_/-]/;
 // 2. bare ~sk1_ / host/~sk1_ / hostUuid:~sk1_
 // 3. bare host/<hex7-12 | uuid | timestamp-id>
 const PROSE_AGENT_REF_RE = /(?:^|[\s(\[{<"'])(?:#([A-Za-z0-9~][A-Za-z0-9._:/~-]{3,})|((?:[A-Za-z0-9][A-Za-z0-9._-]{0,62}\/|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:)?~sk1_[A-Za-z0-9_-]{8,})|([A-Za-z0-9][A-Za-z0-9._-]{0,62}\/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}[A-Za-z0-9._-]{4,}|[0-9a-f]{7,12})))/gi;
+
+// Cheap HTML prefilter for bare `knownHost/shortid` refs: closing tags (`</p>`)
+// never match because `/` must follow an alphanumeric host name and precede a
+// hex/timestamp session id prefix.
+const BARE_HOST_REF_FAST_RE = /(?:^|[\s(\[{>"'])([A-Za-z0-9][A-Za-z0-9._-]{0,62})\/(?:[0-9a-f]{7}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/gi;
+
+/** Cheap pre-scan so `linkSessionRefs` skips template parsing on plain markdown HTML. */
+export function mayContainHostAgentRef(html: string, isKnownHost?: (hostPart: string) => boolean): boolean {
+  if (!isKnownHost || !html) return false;
+  BARE_HOST_REF_FAST_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = BARE_HOST_REF_FAST_RE.exec(html)) !== null) {
+    if (isKnownHost(m[1])) return true;
+  }
+  return false;
+}
 
 const SPAWN_WORKER_TEXT_RE = /^Started worker "([^"]+)" \(([^)\s]+)(?: on ([^)]+))?\)\.\s+Ref:\s+(\S+?)\.(?:\s+[\s\S]*)?$/;
 
@@ -351,6 +367,7 @@ export function deriveAgentState(session: AgentRefSession | null | undefined, hi
     return { state: 'closed', label: 'closed', tone: 'muted' };
   }
 
+  if (hint.resolveStatus === 'ambiguous') return { state: 'ambiguous', label: 'ambiguous ref', tone: 'warn' };
   if (hint.resolveStatus === 'missing') return { state: 'unavailable', label: 'unavailable', tone: 'muted' };
   if (hint.resolveStatus === 'error') return { state: 'unavailable', label: 'offline', tone: 'muted' };
   if (hint.spawnHint) return { state: 'working', label: 'working', tone: 'working' };
@@ -542,7 +559,7 @@ export function renderAgentRefCard(opts: AgentRefCardOptions): string {
 // Batched, cached metadata resolver + on-demand session opener
 
 interface CachedResolution {
-  readonly status: 'resolved' | 'missing' | 'error';
+  readonly status: 'resolved' | 'missing' | 'ambiguous' | 'error';
   readonly session: SessionEntry | null;
   readonly hostId: string | null;
   readonly fetchedAt: number;
@@ -651,7 +668,7 @@ export function createAgentRefResolver(options: AgentRefResolverOptions) {
     parsed: ParsedAgentRef | null;
     host: Readonly<EffectiveHost> | null;
     session: SessionEntry | null;
-    status: 'resolved' | 'missing' | 'error' | 'uncached';
+    status: 'resolved' | 'missing' | 'ambiguous' | 'error' | 'uncached';
   } {
     const parsed = parseAgentRef(rawRef);
     if (!parsed) return { parsed: null, host: null, session: null, status: 'missing' };
@@ -741,15 +758,20 @@ export function createAgentRefResolver(options: AgentRefResolverOptions) {
       else if (host?.hostId && !el.dataset.sessionHost) el.dataset.sessionHost = host.hostId;
 
       const preserve = el.dataset.agentPreserveLabel === '1';
-      if (!preserve) {
+      let secondary = '';
+      if (status === 'ambiguous') {
+        secondary = 'ambiguous ref';
+      } else if (!preserve) {
         const label = session?.name || parsed.shortRef;
         const labelEl = el.querySelector<HTMLElement>('.agent-ref-chip-label');
         if (labelEl && labelEl.textContent !== label) labelEl.textContent = label;
         const isRemoteToContext = (!!parsed.hostPart && !parsed.hostIdForm && parsed.hostPart.toLowerCase() !== 'self')
           || (!!host?.hostId && !!contextHostId && host.hostId !== contextHostId);
-        const secondary = session?.name
+        secondary = session?.name
           ? (isRemoteToContext && resolvedHostLabel && !label.toLowerCase().includes(resolvedHostLabel.toLowerCase()) ? resolvedHostLabel : '')
           : (harness && !label.toLowerCase().startsWith(harness.toLowerCase()) ? harness : '');
+      }
+      if (!preserve || status === 'ambiguous' || el.querySelector('.agent-ref-chip-meta')) {
         let metaEl = el.querySelector<HTMLElement>('.agent-ref-chip-meta');
         if (secondary) {
           if (!metaEl) {
@@ -804,7 +826,7 @@ export function createAgentRefResolver(options: AgentRefResolverOptions) {
             return entry;
           }
         }
-        const status = res.status === 404 || res.status === 409 ? 'missing' : 'error';
+        const status = res.status === 409 ? 'ambiguous' : res.status === 404 ? 'missing' : 'error';
         const entry: CachedResolution = { status, session: null, hostId: host.hostId || null, fetchedAt: now() };
         cache.set(key, entry);
         return entry;
@@ -857,7 +879,9 @@ export function createAgentRefResolver(options: AgentRefResolverOptions) {
               entry = session
                 ? { status: 'resolved', session, hostId: host.hostId || null, fetchedAt: now() }
                 : { status: 'error', session: null, hostId: host.hostId || null, fetchedAt: now() };
-            } else if (record(rawItem) && (rawItem.status === 'not_found' || rawItem.status === 'ambiguous')) {
+            } else if (record(rawItem) && rawItem.status === 'ambiguous') {
+              entry = { status: 'ambiguous', session: null, hostId: host.hostId || null, fetchedAt: now() };
+            } else if (record(rawItem) && rawItem.status === 'not_found') {
               entry = { status: 'missing', session: null, hostId: host.hostId || null, fetchedAt: now() };
             } else {
               entry = { status: 'missing', session: null, hostId: host.hostId || null, fetchedAt: now() };
@@ -1021,9 +1045,11 @@ export function createAgentRefResolver(options: AgentRefResolverOptions) {
     syncRoots();
     const hostText = labelForHost(host, host.hostId);
     options.status(
-      resolved.status === 'missing'
-        ? `Session not found${hostText ? ` on ${hostText}` : ''}: ${parsed.shortRef}`
-        : `Could not reach ${hostText || 'host'} for ${parsed.shortRef}`,
+      resolved.status === 'ambiguous'
+        ? `Ambiguous ref${hostText ? ` on ${hostText}` : ''}: ${parsed.shortRef}`
+        : resolved.status === 'missing'
+          ? `Session not found${hostText ? ` on ${hostText}` : ''}: ${parsed.shortRef}`
+          : `Could not reach ${hostText || 'host'} for ${parsed.shortRef}`,
       'error',
     );
   }

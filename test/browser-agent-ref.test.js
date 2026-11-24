@@ -5,7 +5,7 @@ const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const context = (0, browser_vm_js_1.browserSandbox)({ atob: globalThis.atob });
-const { createSessionState, createSessionReferences, createAgentRefResolver, parseAgentRef, shortAgentDisplayId, isPlausibleShortSessionId, matchCodeAgentRef, findInlineAgentRefs, parseSpawnWorkerResult, deriveAgentState, renderAgentRefChip, renderAgentRefCard, } = context.PiDishBrowser;
+const { createSessionState, createSessionReferences, createAgentRefResolver, parseAgentRef, shortAgentDisplayId, isPlausibleShortSessionId, mayContainHostAgentRef, matchCodeAgentRef, findInlineAgentRefs, parseSpawnWorkerResult, deriveAgentState, renderAgentRefChip, renderAgentRefCard, parseInjectedBotMessage, } = context.PiDishBrowser;
 const AGY_ID = '~sk1_' + Buffer.from(JSON.stringify(['agy', 'd46c28bc-43d2-45e2-b941-b9f3c6099ad2'])).toString('base64url');
 const OMP_ID = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-11-23T19-59-55-396Z_01a209fe-6004-728d-a054-3eb58c976ccb'])).toString('base64url');
 const HOST_UUID = '0c6ca019-19c1-4b4d-92c7-0218bfe8dbf5';
@@ -80,6 +80,11 @@ test('findInlineAgentRefs and matchCodeAgentRef link ~sk1_, host/~sk1_, and know
     assert.equal(matchCodeAgentRef('framework/README.md', { matchRef, isKnownHost }), null);
     assert.equal(matchCodeAgentRef('~sk1_…', { matchRef, isKnownHost }), null);
     assert.equal(matchCodeAgentRef(`command ${AGY_ID}`, { matchRef, isKnownHost }), null);
+    // Fast-path HTML prefilter skips plain tags/paths and catches known-host refs
+    assert.equal(mayContainHostAgentRef('<p>All hosts are <strong>healthy</strong> and/or ready.</p>', isKnownHost), false);
+    assert.equal(mayContainHostAgentRef('<p>Check origin/01a1fc7c or https://example.com/01a1fc7c</p>', isKnownHost), false);
+    assert.equal(mayContainHostAgentRef('<p>framework/01a1fc7c</p>', isKnownHost), true);
+    assert.equal(mayContainHostAgentRef('<p>See desktop/2026-11-21T05-03-14-013Z_abc</p>', isKnownHost), true);
 });
 test('parseSpawnWorkerResult parses bot-runtime spawn outputs and rejects errors/multi-worker JSON', () => {
     const local = parseSpawnWorkerResult(`Started worker "carbon-review-ux" (agy). Ref: ${AGY_ID}. Each answer it gives arrives as a "[worker report]" message.`);
@@ -100,7 +105,19 @@ test('deriveAgentState and shared card/chip renderers cover all states and degra
     assert.equal(deriveAgentState({ isActive: true, turnInProgress: false }).state, 'idle');
     assert.equal(deriveAgentState({ isActive: false }, { reportStatus: 'finished', reportTone: 'ok' }).state, 'finished');
     assert.equal(deriveAgentState({ isActive: false }).state, 'closed');
+    const ambig = deriveAgentState(null, { resolveStatus: 'ambiguous' });
+    assert.equal(ambig.state, 'ambiguous');
+    assert.equal(ambig.label, 'ambiguous ref');
+    assert.equal(ambig.tone, 'warn');
     assert.equal(deriveAgentState(null, { resolveStatus: 'missing' }).state, 'unavailable');
+    // Short worker reports open by default (<= 8 lines and <= 600 chars); longer ones collapse.
+    const shortReport = parseInjectedBotMessage('bot-worker-report', '[worker report] "quick" (framework/01a1fc7c) finished.\n\nAll 42 tests passed.');
+    assert.equal(shortReport?.defaultOpen, true);
+    const longLines = Array.from({ length: 10 }, (_, i) => `- line ${i + 1}`).join('\n');
+    const longReport = parseInjectedBotMessage('bot-worker-report', `[worker report] "audit" (framework/01a1fc7c) finished.\n\n${longLines}`);
+    assert.equal(longReport?.defaultOpen, false);
+    const longChars = parseInjectedBotMessage('bot-worker-report', `[worker report] "wall" (framework/01a1fc7c) finished.\n\n${'x'.repeat(650)}`);
+    assert.equal(longChars?.defaultOpen, false);
     // Card with full metadata
     const richCard = renderAgentRefCard({
         ref: `framework/${OMP_ID}`,
@@ -218,6 +235,9 @@ test('createAgentRefResolver batches requests, caches results, falls back on 404
                         session: { id: OMP_ID, name: 'Closed Peer OMP', harnessId: 'omp', model: 'claude-opus-5-5', isActive: false },
                     }), { status: 200 });
                 }
+                if (id === '01a2aaaa') {
+                    return new Response(JSON.stringify({ error: 'ambiguous session id prefix', matches: [] }), { status: 409 });
+                }
                 return new Response(JSON.stringify({ error: 'Session not found' }), { status: 404 });
             }
             return new Response('{}', { status: 404 });
@@ -244,5 +264,11 @@ test('createAgentRefResolver batches requests, caches results, falls back on 404
     await resolver.open('framework/deadbeef', { contextHostId: selfId });
     assert.equal(selected.length, 2);
     assert.ok(statuses.some(s => s.includes('Session not found')));
+    // Opening an ambiguous ref reports "Ambiguous ref", not "Session not found".
+    statuses.length = 0;
+    await resolver.open('framework/01a2aaaa', { contextHostId: selfId });
+    assert.equal(selected.length, 2);
+    assert.ok(statuses.some(s => s.includes('Ambiguous ref')));
+    assert.equal(statuses.some(s => s.includes('Session not found')), false);
     resolver.dispose();
 });

@@ -36,6 +36,9 @@ const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bb
                     session: { id: fixtures_js_1.CHILD, name: 'self child session', harnessId: 'pi', model: 'claude-sonnet-4-6', isActive: false },
                 };
             }
+            else if (id === '01a2aaaa') {
+                results[id] = { status: 'ambiguous', count: 2 };
+            }
             else {
                 results[id] = { status: 'not_found' };
             }
@@ -57,6 +60,9 @@ const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bb
                     },
                 },
             });
+        }
+        if (id === '01a2aaaa') {
+            return route.fulfill({ status: 409, json: { error: 'ambiguous session id prefix', matches: [] } });
         }
         return route.fulfill({ status: 404, json: { error: 'Session not found' } });
     });
@@ -83,6 +89,9 @@ const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bb
                     },
                 },
             });
+        }
+        if (id === '01a2aaaa') {
+            return route.fulfill({ status: 409, json: { error: 'ambiguous session id prefix', matches: [] } });
         }
         return route.fulfill({ status: 404, json: { error: 'Session not found' } });
     });
@@ -111,7 +120,7 @@ const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bb
                     text: [
                         `Started \`${AGY_LOCAL}\` locally and checking peer/${OMP_PEER} (short ref \`peer/01a1fc7c\`, and #${fixtures_js_1.CHILD}).`,
                         '',
-                        `Also checked missing ref \`${GONE_REF}\`. Commit \`0eea720\` and hash deadbeef stay plain text.`,
+                        `Also checked missing ref \`${GONE_REF}\` and ambiguous \`self/01a2aaaa\`. Commit \`0eea720\` and hash deadbeef stay plain text.`,
                     ].join('\n'),
                 }],
         },
@@ -124,7 +133,15 @@ const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bb
             details: { ref: `peer/${OMP_PEER}`, name: 'kit wave1', state: 'finished', report: 1 },
         },
         {
-            index: 5, role: 'assistant', timestamp: '2026-11-24T04:45:10.000Z',
+            index: 5, role: 'custom', customType: 'bot-worker-report', display: true, timestamp: '2026-11-24T04:45:05.000Z',
+            content: [{
+                    type: 'text',
+                    text: `[worker report] "deep audit" (peer/${OMP_PEER}) finished.\n\n### Long Report\n\n${Array.from({ length: 10 }, (_, i) => `- check ${i + 1}: ok`).join('\n')}\n\nThe session is closed; it is no longer watched.`,
+                }],
+            details: { ref: `peer/${OMP_PEER}`, name: 'deep audit', state: 'finished', report: 2 },
+        },
+        {
+            index: 6, role: 'assistant', timestamp: '2026-11-24T04:45:10.000Z',
             content: [{ type: 'text', text: 'Done — both workers reported back cleanly.' }],
         },
     ];
@@ -141,23 +158,26 @@ const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bb
     await (0, fixtures_js_1.expect)(spawnCard.locator('.agent-ref-harness')).toHaveText('AGY');
     await (0, fixtures_js_1.expect)(spawnCard.locator('.agent-ref-model')).toHaveText('gemini-4-carbon');
     await (0, fixtures_js_1.expect)(spawnCard.locator('.agent-ref-open')).toBeVisible();
-    // 2. [worker report] renders as the same shared card with report collapsed under it, hydrated via peer fallback!
-    const reportCard = page.locator('#messages > .message.bot-worker-report .agent-ref-card');
-    await (0, fixtures_js_1.expect)(reportCard).toHaveCount(1);
+    // 2. [worker report] cards: short report opens by default; long report (>8 lines) starts collapsed and expands on click!
+    const reportCards = page.locator('#messages > .message.bot-worker-report .agent-ref-card');
+    await (0, fixtures_js_1.expect)(reportCards).toHaveCount(2);
+    const reportCard = reportCards.first();
     await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-name')).toHaveText('kit wave1: scout_rifle');
     await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-state')).toHaveText('finished');
     await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-harness')).toHaveText('OMP');
     await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-model')).toHaveText('claude-opus-5-5');
     await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-host')).toHaveText('peer');
-    await (0, fixtures_js_1.expect)(reportCard.locator('details.agent-ref-details')).not.toHaveAttribute('open', '');
-    // Expand the report underneath the card.
-    await reportCard.locator('.agent-ref-toggle').click();
     await (0, fixtures_js_1.expect)(reportCard.locator('details.agent-ref-details')).toHaveAttribute('open', '');
     await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-body h3')).toHaveText('Findings');
     await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-footer')).toContainText('no longer watched');
-    // 3. Inline refs in prose: ~sk1_, peer/~sk1_, peer/01a1fc7c, and #CHILD are chips; random hex is NOT linkified; peer/01a1fc7c is NOT a file-link!
+    const longReportCard = reportCards.nth(1);
+    await (0, fixtures_js_1.expect)(longReportCard.locator('details.agent-ref-details')).not.toHaveAttribute('open', '');
+    await longReportCard.locator('.agent-ref-toggle').click();
+    await (0, fixtures_js_1.expect)(longReportCard.locator('details.agent-ref-details')).toHaveAttribute('open', '');
+    await (0, fixtures_js_1.expect)(longReportCard.locator('.agent-ref-body h3')).toHaveText('Long Report');
+    // 3. Inline refs in prose: ~sk1_, peer/~sk1_, peer/01a1fc7c, #CHILD, GONE_REF, and ambiguous self/01a2aaaa are chips; random hex is NOT linkified; peer/01a1fc7c is NOT a file-link!
     const proseMsg = page.locator('#messages .message.assistant').filter({ hasText: 'Started' });
-    await (0, fixtures_js_1.expect)(proseMsg.locator('.agent-ref-chip')).toHaveCount(5); // AGY_LOCAL, peer/OMP_PEER, peer/01a1fc7c, #CHILD, GONE_REF
+    await (0, fixtures_js_1.expect)(proseMsg.locator('.agent-ref-chip')).toHaveCount(6);
     await (0, fixtures_js_1.expect)(proseMsg.locator('.file-link')).toHaveCount(0);
     const deadbeefButtons = proseMsg.locator('button', { hasText: /0eea720|deadbeef/ });
     await (0, fixtures_js_1.expect)(deadbeefButtons).toHaveCount(0);
@@ -165,6 +185,10 @@ const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bb
     const goneChip = proseMsg.locator(`.agent-ref-chip[data-agent-ref="${GONE_REF}"]`);
     await (0, fixtures_js_1.expect)(goneChip).toHaveAttribute('data-agent-state', 'unavailable');
     await (0, fixtures_js_1.expect)(goneChip).toContainText('99999999');
+    // Ambiguous chip caches ambiguous status, labels itself "ambiguous ref", and reports "Ambiguous ref" on click.
+    const ambiguousChip = proseMsg.locator('.agent-ref-chip[data-agent-ref="self/01a2aaaa"]');
+    await (0, fixtures_js_1.expect)(ambiguousChip).toHaveAttribute('data-agent-state', 'ambiguous');
+    await (0, fixtures_js_1.expect)(ambiguousChip).toContainText('ambiguous ref');
     // 4. Batching & version-skew verification: self resolved multiple refs in ONE batch; peer fell back after one 404.
     (0, fixtures_js_1.expect)(selfBatchCalls).toBe(1);
     (0, fixtures_js_1.expect)(peerBatchCalls).toBe(1);
@@ -184,9 +208,11 @@ const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bb
         return m ? { scrollWidth: m.scrollWidth, clientWidth: m.clientWidth } : null;
     });
     (0, fixtures_js_1.expect)(overflow330.scrollWidth).toBeLessThanOrEqual(overflow330.clientWidth);
-    // 6. Clicking the gone ref shows a clear error status without losing the bot chat.
+    // 6. Clicking the gone ref shows "Session not found", and clicking the ambiguous ref shows "Ambiguous ref", without losing the bot chat.
     await goneChip.click();
     await (0, fixtures_js_1.expect)(page.locator('#status')).toContainText('Session not found');
+    await ambiguousChip.click();
+    await (0, fixtures_js_1.expect)(page.locator('#status')).toContainText('Ambiguous ref');
     await (0, fixtures_js_1.expect)(reportCard).toBeVisible();
     // 7. Clicking the worker report's Open button opens the CLOSED peer ~sk1_ session (routed through peer)!
     await reportCard.locator('.agent-ref-open').click();

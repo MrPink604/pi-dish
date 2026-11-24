@@ -3819,7 +3819,8 @@ pre.tool-code code.hljs {
   min-width: 0;
 }
 .agent-ref-card[data-agent-state='working'] { --agent-accent: var(--cyan); }
-.agent-ref-card[data-agent-state='waiting'] { --agent-accent: var(--warning); }
+.agent-ref-card[data-agent-state='waiting'],
+.agent-ref-card[data-agent-state='ambiguous'] { --agent-accent: var(--warning); }
 .agent-ref-card[data-agent-state='idle'],
 .agent-ref-card[data-agent-state='finished'] { --agent-accent: var(--success); }
 .agent-ref-card[data-agent-state='closed'],
@@ -3844,7 +3845,8 @@ pre.tool-code code.hljs {
   background: var(--text-muted);
 }
 .agent-ref[data-agent-state='working'] > .agent-ref-head > .agent-ref-dot { background: var(--cyan); }
-.agent-ref[data-agent-state='waiting'] > .agent-ref-head > .agent-ref-dot { background: var(--warning); }
+.agent-ref[data-agent-state='waiting'] > .agent-ref-head > .agent-ref-dot,
+.agent-ref[data-agent-state='ambiguous'] > .agent-ref-head > .agent-ref-dot { background: var(--warning); }
 .agent-ref[data-agent-state='idle'] > .agent-ref-head > .agent-ref-dot,
 .agent-ref[data-agent-state='finished'] > .agent-ref-head > .agent-ref-dot,
 .agent-ref.live > .agent-ref-head > .agent-ref-dot { background: var(--success-bright); }
@@ -4068,7 +4070,8 @@ pre.tool-code code.hljs {
   background: var(--text-muted);
 }
 .agent-ref-chip[data-agent-state='working']::before { background: var(--cyan); }
-.agent-ref-chip[data-agent-state='waiting']::before { background: var(--warning); }
+.agent-ref-chip[data-agent-state='waiting']::before,
+.agent-ref-chip[data-agent-state='ambiguous']::before { background: var(--warning); }
 .agent-ref-chip[data-agent-state='idle']::before,
 .agent-ref-chip[data-agent-state='finished']::before,
 .agent-ref-chip.live::before { background: var(--success-bright); }

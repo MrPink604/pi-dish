@@ -6,7 +6,7 @@ import { escapeHtml } from '../core/helper-format';
 import { createMathExtensions } from '../core/helper-markdown';
 import { sanitizeMarkdownUrl, diagramKindForFence, looksLikeFilePath, findPathTokens, ARTIFACT_PATH_RE } from './helper-markdown';
 import type { SessionState } from './session-state';
-import { findInlineAgentRefs, matchCodeAgentRef, renderAgentRefChip, type AgentRefSession } from './agent-ref';
+import { findInlineAgentRefs, matchCodeAgentRef, mayContainHostAgentRef, renderAgentRefChip, type AgentRefSession } from './agent-ref';
 import type { StreamingBlockState, StreamingFrame } from './streaming-render';
 import { record } from '../core/helper-values';
 import { createTableControls } from './table-controls';
@@ -157,7 +157,7 @@ function formatMarkdown(text: string) {
 // Resolve while rendering, not on click: retained DOM keeps the destination's
 // host even after selection changes. Fences, existing links and math stay inert.
 function linkSessionRefs(html: string) {
-  if (!html.includes('#') && !html.includes('<code>') && !html.includes('~sk1_') && !html.includes('/')) return html;
+  if (!html.includes('#') && !html.includes('<code>') && !html.includes('~sk1_') && !mayContainHostAgentRef(html, options.isKnownHost)) return html;
   const template = document.createElement('template'); template.innerHTML = html;
   const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
     acceptNode: node => node.parentElement?.closest('pre, a, button, .agent-ref, .katex, .math-block, .math-pending')

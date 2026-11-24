@@ -98,7 +98,7 @@ export { createComposerDrafts, mergeComposerText } from './composer-drafts';
 export { createSessionReferences } from './session-references';
 export {
   createAgentRefResolver, parseAgentRef, shortAgentDisplayId, isPlausibleShortSessionId,
-  matchCodeAgentRef, findInlineAgentRefs, parseSpawnWorkerResult, deriveAgentState,
+  mayContainHostAgentRef, matchCodeAgentRef, findInlineAgentRefs, parseSpawnWorkerResult, deriveAgentState,
   renderAgentRefChip, renderAgentRefCard,
 } from './agent-ref';
 export { createComposerAutocomplete } from './composer-autocomplete';

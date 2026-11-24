@@ -169,6 +169,7 @@ export function parseInjectedBotMessage(customType: string | undefined, rawText:
       return '';
     }).trim();
     const status = normalizeWorkerStatus(heading, ev?.state);
+    const short = !isLongBody(body, 8, 600);
     return {
       kind: 'worker-report',
       icon: '⚙',
@@ -180,7 +181,7 @@ export function parseInjectedBotMessage(customType: string | undefined, rawText:
       body,
       footer: footers.join(' ') || undefined,
       collapsible: !!body,
-      defaultOpen: false,
+      defaultOpen: !!body && short,
     };
   }
 
