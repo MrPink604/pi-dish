@@ -3009,6 +3009,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
 
   try { await recoverIdleState(abandoned); } catch (error) { log(`idle rollover recovery failed: ${describe(error)}`); }
   const watch = await root.watch(ctx, { from: (processed + 1) as Durable.EntryId, min: 50, max: 1000 });
+  await onView(watch.value);
   watch.start(async (call) => {
     if (call.kind !== 'value') return;
     try { await onView(call.value); } catch (error) {

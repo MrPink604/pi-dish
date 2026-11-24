@@ -39,6 +39,7 @@ interface Harness {
   requests: Message[][];
   /** Each request's whole context (system, messages, tools), as the provider received it. */
   contexts: TranscriptContext[];
+  mirrorPath: string;
   mirrorLines: () => Record<string, unknown>[];
   respond: (...steps: Step[]) => void;
   /** Closes the runtime, runs `between` while it is down, and opens it again on the same storage. */
@@ -115,6 +116,7 @@ async function openTestBot(t: test.TestContext, sessions: SessionsPort,
   if (responses) provider.appendResponses(responses(faux).map(recorded));
   const harness: Harness = {
     runtime: await open(), events, requests, contexts, faux,
+    mirrorPath: mirrorFile,
     mirrorLines: () => fs.readFileSync(mirrorFile, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>),
     respond: (...steps) => provider.appendResponses(steps.map(recorded)),
     async reopen(between) { await harness.runtime.close(); between?.(); harness.runtime = await open(); },
@@ -2879,4 +2881,30 @@ test('reopening a mirror and runtime restores lastModel without duplicate model_
   await resetBot.runtime.prompt('Hello window 2', 'followUp');
   await until(() => said(resetBot, 'In fresh window.'), 'window 2 turn completes');
   assert.equal(resetBot.mirrorLines().filter(line => line.type === 'model_change').length, 1, 'no duplicate model_change after reset + restart');
+
+  // Lagging mirror: pi.reset is committed in SQLite, but the mirror JSONL crashed before flushing it.
+  // Reopen must apply the initial durable watch snapshot before admitting input so usage is 0 and no extra window 3 opens.
+  // Build past 97% across two turns so window 2's handoff stays well below 90% when quoting the second request.
+  const laggingBot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
+  laggingBot.respond(
+    laggingBot.faux.fauxAssistantMessage('First chunk done.'),
+    laggingBot.faux.fauxAssistantMessage('Spiked past 97% before mirror crash.'),
+  );
+  await laggingBot.runtime.prompt(`Chunk one ${'w'.repeat(200_000)}`, 'followUp');
+  await until(() => said(laggingBot, 'First chunk done.'), 'first chunk stays under limit');
+  await laggingBot.runtime.prompt(`Chunk two ${'w'.repeat(170_000)}`, 'followUp');
+  await until(() => laggingBot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'forced rollover commits pi.reset');
+  await laggingBot.runtime.close();
+  // Drop the last mirror line (bot-context-window) so mirror.lastEntryId points to window 1's >97% assistant entry.
+  const rawMirror = fs.readFileSync(laggingBot.mirrorPath, 'utf8').trimEnd().split('\n');
+  assert.equal((JSON.parse(rawMirror.at(-1)!) as Record<string, unknown>).customType, 'bot-context-window');
+  fs.writeFileSync(laggingBot.mirrorPath, `${rawMirror.slice(0, -1).join('\n')}\n`);
+
+  await laggingBot.reopen();
+  assert.equal(laggingBot.runtime.contextUsage(), null, 'initial durable snapshot cleared stale usage before returning');
+  assert.equal(laggingBot.mirrorLines().filter(line => line.customType === 'bot-context-window').length, 1, 'initial snapshot caught up the lagging mirror');
+  laggingBot.respond(laggingBot.faux.fauxAssistantMessage('Answered in window 2 without extra rollover.'));
+  await laggingBot.runtime.prompt('Next prompt after lagging restart', 'followUp');
+  await until(() => said(laggingBot, 'Answered in window 2 without extra rollover.'), 'prompt answered in window 2');
+  assert.equal(laggingBot.mirrorLines().filter(line => line.customType === 'bot-context-window').length, 1, 'no needless window 3 rollover');
 });
