@@ -358,17 +358,21 @@ function readSafeLocalImage(rawUriOrPath: string, explicitMime: string | null, a
   if (!mimeType) return null;
   let permitted = false;
   for (const root of allowedRoots) {
-    if (!root) continue;
+    if (!root || !path.isAbsolute(root)) continue;
     const normRoot = path.resolve(root);
-    if (!normFile.startsWith(normRoot + path.sep)) continue;
-    const rel = normFile.slice(normRoot.length + 1);
+    const normPrefix = normRoot.endsWith(path.sep) ? normRoot : normRoot + path.sep;
+    if (!normFile.startsWith(normPrefix)) continue;
+    const rel = normFile.slice(normPrefix.length);
     if (rel.split(path.sep).includes('.system_generated')) continue;
     try {
       const realRoot = fs.realpathSync(normRoot);
       const lstat = fs.lstatSync(normFile);
       if (!lstat.isFile() || lstat.isSymbolicLink() || lstat.size <= 0 || lstat.size > MAX_INBOUND_IMAGE_BYTES) continue;
       const realFile = fs.realpathSync(normFile);
-      if (!realFile.startsWith(realRoot + path.sep)) continue;
+      const realPrefix = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
+      if (!realFile.startsWith(realPrefix)) continue;
+      const realRel = realFile.slice(realPrefix.length);
+      if (realRel.split(path.sep).includes('.system_generated')) continue;
       permitted = true;
       break;
     } catch { continue; }

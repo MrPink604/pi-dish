@@ -806,11 +806,11 @@ export class AcpSession extends TransportSession {
     this._refreshStateFromConfig();
   }
 
-  private _allowedImageRootsFor(cwd: string, sessionId: string): string[] {
+  private _allowedImageRootsFor(cwd: string | null | undefined, sessionId: string): string[] {
     const roots: string[] = [];
-    if (cwd) roots.push(cwd);
+    if (typeof cwd === 'string' && cwd.length > 0 && path.isAbsolute(cwd)) roots.push(cwd);
     const brain = agyBrainDir(sessionId);
-    if (brain) roots.push(brain);
+    if (brain && path.isAbsolute(brain)) roots.push(brain);
     return roots;
   }
 
@@ -1491,7 +1491,7 @@ export class AcpSession extends TransportSession {
     sessionId: string,
     sessionFile: string,
     cwd: string,
-    options: { register: boolean; title?: string | null },
+    options: { register: boolean; title?: string | null; allowedCwd?: string | null },
   ): Promise<{ result: ProtocolRecord; backup: AcpMirrorBackup }> {
     const backup = backupAcpMirror(sessionFile);
     try {
@@ -1507,7 +1507,7 @@ export class AcpSession extends TransportSession {
       this.earlyFrames = [];
       this.replaying = true;
       this.replayingSessionId = sessionId;
-      this.replayingAllowedRoots = this._allowedImageRootsFor(cwd, sessionId);
+      this.replayingAllowedRoots = this._allowedImageRootsFor(options.allowedCwd, sessionId);
       let result: ProtocolRecord;
       try {
         result = asRecord(await this._request('session/load',
@@ -1559,7 +1559,7 @@ export class AcpSession extends TransportSession {
     }
     if (stale) {
       try {
-        await this._replayInto(sessionId, sessionFile, this.cwd, { register: true });
+        await this._replayInto(sessionId, sessionFile, this.cwd, { register: true, allowedCwd: this.cwd });
         if (opts.model) await this.setModel(AGY_PROVIDER, opts.model);
         if (opts.thinking) await this.setThinkingLevel(opts.thinking);
         return;
@@ -1591,6 +1591,7 @@ export class AcpSession extends TransportSession {
     const { backup } = await this._replayInto(conversation.sessionId, sessionFile, conversation.cwd || this.cwd, {
       register: false,
       title: conversation.title,
+      allowedCwd: conversation.cwd || null,
     });
     return { file: sessionFile, backup: backup.mirror };
   }

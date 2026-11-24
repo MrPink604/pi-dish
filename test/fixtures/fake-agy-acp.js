@@ -291,6 +291,14 @@ function replayHistory() {
             sessionUpdate: 'agent_message_chunk',
             content: { type: 'resource_link', uri: `file://${chart}`, mimeType: 'image/png' },
         });
+        const brainRoot = process.env.PI_DISH_AGY_BRAIN_DIR;
+        if (brainRoot) {
+            const brainChart = `${brainRoot}/${sessionId}/brain.png`;
+            sessionUpdate({
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'resource_link', uri: `file://${brainChart}`, mimeType: 'image/png' },
+            });
+        }
         const outside = process.env.FAKE_AGY_OUTSIDE_IMAGE;
         if (outside) {
             sessionUpdate({

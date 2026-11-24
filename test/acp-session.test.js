@@ -1097,53 +1097,114 @@ test('unknown live foreign session notifications and requests never leak into th
     assert.doesNotMatch(rawMirror, /FOREIGN LEAK CHUNK|Foreign Title/);
     assert.equal(acp.readAgySideChatIds().has(foreignSid), false, 'unknown foreign sid is not persisted as a side chat');
 });
-test('session/load replay passes allowedRoots so contained local images survive import while outside paths stay blocked', async (t) => {
+test('session/load replay passes allowedRoots so contained local images survive import while outside, importer-fallback, and relative paths stay blocked', async (t) => {
     const sessionFiles = require('../lib/session-files.js');
-    const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const pngHeader = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+    const distinctPng = (tag) => Buffer.concat([pngHeader, Buffer.from(tag, 'utf8')]);
+    const cwd1Buf = distinctPng('cwd1-image');
+    const cwd2Buf = distinctPng('cwd2-image');
+    const outsideBuf = distinctPng('outside-secret');
+    const importerBuf = distinctPng('importer-secret');
+    const brain3Buf = distinctPng('brain3-image');
+    const brain4Buf = distinctPng('brain4-image');
     const cwd1 = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-replay-cwd1-'));
     const cwd2 = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-replay-cwd2-'));
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-replay-out-'));
+    const brainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-replay-brain-'));
+    const importerChart = path.join(workDir, 'chart.png');
     t.after(() => {
         fs.rmSync(cwd1, { recursive: true, force: true });
         fs.rmSync(cwd2, { recursive: true, force: true });
         fs.rmSync(outsideDir, { recursive: true, force: true });
+        fs.rmSync(brainDir, { recursive: true, force: true });
+        fs.rmSync(importerChart, { force: true });
     });
-    fs.writeFileSync(path.join(cwd1, 'chart.png'), Buffer.from(pngB64, 'base64'));
-    fs.writeFileSync(path.join(cwd2, 'chart.png'), Buffer.from(pngB64, 'base64'));
+    fs.writeFileSync(path.join(cwd1, 'chart.png'), cwd1Buf);
+    fs.writeFileSync(path.join(cwd2, 'chart.png'), cwd2Buf);
+    fs.writeFileSync(importerChart, importerBuf);
     const outsidePng = path.join(outsideDir, 'secret.png');
-    fs.writeFileSync(outsidePng, Buffer.from(pngB64, 'base64'));
+    fs.writeFileSync(outsidePng, outsideBuf);
     const conv1 = { sessionId: '33333333-3333-4333-8333-333333333333', cwd: cwd1, title: 'Img 1', updatedAt: '2026-11-23T10:00:00Z' };
     const conv2 = { sessionId: '44444444-4444-4444-8444-444444444444', cwd: cwd2, title: 'Img 2', updatedAt: '2026-11-23T10:05:00Z' };
+    const conv3 = { sessionId: '55555555-5555-4555-8555-555555555555', cwd: '', title: 'No Cwd', updatedAt: '2026-11-23T10:10:00Z' };
+    const conv4 = { sessionId: '66666666-6666-4666-8666-666666666666', cwd: 'relative/subdir', title: 'Rel Cwd', updatedAt: '2026-11-23T10:15:00Z' };
+    fs.mkdirSync(path.join(brainDir, conv3.sessionId), { recursive: true });
+    fs.writeFileSync(path.join(brainDir, conv3.sessionId, 'brain.png'), brain3Buf);
+    fs.mkdirSync(path.join(brainDir, conv4.sessionId), { recursive: true });
+    fs.writeFileSync(path.join(brainDir, conv4.sessionId, 'brain.png'), brain4Buf);
+    withEnv(t, { PI_DISH_AGY_BRAIN_DIR: brainDir });
     const agent = await acp.createAcpImportAgent({
         cwd: workDir,
         command: process.execPath,
         args: [FIXTURE],
         env: {
             ...process.env,
+            PI_DISH_AGY_BRAIN_DIR: brainDir,
             FAKE_AGY_SCRIPT: 'replay-images',
             FAKE_AGY_OUTSIDE_IMAGE: outsidePng,
-            FAKE_AGY_LIST: JSON.stringify([conv1, conv2]),
+            FAKE_AGY_LIST: JSON.stringify([conv1, conv2, conv3, conv4]),
         },
     });
     cleanup(t, agent);
     const listed = await agent.listConversations();
     const file1 = path.join(tmp, 'replay-img-1.jsonl');
     const file2 = path.join(tmp, 'replay-img-2.jsonl');
+    const file3 = path.join(tmp, 'replay-img-3.jsonl');
+    const file4 = path.join(tmp, 'replay-img-4.jsonl');
     await agent.importConversation(listed[0], file1);
     await agent.importConversation(listed[1], file2);
-    for (const file of [file1, file2]) {
+    await agent.importConversation(listed[2], file3);
+    await agent.importConversation(listed[3], file4);
+    const imagePayloads = (file) => {
         const msgs = sessionFiles.readSessionMessages(file);
         const readImgResult = msgs.find(m => m.role === 'toolResult' && m.toolCallId === 'call-load-read-img');
         assert.ok(readImgResult, 'read_file toolResult replayed');
         const toolImages = Array.isArray(readImgResult.content)
             ? readImgResult.content.filter((b) => asRecord(b).type === 'image')
             : [];
-        assert.equal(toolImages.length, 1, 'contained read_file image preserved during replay');
-        assert.equal(toolImages[0]?.data, pngB64);
         const assistantImages = msgs
             .filter(m => m.role === 'assistant')
             .flatMap(m => Array.isArray(m.content) ? m.content : [])
-            .filter(b => asRecord(b).type === 'image');
-        assert.equal(assistantImages.length, 1, 'contained resource_link image preserved while outside image is dropped');
-    }
+            .filter((b) => asRecord(b).type === 'image');
+        return {
+            tool: toolImages.map(img => img.data),
+            assistant: assistantImages.map(img => img.data),
+        };
+    };
+    assert.deepEqual(imagePayloads(file1), {
+        tool: [cwd1Buf.toString('base64')],
+        assistant: [cwd1Buf.toString('base64')],
+    }, 'conv1 preserves only cwd1 chart bytes, never outside secret bytes');
+    assert.deepEqual(imagePayloads(file2), {
+        tool: [cwd2Buf.toString('base64')],
+        assistant: [cwd2Buf.toString('base64')],
+    }, 'conv2 preserves only cwd2 chart bytes, never outside secret bytes');
+    assert.deepEqual(imagePayloads(file3), {
+        tool: [],
+        assistant: [brain3Buf.toString('base64')],
+    }, 'empty conversation cwd must not authorize importer cwd, while session brain dir stays allowed');
+    assert.deepEqual(imagePayloads(file4), {
+        tool: [],
+        assistant: [brain4Buf.toString('base64')],
+    }, 'relative conversation cwd must not authorize a cwd root, while session brain dir stays allowed');
+});
+test('extractAcpImageBlock blocks relative allowedRoots and symlinked directories pointing into .system_generated', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-sysgen-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const sysGen = path.join(root, '.system_generated');
+    fs.mkdirSync(sysGen, { recursive: true });
+    const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+    fs.writeFileSync(path.join(sysGen, 'secret.png'), pngBytes);
+    fs.writeFileSync(path.join(root, 'ok.png'), pngBytes);
+    fs.symlinkSync(sysGen, path.join(root, 'alias'));
+    // Regular file accessed through a symlinked directory into .system_generated must be rejected.
+    const viaSymlinkDir = path.join(root, 'alias', 'secret.png');
+    assert.equal(acpTranscript.extractAcpImageBlock({ type: 'resource_link', uri: `file://${viaSymlinkDir}`, mimeType: 'image/png' }, [root]), null, 'symlinked directory into .system_generated must be rejected');
+    // Relative allowedRoots must never resolve against process.cwd().
+    const relRoot = path.relative(process.cwd(), root);
+    assert.equal(path.isAbsolute(relRoot), false);
+    assert.equal(acpTranscript.extractAcpImageBlock({ type: 'resource_link', uri: `file://${path.join(root, 'ok.png')}`, mimeType: 'image/png' }, [relRoot]), null, 'relative allowedRoot must be ignored');
+    // Direct absolute allowedRoot with normal file still succeeds.
+    const ok = acpTranscript.extractAcpImageBlock({ type: 'resource_link', uri: `file://${path.join(root, 'ok.png')}`, mimeType: 'image/png' }, [root]);
+    assert.equal(ok?.data, pngBytes.toString('base64'));
 });
