@@ -1033,12 +1033,16 @@ test('CLI wait retries dropped or malformed responses and exits non-zero when re
   }
 });
 
-test('failed waiter writes stay pending for message fallback, and timer settle failures are caught and logged', async () => {
+test('failed waiter writes stay pending for message fallback, and timer settle failures are caught and logged', async t => {
   const prevHome = process.env.HOME;
   const unitHome = createTestTempDir('pi-dish-reviews-unit-');
   process.env.HOME = unitHome;
+  const graceMs = 120;
+  // Control both setTimeout and Date so the grace-period fallback cannot race wall-clock stalls.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
   const delivered: string[] = [];
   const logs: string[] = [];
+  const logWaiters: Array<(line: string) => void> = [];
   const unhandled: unknown[] = [];
   const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
   process.on('unhandledRejection', onUnhandled);
@@ -1049,8 +1053,31 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
     pageExists: () => false,
     lastMessageIndex: () => 0,
     deliverMessage: async (_id, text) => { delivered.push(text); return null; },
-    log: line => logs.push(line),
-    graceMs: 120,
+    log: line => {
+      logs.push(line);
+      for (const notify of logWaiters.splice(0)) notify(line);
+    },
+    graceMs,
+  });
+
+  const waitForSettledDelivery = (reviewId: string) => new Promise<void>(resolve => {
+    const isDelivered = () => reviews.readReviews(SESSION_ID).find(item => item.id === reviewId)?.submission?.delivery.state === 'delivered';
+    if (isDelivered()) return resolve();
+    const unsubscribe = handlers.subscribe(SESSION_ID, ({ review }) => {
+      if (review.id === reviewId && review.submission?.delivery.state === 'delivered') {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+
+  const waitForLog = (reviewId: string) => new Promise<void>(resolve => {
+    if (logs.some(line => line.includes(reviewId))) return resolve();
+    const onLine = (line: string) => {
+      if (line.includes(reviewId)) resolve();
+      else logWaiters.push(onLine);
+    };
+    logWaiters.push(onLine);
   });
 
   function mockReq(overrides: Record<string, unknown> = {}): ApplicationRequest {
@@ -1106,7 +1133,13 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
     assert.equal(s1.status(), 202);
     assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id1)?.submission?.delivery.state, 'pending',
       'failed waiter write does not mark delivered');
-    await until(() => delivered.some(msg => msg.includes(id1)), 'fallback message after broken live waiter', 2000);
+    t.mock.timers.tick(graceMs - 1);
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id1)?.submission?.delivery.state, 'pending',
+      'delivery stays pending before grace period expires');
+    const settled1 = waitForSettledDelivery(id1);
+    t.mock.timers.tick(1);
+    await settled1;
+    assert.ok(delivered.some(msg => msg.includes(id1)), 'fallback message after broken live waiter');
     assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id1)?.submission?.delivery.via, 'message');
 
     // 2. Late GET /wait claiming a pending review whose res.end fails: still falls back to message.
@@ -1118,7 +1151,14 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
     await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id2 } }), brokenWait2.res, () => {});
     assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id2)?.submission?.delivery.state, 'pending',
       'failed late waiter write leaves delivery pending');
-    await until(() => delivered.some(msg => msg.includes(id2)), 'fallback message after broken late waiter', 2000);
+    t.mock.timers.tick(graceMs - 1);
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id2)?.submission?.delivery.state, 'pending',
+      'late waiter fallback waits out grace period');
+    const settled2 = waitForSettledDelivery(id2);
+    t.mock.timers.tick(1);
+    await settled2;
+    assert.ok(delivered.some(msg => msg.includes(id2)), 'fallback message after broken late waiter');
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id2)?.submission?.delivery.via, 'message');
 
     // 3. Timer-driven settle failure (unreadable store) is caught and logged with no unhandled rejection.
     const c3 = mockRes();
@@ -1128,13 +1168,16 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
     const storeFile = path.join(unitHome, '.pi', 'dish', 'reviews', `${crypto.createHash('sha256').update(SESSION_ID).digest('hex').slice(0, 32)}.json`);
     const backup = fs.readFileSync(storeFile, 'utf8');
     fs.writeFileSync(storeFile, '{corrupt');
-    await until(() => logs.some(line => line.includes(id3)), 'timer settle error logged', 2000);
+    const logged3 = waitForLog(id3);
+    t.mock.timers.tick(graceMs);
+    await logged3;
     assert.equal(unhandled.length, 0, 'no unhandled promise rejection from timer-driven settle');
     fs.writeFileSync(storeFile, backup);
     assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id3)?.submission?.delivery.state, 'pending',
       'answer stays pending and recoverable');
   } finally {
     handlers.stop();
+    t.mock.timers.reset();
     process.off('unhandledRejection', onUnhandled);
     process.env.HOME = prevHome;
   }

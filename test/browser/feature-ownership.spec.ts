@@ -23,10 +23,15 @@ test('a delayed resume does not reselect the same-id session on another host', a
 });
 
 test('a late missing-share response cannot prompt or publish after changing hosts', async ({ page, fleet }) => {
+  // Drain the background GET /share fired by sessionView.select's refreshArtifacts before intercepting copyMessage's GET.
+  const initialPeerShare = page.waitForResponse(response =>
+    response.url() === `${fleet.peer.base}/api/sessions/${ROOT}/share` && response.request().method() === 'GET');
   await fleet.select(fleet.peer);
+  await initialPeerShare;
   const share = heldRoute();
   const posts: unknown[] = [];
   let dialogs = 0;
+  let held = false;
   page.on('dialog', async dialog => { dialogs += 1; await dialog.accept(); });
   for (const host of [fleet.self, fleet.peer]) {
     await page.route(`${host.base}/api/sessions/${ROOT}/share`, route => {
@@ -34,7 +39,8 @@ test('a late missing-share response cannot prompt or publish after changing host
         posts.push(host.hostId);
         return route.fulfill({ json: { url: `${host.base}/fixture-share` } });
       }
-      if (host === fleet.peer) {
+      if (host === fleet.peer && !held) {
+        held = true;
         share.hold(route); return;
       }
       return route.continue();

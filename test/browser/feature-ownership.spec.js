@@ -22,10 +22,14 @@ const fixtures_js_1 = require("./fixtures.js");
     await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self root transcript');
 });
 (0, fixtures_js_1.test)('a late missing-share response cannot prompt or publish after changing hosts', async ({ page, fleet }) => {
+    // Drain the background GET /share fired by sessionView.select's refreshArtifacts before intercepting copyMessage's GET.
+    const initialPeerShare = page.waitForResponse(response => response.url() === `${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/share` && response.request().method() === 'GET');
     await fleet.select(fleet.peer);
+    await initialPeerShare;
     const share = (0, fixtures_js_1.heldRoute)();
     const posts = [];
     let dialogs = 0;
+    let held = false;
     page.on('dialog', async (dialog) => { dialogs += 1; await dialog.accept(); });
     for (const host of [fleet.self, fleet.peer]) {
         await page.route(`${host.base}/api/sessions/${fixtures_js_1.ROOT}/share`, route => {
@@ -33,7 +37,8 @@ const fixtures_js_1 = require("./fixtures.js");
                 posts.push(host.hostId);
                 return route.fulfill({ json: { url: `${host.base}/fixture-share` } });
             }
-            if (host === fleet.peer) {
+            if (host === fleet.peer && !held) {
+                held = true;
                 share.hold(route);
                 return;
             }
