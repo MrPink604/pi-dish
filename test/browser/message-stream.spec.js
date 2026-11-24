@@ -193,14 +193,36 @@ async function setup(page, fleet) {
     (0, fixtures_js_1.expect)(await page.evaluate(() => window.streamOriginFailures)).toEqual([null]);
     await page.evaluate(() => window.ownedStream.dispose());
 });
+// Chromium writes DevToolsActivePort asynchronously after launchServer's pipe handshake completes.
+async function readDevToolsPort(profile, exited) {
+    const file = (0, node_path_1.join)(profile, 'DevToolsActivePort');
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+        try {
+            const port = (0, node_fs_1.readFileSync)(file, 'utf8').split('\n')[0]?.trim() ?? '';
+            if (/^\d+$/.test(port))
+                return port;
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT')
+                throw error;
+        }
+        if (exited())
+            throw new Error(`Chromium exited before writing ${file}`);
+        if (Date.now() >= deadline)
+            throw new Error(`Timed out waiting for ${file}`);
+        await new Promise(resolve => setTimeout(resolve, 20));
+    }
+}
 // Playwright normally forces focus, in which case Chromium acknowledges
 // Page.setWebLifecycleState without actually freezing the renderer.
 const wakeTest = fixtures_js_1.test.extend({
     page: async ({ playwright, launchOptions }, use) => {
         const server = await playwright.chromium.launchServer({ ...launchOptions, args: [...launchOptions.args ?? [], '--remote-debugging-port=0'] });
         try {
-            const profile = server.process().spawnargs.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
-            const port = (0, node_fs_1.readFileSync)((0, node_path_1.join)(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0];
+            const proc = server.process();
+            const profile = proc.spawnargs.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+            const port = await readDevToolsPort(profile, () => proc.exitCode !== null || proc.signalCode !== null);
             const browser = await playwright.chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true });
             try {
                 await use(await browser.contexts()[0].newPage());
