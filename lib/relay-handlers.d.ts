@@ -47,5 +47,5 @@ export interface RelayHandlers {
     publicArtifacts: PublicArtifactRelay;
     upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;
 }
-export declare function relayFirstResponse(opening: Promise<ClientRequest>, timeoutMs: number, send: (upstream: ClientRequest, progress: () => void) => void, respond: (peerRes: IncomingMessage) => void, onFailure: (reason: unknown) => void, classifyError: ((error: unknown) => unknown) | null): void;
+export declare function relayFirstResponse(opening: Promise<ClientRequest>, timeoutMs: number, send: (upstream: ClientRequest) => void, respond: (peerRes: IncomingMessage) => void, onFailure: (reason: unknown) => void, classifyError: ((error: unknown) => unknown) | null): void;
 export declare function createRelayHandlers(ports: RelayPorts): RelayHandlers;

@@ -1,4 +1,5 @@
 import type { ClientRequest, IncomingMessage, OutgoingHttpHeaders } from 'http';
+import type { Socket } from 'net';
 import type { Duplex } from 'stream';
 import hostIdentity = require('./host-identity');
 import * as remoteHosts from './remote-hosts';
@@ -106,15 +107,15 @@ const HOP_BY_HOP_HEADERS: Record<string, true> = {
   trailer: true, upgrade: true, 'proxy-authenticate': true,
 };
 
-// The request promise includes SSH setup, so the timer arms only once it yields a
-// request; any response clears it for good (idle SSE streams included). While a
-// request body is still uploading, `progress` and advancing socket writes before
-// `writableFinished` restart it: the peer answers a large upload only after its
-// last byte.
+// The request promise includes SSH setup, so deadlines arm only once it yields a
+// request; any response clears both the socket inactivity timeout and response
+// deadline for good (idle SSE streams included). During a large upload, the
+// upstream socket's native inactivity timeout counts real kernel I/O so actively
+// draining uploads stay alive while stalled uploads and post-finish hangs time out.
 export function relayFirstResponse(
   opening: Promise<ClientRequest>,
   timeoutMs: number,
-  send: (upstream: ClientRequest, progress: () => void) => void,
+  send: (upstream: ClientRequest) => void,
   respond: (peerRes: IncomingMessage) => void,
   onFailure: (reason: unknown) => void,
   classifyError: ((error: unknown) => unknown) | null,
@@ -127,34 +128,89 @@ export function relayFirstResponse(
   };
   const error = (cause: unknown) => fail(classifyError ? classifyError(cause) : undefined);
   opening.then((upstream) => {
-    let lastBytesWritten = upstream.socket?.bytesWritten ?? 0;
-    upstream.once('socket', (socket) => {
-      lastBytesWritten = Math.max(lastBytesWritten, socket?.bytesWritten ?? 0);
-    });
-    const timer = setTimeout(() => {
-      if (settled) return;
-      const bytesWritten = upstream.socket?.bytesWritten ?? 0;
-      if (!upstream.writableFinished && bytesWritten > lastBytesWritten) {
-        lastBytesWritten = bytesWritten;
-        timer.refresh();
-        return;
+    let setupTimer: NodeJS.Timeout | null = null;
+    let responseTimer: NodeJS.Timeout | null = null;
+    let activeSocket: Socket | null = null;
+    let connectHandler: (() => void) | null = null;
+
+    const clearSetupTimer = () => {
+      if (setupTimer !== null) {
+        clearTimeout(setupTimer);
+        setupTimer = null;
       }
+    };
+    const clearResponseTimer = () => {
+      if (responseTimer !== null) {
+        clearTimeout(responseTimer);
+        responseTimer = null;
+      }
+    };
+    const clearSocketTimeout = () => {
+      if (!activeSocket) return;
+      activeSocket.removeListener('timeout', onTimeout);
+      if (connectHandler) {
+        activeSocket.removeListener('connect', connectHandler);
+        connectHandler = null;
+      }
+      if (typeof activeSocket.setTimeout === 'function') activeSocket.setTimeout(0);
+      activeSocket = null;
+    };
+    const disarm = () => {
+      clearSetupTimer();
+      clearResponseTimer();
+      clearSocketTimeout();
+    };
+    const onTimeout = () => {
+      if (settled) return;
+      disarm();
       try { upstream.destroy(); } catch {}
       fail('timeout');
-    }, timeoutMs);
-    const progress = () => {
-      if (settled) return;
-      lastBytesWritten = Math.max(lastBytesWritten, upstream.socket?.bytesWritten ?? 0);
-      timer.refresh();
     };
-    upstream.on('error', (cause) => { clearTimeout(timer); error(cause); });
+    const armResponseDeadline = () => {
+      if (settled || responseTimer !== null) return;
+      responseTimer = setTimeout(onTimeout, timeoutMs);
+    };
+    const attachSocket = (socket: Socket) => {
+      if (settled || activeSocket === socket) return;
+      clearSocketTimeout();
+      activeSocket = socket;
+      if (typeof socket.setTimeout === 'function') {
+        socket.setTimeout(timeoutMs);
+        socket.on('timeout', onTimeout);
+        if (!socket.connecting) {
+          clearSetupTimer();
+          clearResponseTimer();
+          if (upstream.writableFinished) armResponseDeadline();
+        } else {
+          clearResponseTimer();
+          connectHandler = () => {
+            connectHandler = null;
+            if (settled) return;
+            clearSetupTimer();
+            if (upstream.writableFinished) armResponseDeadline();
+          };
+          socket.once('connect', connectHandler);
+        }
+      }
+    };
+
+    setupTimer = setTimeout(onTimeout, timeoutMs);
+    if (upstream.socket) attachSocket(upstream.socket);
+    else upstream.once('socket', attachSocket);
+
+    upstream.once('finish', () => {
+      if (settled) return;
+      if (activeSocket && !activeSocket.connecting) armResponseDeadline();
+    });
+    upstream.on('error', (cause) => { disarm(); error(cause); });
+    upstream.once('close', disarm);
     upstream.on('response', (peerRes) => {
-      clearTimeout(timer);
+      disarm();
       if (settled) return peerRes.resume();
       settled = true;
       respond(peerRes);
     });
-    send(upstream, progress);
+    send(upstream);
   }).catch(error);
 }
 
@@ -206,12 +262,9 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     relayFirstResponse(
       remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers }),
       proxyResponseTimeoutMs,
-      (upstream, progress) => {
+      (upstream) => {
         req.on('aborted', () => { try { upstream.destroy(); } catch {} });
-        upstream.on('drain', progress);
-        upstream.on('finish', progress);
         req.pipe(upstream);
-        req.on('data', progress);
       },
       (peerRes) => {
           res.status(peerRes.statusCode!);
@@ -658,9 +711,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     relayFirstResponse(
       remoteHosts.request(remote, { method: req.method, path: peerPath, headers }),
       proxyResponseTimeoutMs,
-      (upstream, progress) => {
-        upstream.on('drain', progress);
-        upstream.on('finish', progress);
+      (upstream) => {
         if (payload !== null) upstream.write(payload);
         upstream.end();
       },
