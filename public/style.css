@@ -101,6 +101,7 @@
    keeps the app above it. */
 html {
   height: 100%;
+  overscroll-behavior-x: none;
 }
 
 /* Harnesses configured with Nerd Font symbols put Material Design icons
@@ -125,7 +126,7 @@ body {
   color: var(--text);
   line-height: 1.5;
   height: 100%;
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
 }
 

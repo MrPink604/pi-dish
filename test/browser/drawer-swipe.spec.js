@@ -322,10 +322,76 @@ fixtures_js_1.test.describe('composer exclusion on live session', () => {
         (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
     });
 });
-(0, fixtures_js_1.test)('multi-touch, text selection, lightbox, modal, and GLB viewer are not hijacked', async ({ page, fleet }) => {
+(0, fixtures_js_1.test)('text selection, lightbox, modal, GLB viewer, and multi-touch are not hijacked', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     await setMobileViewport(page);
-    // 1. Multi-touch gesture starting at left edge.
+    // 1. Active text selection (must run at scale 1 so isZoomed() does not mask it).
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.visualViewport?.scale ?? 1)).toBeLessThanOrEqual(1.01);
+    await page.evaluate(() => {
+        const content = document.querySelector('#messages .message-content');
+        if (content?.firstChild) {
+            const range = document.createRange();
+            range.selectNodeContents(content);
+            const sel = window.getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+        }
+    });
+    await dispatchTouchSwipe(page, [
+        { x: 10, y: 400 },
+        { x: 80, y: 400 },
+        { x: 180, y: 400 },
+    ]);
+    (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    // 2. Open lightbox (image/diagram viewer).
+    await page.evaluate(() => {
+        const lb = document.createElement('div');
+        lb.className = 'lightbox-overlay';
+        lb.id = 'testLightbox';
+        document.body.append(lb);
+    });
+    await dispatchTouchSwipe(page, [
+        { x: 10, y: 400 },
+        { x: 80, y: 400 },
+        { x: 180, y: 400 },
+    ]);
+    (0, fixtures_js_1.expect)(page.url()).toContain(fleet.self.base);
+    (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
+    await page.evaluate(() => document.getElementById('testLightbox')?.remove());
+    // 3. Open modal overlay.
+    await page.evaluate(() => {
+        fixtureElement(document.getElementById('settingsModal'), '#settingsModal').style.display = 'flex';
+    });
+    await dispatchTouchSwipe(page, [
+        { x: 10, y: 400 },
+        { x: 80, y: 400 },
+        { x: 180, y: 400 },
+    ]);
+    (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
+    await page.evaluate(() => {
+        fixtureElement(document.getElementById('settingsModal'), '#settingsModal').style.display = 'none';
+    });
+    // 4. GLB 3D model viewer stage.
+    const viewerY = await page.evaluate(() => {
+        const viewer = document.createElement('div');
+        viewer.className = 'model-viewer';
+        viewer.id = 'testModelViewer';
+        viewer.style.cssText = 'position:fixed;left:0;top:300px;width:100%;height:200px;z-index:10;';
+        viewer.innerHTML = '<div class="model-viewer-stage" style="width:100%;height:100%"><canvas width="390" height="200"></canvas></div>';
+        document.body.append(viewer);
+        return Math.round(viewer.getBoundingClientRect().top + 80);
+    });
+    await dispatchTouchSwipe(page, [
+        { x: 10, y: viewerY },
+        { x: 80, y: viewerY },
+        { x: 180, y: viewerY },
+    ]);
+    (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
+    await page.evaluate(() => document.getElementById('testModelViewer')?.remove());
+    // 5. Multi-touch gesture starting at left edge (runs last because Chromium's
+    // gesture recognizer may apply pinch zoom on 2-finger CDP touch moves).
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.visualViewport?.scale ?? 1)).toBeLessThanOrEqual(1.01);
     const cdp = await page.context().newCDPSession(page);
     try {
         await cdp.send('Input.dispatchTouchEvent', {
@@ -346,68 +412,6 @@ fixtures_js_1.test.describe('composer exclusion on live session', () => {
         await cdp.detach();
     }
     (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
-    // 3. Active text selection.
-    await page.evaluate(() => {
-        const content = document.querySelector('#messages .message-content');
-        if (content?.firstChild) {
-            const range = document.createRange();
-            range.selectNodeContents(content);
-            const sel = window.getSelection();
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-        }
-    });
-    await dispatchTouchSwipe(page, [
-        { x: 10, y: 400 },
-        { x: 80, y: 400 },
-        { x: 180, y: 400 },
-    ]);
-    (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
-    await page.evaluate(() => window.getSelection()?.removeAllRanges());
-    // 4. Open lightbox (image/diagram viewer).
-    await page.evaluate(() => {
-        const lb = document.createElement('div');
-        lb.className = 'lightbox-overlay';
-        lb.id = 'testLightbox';
-        document.body.append(lb);
-    });
-    await dispatchTouchSwipe(page, [
-        { x: 10, y: 400 },
-        { x: 80, y: 400 },
-        { x: 180, y: 400 },
-    ]);
-    (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
-    await page.evaluate(() => document.getElementById('testLightbox')?.remove());
-    // 5. Open modal overlay.
-    await page.evaluate(() => {
-        fixtureElement(document.getElementById('settingsModal'), '#settingsModal').style.display = 'flex';
-    });
-    await dispatchTouchSwipe(page, [
-        { x: 10, y: 400 },
-        { x: 80, y: 400 },
-        { x: 180, y: 400 },
-    ]);
-    (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
-    await page.evaluate(() => {
-        fixtureElement(document.getElementById('settingsModal'), '#settingsModal').style.display = 'none';
-    });
-    // 6. GLB 3D model viewer stage.
-    const viewerY = await page.evaluate(() => {
-        const viewer = document.createElement('div');
-        viewer.className = 'model-viewer';
-        viewer.id = 'testModelViewer';
-        viewer.style.cssText = 'position:fixed;left:0;top:300px;width:100%;height:200px;z-index:10;';
-        viewer.innerHTML = '<div class="model-viewer-stage" style="width:100%;height:100%"><canvas width="390" height="200"></canvas></div>';
-        document.body.append(viewer);
-        return Math.round(viewer.getBoundingClientRect().top + 80);
-    });
-    await dispatchTouchSwipe(page, [
-        { x: 10, y: viewerY },
-        { x: 80, y: viewerY },
-        { x: 180, y: viewerY },
-    ]);
-    (0, fixtures_js_1.expect)((await drawerState(page)).open).toBe(false);
-    await page.evaluate(() => document.getElementById('testModelViewer')?.remove());
 });
 (0, fixtures_js_1.test)('hamburger buttons keep opening and closing identically across empty state and session header', async ({ page, fleet }) => {
     await setMobileViewport(page);
