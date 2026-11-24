@@ -1649,7 +1649,8 @@ named by a hash, replaced durably; read fails closed (a corrupt file is a
 500, never empty, so a delivered answer is never replayed). Every review route
 requires the owning session to exist (`sessionKnown`, else 404, so deleting a
 private transcript never bypasses the PIN gate), and `DELETE /api/sessions/:id`
-purges the reviews for the deleted session and any deleted OMP subagents.
+purges the reviews for the exact deleted route id (any orphaned child review
+files 404 via `sessionKnown`; startup GC is a follow-up).
 `create`, `submit`, `cancel` and `wait` require `X-Pi-Dish-Client: 1` (403
 without it, forwarded through `/hosts/<peer>`), `HEAD …/wait` returns 405 with
 no side effects, and `submit` rejects bodies over 64 KiB (413) before answer

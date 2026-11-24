@@ -452,7 +452,7 @@ test('CSRF header is required (and proxied), HEAD wait has no side effects, and 
     assert.equal(proxiedWait.status, 200);
     assert.equal((0, test_types_js_1.record)((await json(proxiedWait)).result).status, 'submitted');
 });
-test('unknown or deleted sessions (including private and OMP subagents) return 404 and purge stored reviews', async () => {
+test('unknown or deleted sessions (including private) return 404; DELETE purges only the deleted route id', async () => {
     // Unknown session returns 404 on every review route.
     const ghost = '2026-11-23T09-00-00-ghost000';
     const ghostBase = `${owner}/api/sessions/${ghost}/reviews`;
@@ -494,28 +494,35 @@ test('unknown or deleted sessions (including private and OMP subagents) return 4
     assert.equal((await post(`${privBase}/${privReviewId}/submit`, { submissionId: 'sub-priv-01', answers: DEFAULTS })).status, 404);
     assert.equal((await post(`${privBase}/${privReviewId}/cancel`, {})).status, 404);
     assert.equal((await fetch(`${privBase}/${privReviewId}/wait?timeout=1`, { headers: CLIENT_HEADER })).status, 404);
-    // Permanent DELETE /api/sessions/:id purges stored reviews for both parent and nested OMP subagent.
+    // Permanent DELETE /api/sessions/:id purges the deleted parent's reviews, and does not touch a
+    // surviving top-level session whose id a deleted child claimed.
     const parentNative = 'omp-review-parent-01';
-    const childNative = 'omp-review-child-01';
-    assert.ok(sessionKey.validSessionId(parentNative) && sessionKey.validSessionId(childNative));
+    const survivorNative = 'omp-review-survivor-01';
+    assert.ok(sessionKey.validSessionId(parentNative) && sessionKey.validSessionId(survivorNative));
     const parentRoute = sessionKey.encodeSessionKey('omp', parentNative);
-    const childRoute = sessionKey.encodeSessionKey('omp', childNative);
+    const survivorRoute = sessionKey.encodeSessionKey('omp', survivorNative);
     const ompDir = path.join(home, '.omp', 'agent', 'sessions', 'project');
     const parentFile = path.join(ompDir, `${parentNative}.jsonl`);
+    const survivorFile = path.join(ompDir, `${survivorNative}.jsonl`);
     const childDir = parentFile.slice(0, -'.jsonl'.length);
     fs.mkdirSync(childDir, { recursive: true });
     fs.writeFileSync(parentFile, JSON.stringify({ type: 'session', version: 3, id: parentNative, cwd }) + '\n');
-    fs.writeFileSync(path.join(childDir, 'Helper.jsonl'), JSON.stringify({ type: 'session', version: 3, id: childNative, cwd }) + '\n');
+    fs.writeFileSync(survivorFile, JSON.stringify({ type: 'session', version: 3, id: survivorNative, cwd }) + '\n');
+    // Child transcript inside the deleted parent's folder claims the survivor's id.
+    fs.writeFileSync(path.join(childDir, 'Helper.jsonl'), JSON.stringify({ type: 'session', version: 3, id: survivorNative, cwd }) + '\n');
     const storePath = (id) => path.join(home, '.pi', 'dish', 'reviews', `${crypto.createHash('sha256').update(sessionKey.canonicalSessionId(id)).digest('hex').slice(0, 32)}.json`);
     assert.equal((await post(`${owner}/api/sessions/${encodeURIComponent(parentRoute)}/reviews`, { ...DECK, title: 'Parent', wait: false })).status, 201);
-    assert.equal((await post(`${owner}/api/sessions/${encodeURIComponent(childRoute)}/reviews`, { ...DECK, title: 'Child', wait: false })).status, 201);
-    assert.ok(fs.existsSync(storePath(parentRoute)) && fs.existsSync(storePath(childRoute)));
+    const survivorCreated = await post(`${owner}/api/sessions/${encodeURIComponent(survivorRoute)}/reviews`, { ...DECK, title: 'Survivor', wait: false });
+    assert.equal(survivorCreated.status, 201);
+    const survivorReviewId = String((0, test_types_js_1.record)((await json(survivorCreated)).review).id);
+    assert.ok(fs.existsSync(storePath(parentRoute)) && fs.existsSync(storePath(survivorRoute)));
     const deleted = await fetch(`${owner}/api/sessions/${encodeURIComponent(parentRoute)}`, { method: 'DELETE' });
     assert.equal(deleted.status, 200);
-    assert.ok(!fs.existsSync(storePath(parentRoute)), 'parent reviews purged on delete');
-    assert.ok(!fs.existsSync(storePath(childRoute)), 'subagent reviews purged on delete');
+    assert.ok(!fs.existsSync(storePath(parentRoute)), 'deleted parent reviews purged');
     assert.equal((await fetch(`${owner}/api/sessions/${encodeURIComponent(parentRoute)}/reviews`)).status, 404);
-    assert.equal((await fetch(`${owner}/api/sessions/${encodeURIComponent(childRoute)}/reviews`)).status, 404);
+    assert.ok(fs.existsSync(storePath(survivorRoute)), 'surviving session reviews untouched');
+    const survivorList = await json(await fetch(`${owner}/api/sessions/${encodeURIComponent(survivorRoute)}/reviews`));
+    assert.equal(survivorList.reviews.some(item => item.id === survivorReviewId), true);
 });
 test('CLI wait retries dropped or malformed responses and exits non-zero when retries run out', async () => {
     const reviewId = 'rv_0123456789abcdef';

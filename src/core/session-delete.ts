@@ -2,7 +2,7 @@ import fs = require('fs');
 import path = require('path');
 import { getHarness } from './harnesses';
 import { sessionRootsFor } from './private-sessions';
-import { discoverSubsessionCandidates, invalidateSessionHeader } from './session-discovery';
+import { invalidateSessionHeader } from './session-discovery';
 import { httpError } from './http-boundary';
 import type { SessionSource } from './session-source';
 
@@ -26,7 +26,7 @@ function within(directory: string, file: string): boolean {
  * roots, and no live session may claim the file or anything in its subtree.
  */
 export function createSessionDelete(ports: SessionDeletePorts) {
-  return function deleteSession(sessionId: string): { deleted: string[]; sessionIds: string[] } {
+  return function deleteSession(sessionId: string): { deleted: string[] } {
     const source = ports.findSessionSource(sessionId, { exact: true });
     if (!source) throw httpError('Session not found', 404);
     const descriptor = getHarness(source.harnessId);
@@ -56,12 +56,6 @@ export function createSessionDelete(ports: SessionDeletePorts) {
         throw httpError('This subagent\'s parent session is live; close it first.', 409);
       }
     }
-    const sessionIds = [source.routeId];
-    if (subtree) {
-      for (const child of discoverSubsessionCandidates(file, { descriptor, maxDepth: 16, maxFiles: 10_000 })) {
-        sessionIds.push(child.routeId);
-      }
-    }
     fs.unlinkSync(file);
     invalidateSessionHeader(file);
     const deleted = [file];
@@ -71,6 +65,6 @@ export function createSessionDelete(ports: SessionDeletePorts) {
       try { if (fs.lstatSync(sidecar).isFile()) { fs.unlinkSync(sidecar); deleted.push(sidecar); } } catch {}
     }
     if (subtree) { fs.rmSync(subtree, { recursive: true }); deleted.push(subtree); }
-    return { deleted, sessionIds };
+    return { deleted };
   };
 }

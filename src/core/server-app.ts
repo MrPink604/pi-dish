@@ -497,13 +497,11 @@ export function startServer(rootDirectory: string): Server {
   });
   app.delete('/api/sessions/:id', (req: ApplicationRequest, res: ApplicationResponse) => {
     try {
-      const { deleted, sessionIds } = deleteSession(req.params.id);
-      for (const id of sessionIds) {
-        uploadHandlers.removeSession(id);
-        reviewHandlers.removeSession(id);
-        hibernation.forget(id);
-      }
-      res.json({ success: true, deleted });
+      const result = deleteSession(req.params.id);
+      uploadHandlers.removeSession(req.params.id);
+      reviewHandlers.removeSession(req.params.id);
+      hibernation.forget(req.params.id);
+      res.json({ success: true, ...result });
     } catch (error) {
       res.status(errorStatus(error, 500)).json({ error: errorMessage(error) });
     }
