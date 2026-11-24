@@ -949,3 +949,62 @@ test('a bot creates, lists and removes only its own routines', async () => {
   const shown = await callRoute(handlers.get, { id: theirs.id });
   assert.deepEqual([(shown.body.routine as Record<string, unknown>).botName, (shown.body.routine as Record<string, unknown>).botRetired], ['Backups', true]);
 });
+
+test('a oneShot session that dies mid-run does not arm a delayed close timer that would kill a recovered session', async () => {
+  const prevGrace = process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS;
+  process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = '30';
+  try {
+    const routine = store.createRoutine(definition({ mode: 'oneShot' }));
+    const { runner, sessions, closed } = harness();
+    const invocation = runner.invoke(routine, { trigger: 'invoke' });
+    await settleTwice();
+    const first = existingSession(sessions, 'sess-1');
+    // Simulate tmux server loss closing the bridge socket mid-run.
+    first.emit('close');
+    await settleTwice();
+    assert.equal(existingInvocation(invocation.id).status, 'interrupted');
+    assert.equal(runner.isPendingClose('sess-1'), false, 'a dead session must not arm a close timer');
+    // Simulate recovery restoring a new live session on the same route before the old grace period would have fired.
+    const recovered = new FakeSession('sess-1');
+    sessions.set('sess-1', recovered);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.deepEqual(closed, [], 'recovery replacement must never be closed by an obsolete routine timer');
+    assert.equal(sessions.get('sess-1'), recovered);
+  } finally {
+    process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = prevGrace;
+  }
+});
+
+test('a completed oneShot close timer exposes isPendingClose and refuses to close a replaced session or race with recovery', async () => {
+  const prevGrace = process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS;
+  process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = '40';
+  try {
+    const routine = store.createRoutine(definition({ mode: 'oneShot' }));
+    const { runner, sessions, closed } = harness();
+    const invocation = runner.invoke(routine, { trigger: 'invoke' });
+    await settleTwice();
+    existingSession(sessions, 'sess-1').endTurn('done');
+    await settleTwice();
+    assert.equal(runner.isPendingClose('sess-1'), true, 'completed oneShot exposes its pending close');
+    // Replace the session on the same route before the grace period elapses.
+    const replacement = new FakeSession('sess-1');
+    sessions.set('sess-1', replacement);
+    await new Promise(resolve => setTimeout(resolve, 90));
+    assert.deepEqual(closed, [], 'scheduled close must never kill a replacement session');
+    assert.equal(runner.isPendingClose('sess-1'), false);
+    assert.match(String(existingInvocation(invocation.id).closeError), /replaced before scheduled close/);
+
+    // Also refuses to race when recovery reports the session is currently in flight.
+    const recoveringRoutine = store.createRoutine(definition({ name: 'recovering-shot', mode: 'oneShot' }));
+    const r2 = harness({ isRecovering: id => id === 'sess-1' });
+    const inv2 = r2.runner.invoke(recoveringRoutine, { trigger: 'invoke' });
+    await settleTwice();
+    existingSession(r2.sessions, 'sess-1').endTurn('done');
+    await settleTwice();
+    await new Promise(resolve => setTimeout(resolve, 90));
+    assert.deepEqual(r2.closed, [], 'scheduled close must not race with in-flight recovery');
+    assert.match(String(existingInvocation(inv2.id).closeError), /recovery is in flight/);
+  } finally {
+    process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = prevGrace;
+  }
+});

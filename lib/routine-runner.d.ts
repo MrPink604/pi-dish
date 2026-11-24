@@ -46,6 +46,8 @@ export interface RoutineRunner {
     nextRunAt(routine: Routine | null | undefined, from?: number): number | null;
     recoverAfterRestart(at?: number): Promise<void>;
     waitForInvocation(id: string, timeoutMs?: number): Promise<RoutineInvocation | null>;
+    /** True while a one-shot session is waiting out its post-turn auto-close grace period. */
+    isPendingClose(sessionId: string): boolean;
     start(): void;
     stop(): void;
     readonly watching: number;
@@ -59,6 +61,8 @@ export interface RoutineRunnerPorts {
     isTurnInProgress?(session: LiveSession): boolean;
     supports?(session: LiveSession, capability: BridgeCapability): boolean;
     recoveryOutcome?(sessionId: string): Pick<RecoveryOutcome, 'status' | 'reason'> | null;
+    /** True while recovery is actively launching/restoring `sessionId`; prevents close-timer races. */
+    isRecovering?(sessionId: string): boolean;
     /** Where routines whose destination is a bot are delivered; absent where bots do not run. */
     bots?: RoutineBots | null;
     now?(): number;

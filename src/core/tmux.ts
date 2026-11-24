@@ -120,17 +120,68 @@ function runFile(file: string, args: readonly unknown[], timeout: number, cwd?: 
   });
 }
 
+const NO_SERVER_RE = /no server running|no such file or directory|connection refused|error connecting to/i;
+const noServerListeners = new Set<(socket: string) => void>();
+const headlessSpawnListeners = new Set<(sessionId: string, socket: string) => void>();
+
+/** True when tmux rejected a command because no server listens on the target socket. */
+export function isNoServerError(error: unknown): boolean {
+  if (!record(error)) return false;
+  const stderr = typeof error.stderr === 'string' ? error.stderr : '';
+  const message = typeof error.message === 'string' ? error.message : '';
+  return NO_SERVER_RE.test(stderr) || NO_SERVER_RE.test(message);
+}
+
+function isHeadlessSocket(socket: string): boolean {
+  return path.resolve(socket) === path.resolve(headlessTmuxSocket());
+}
+
+function notifyHeadlessNoServer(socket: string): void {
+  if (!noServerListeners.size || !isHeadlessSocket(socket)) return;
+  queueMicrotask(() => {
+    for (const listener of [...noServerListeners]) {
+      try { listener(socket); } catch {}
+    }
+  });
+}
+
+function notifyHeadlessSpawn(sessionId: string, socket: string): void {
+  if (!headlessSpawnListeners.size || !isHeadlessSocket(socket)) return;
+  queueMicrotask(() => {
+    for (const listener of [...headlessSpawnListeners]) {
+      try { listener(sessionId, socket); } catch {}
+    }
+  });
+}
+
+/** Fires when a tmux command against pi-dish's headless socket fails with no server running. */
+export function onHeadlessNoServer(listener: (socket: string) => void): () => void {
+  noServerListeners.add(listener);
+  return () => { noServerListeners.delete(listener); };
+}
+
+/** Fires after a spawn placement is recorded on pi-dish's headless socket. */
+export function onHeadlessSpawn(listener: (sessionId: string, socket: string) => void): () => void {
+  headlessSpawnListeners.add(listener);
+  return () => { headlessSpawnListeners.delete(listener); };
+}
+
 function runTmux(args: readonly unknown[], { timeout = 3000 } = {}): Promise<string> {
   return runFile('tmux', args, timeout);
 }
 
 /** Every command names one server socket; the format/query calls share one timeout. */
-function runTmuxOn(socket: string, args: readonly unknown[]): Promise<string> {
-  return runTmux(['-S', socket, ...args], { timeout: 2000 });
+async function runTmuxOn(socket: string, args: readonly unknown[], { notifyNoServer = true } = {}): Promise<string> {
+  try {
+    return await runTmux(['-S', socket, ...args], { timeout: 2000 });
+  } catch (error) {
+    if (notifyNoServer && isNoServerError(error)) notifyHeadlessNoServer(socket);
+    throw error;
+  }
 }
 
 async function tmuxServerRunning(socket: string): Promise<boolean> {
-  try { await runTmuxOn(socket, ['list-sessions']); return true; } catch { return false; }
+  return (await serverPid(socket)) !== null;
 }
 
 function executableOnPath(name: string, searchPath: string | undefined): string | null {
@@ -182,6 +233,9 @@ const HEADLESS_SERVER_OPTIONS: readonly (readonly string[])[] = [
   ['set-option', '-sq', 'extended-keys', 'on'],
   ['set-option', '-sq', 'extended-keys-format', 'csi-u'],
   ['set-option', '-gq', 'focus-events', 'on'],
+  // Keep pi-dish's server alive when its last session exits on its own so a
+  // single exited session is never confused with the whole server dying.
+  ['set-option', '-sq', 'exit-empty', 'off'],
 ];
 
 /**
@@ -197,6 +251,7 @@ async function runTmuxStartingServer(socket: string, command: readonly unknown[]
     try {
       return await runFile('tmux', ['-N', ...target, ...command], timeout, '/');
     } catch (error) {
+      if (isNoServerError(error)) notifyHeadlessNoServer(socket);
       if (await tmuxServerRunning(socket)) throw error;
     }
   }
@@ -305,7 +360,10 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
 
   const out = newTmuxSessionName
     ? await runTmuxStartingServer(socket, args, 5000)
-    : await runTmux(['-S', socket, ...args], { timeout: 5000 });
+    : await runTmux(['-S', socket, ...args], { timeout: 5000 }).catch(error => {
+      if (isNoServerError(error)) notifyHeadlessNoServer(socket);
+      throw error;
+    });
   return { paneId: out.trim() };
 }
 
@@ -326,7 +384,12 @@ export async function respawnPane({ socket, paneId, cwd, command, env, expectedP
     const finalCheck = await beforeAction();
     finalCheck();
   }
-  await runTmux(args, { timeout: 5000 });
+  try {
+    await runTmux(args, { timeout: 5000 });
+  } catch (error) {
+    if (isNoServerError(error)) notifyHeadlessNoServer(socket);
+    throw error;
+  }
   return { paneId };
 }
 
@@ -549,6 +612,90 @@ export async function paneExists(socket: string, paneId: string): Promise<boolea
   return !!(await paneField(socket, paneId, '#{pane_id}'));
 }
 
+export interface LiveTmuxPane {
+  paneId: string;
+  panePid: number | null;
+  dead: boolean;
+  paneProcess: ProcessIdentity | null;
+}
+
+export interface TmuxServerSnapshot {
+  pid: number;
+  server: ProcessIdentity;
+  panes: Map<string, LiveTmuxPane>;
+}
+
+/** PID of the server answering on `socket`; null when none answers. Never starts a server. */
+export async function serverPid(socket: string): Promise<number | null> {
+  try {
+    const pid = Number((await runTmux(['-N', '-S', socket, 'display-message', '-p', '#{pid}'], { timeout: 2000 })).trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Single-command snapshot of a running tmux server and its panes. Uses -N so
+ * it never starts a server; handles an empty server (exit-empty off) by
+ * falling back to serverPid when list-panes reports "no current target".
+ */
+export async function inspectServer(socket: string): Promise<TmuxServerSnapshot | null> {
+  try {
+    const out = await runTmux(
+      ['-N', '-S', socket, 'list-panes', '-a', '-F', '#{pid}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}'],
+      { timeout: 2000 },
+    );
+    let pid: number | null = null;
+    const panes = new Map<string, LiveTmuxPane>();
+    for (const line of out.split('\n')) {
+      if (!line) continue;
+      const [rawServerPid, paneId, rawPanePid, rawDead] = line.split('\t');
+      const parsedServerPid = Number(rawServerPid);
+      if (pid === null && Number.isInteger(parsedServerPid) && parsedServerPid > 0) pid = parsedServerPid;
+      if (!paneId) continue;
+      const parsedPanePid = Number(rawPanePid);
+      const validPanePid = Number.isInteger(parsedPanePid) && parsedPanePid > 1 ? parsedPanePid : null;
+      const dead = rawDead === '1';
+      panes.set(paneId, {
+        paneId,
+        panePid: validPanePid,
+        dead,
+        paneProcess: !dead && validPanePid ? processIdentity(validPanePid) : null,
+      });
+    }
+    if (pid === null) pid = await serverPid(socket);
+    const server = pid !== null ? processIdentity(pid) : null;
+    return server ? { pid: server.pid, server, panes } : null;
+  } catch (error) {
+    const stderr = record(error) && typeof error.stderr === 'string' ? error.stderr : '';
+    if (/no current target|no sessions/i.test(stderr)) {
+      const pid = await serverPid(socket);
+      const server = pid !== null ? processIdentity(pid) : null;
+      return server ? { pid: server.pid, server, panes: new Map() } : null;
+    }
+    return null;
+  }
+}
+
+/** Applies exit-empty off to an already-running headless server without ever starting one. */
+export async function configureHeadlessServer(socket = headlessTmuxSocket()): Promise<void> {
+  try {
+    await runTmux(['-N', '-S', socket, 'set-option', '-sq', 'exit-empty', 'off'], { timeout: 2000 });
+  } catch {}
+}
+
+/**
+ * Ensures pi-dish's headless tmux server is running using the same flags
+ * (-f /dev/null, HEADLESS_SERVER_OPTIONS, transient systemd scope) as
+ * spawnInTmux, and -N when a server is already running.
+ */
+export async function ensureHeadlessServer(socket = headlessTmuxSocket()): Promise<number | null> {
+  fs.mkdirSync(path.dirname(socket), { recursive: true, mode: 0o700 });
+  await runTmuxStartingServer(socket, ['start-server'], 5000);
+  return serverPid(socket);
+}
+
 /**
  * Clients attached to the pane's session, including grouped viewer sessions.
  * Null (unreadable) means "possibly watched", never "nobody is looking".
@@ -632,6 +779,7 @@ export function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bri
     ...(primeAgent ? { primeAgent } : {}),
   };
   writeStore(SPAWNS_STORE, spawns);
+  notifyHeadlessSpawn(sessionId, socket);
 }
 
 export function getSpawn(sessionId: string): SpawnPlacement | null {

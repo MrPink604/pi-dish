@@ -6,7 +6,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const node_child_process_1 = require("node:child_process");
 const recovery_runner_1 = require("../lib/recovery-runner");
+const process_identity_1 = require("../lib/process-identity");
 const bridge_session_1 = require("../lib/bridge-session");
 const harnesses_1 = require("../lib/harnesses");
 const session_key_1 = require("../lib/session-key");
@@ -347,4 +349,198 @@ test('a harness without a verified recovery prompt path restores but never promp
     assert.equal(s.row().status, 'needs-review');
     assert.match(String(s.row().reason), /no verified recovery prompt path/);
     assert.deepEqual(s.prompts, []);
+});
+test('a launch whose agent is not running and registered is never reported restored', async (t) => {
+    const s = scenario(t, { deps: { restore: async (r) => ({ success: true, id: r.nativeSessionId }) } });
+    await s.runner.start();
+    assert.equal(s.row().status, 'needs-review');
+    assert.match(String(s.row().reason), /not running with a registered bridge/);
+});
+test('a tmux server loss restores hung-up agents without prompting, respects continuationSafety and skips pending routine closes', async (t) => {
+    const s = scenario(t, { mode: 'restore', record: { shutdown: true, activity: 'uncertain' } });
+    await s.runner.start();
+    assert.equal(s.row().status, 'needs-review', 'at startup a generic shutdown is still ambiguous');
+    assert.deepEqual(s.launches, []);
+    await s.runner.recoverLost(['session']);
+    assert.equal(s.row().status, 'restored');
+    assert.deepEqual(s.launches, ['session']);
+    assert.deepEqual(s.prompts, []);
+    // Even in continue mode for a running turn, tmux-lost restores idle without
+    // starting a new paid turn and surfaces continuationSafety findings.
+    const interrupted = scenario(t, { mode: 'continue', record: { shutdown: false, activity: 'running', runId: 'run-1' } });
+    fs.appendFileSync(interrupted.file, JSON.stringify({
+        type: 'message',
+        message: { role: 'assistant', stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'tc-1', name: 'bash' }] },
+    }) + '\n');
+    await interrupted.runner.recoverLost(['session']);
+    assert.deepEqual(interrupted.launches, ['session']);
+    assert.deepEqual(interrupted.prompts, [], 'tmux server loss must never send an automatic prompt');
+    assert.equal(interrupted.row().status, 'needs-review');
+    assert.match(String(interrupted.row().reason), /Tool calls have no recorded result/);
+    // A completed one-shot routine waiting on its close grace timer is never resurrected.
+    const closing = scenario(t, {
+        mode: 'restore',
+        record: { shutdown: true, activity: 'uncertain' },
+        deps: { isPendingClose: id => id === 'session' },
+    });
+    await closing.runner.recoverLost(['session']);
+    assert.deepEqual(closing.launches, []);
+    assert.equal(closing.row().status, 'closed');
+});
+test('a tmux server loss with recovery off reports pending and waits for retry-all', async (t) => {
+    const s = scenario(t, { mode: 'off', record: { shutdown: true, activity: 'uncertain' } });
+    await s.runner.recoverLost(['session']);
+    assert.equal(s.row().status, 'pending');
+    assert.deepEqual(s.launches, []);
+    const outcomes = await s.runner.retryAll();
+    assert.deepEqual(outcomes.map(outcome => outcome.status), ['restored']);
+    assert.deepEqual(s.launches, ['session']);
+    assert.deepEqual(await s.runner.retryAll(), [], 'a running session leaves the retry-all set');
+});
+test('retry-all retries failed rows, leaves needs-review/ambiguous one-by-one, and honors the private PIN gate', async (t) => {
+    const shutdown = scenario(t, { record: { shutdown: true, activity: 'uncertain' } });
+    await shutdown.runner.start();
+    assert.deepEqual(await shutdown.runner.retryAll(), []);
+    assert.deepEqual(shutdown.launches, []);
+    // Ambiguous delivery stays one-by-one even if it was also in the tmux-lost set.
+    const ambiguous = scenario(t, {
+        mode: 'off',
+        control: { attempt: { observationId: 'observation', status: 'needs-review', delivery: 'uncertain' } },
+    });
+    await ambiguous.runner.recoverLost(['session']);
+    assert.deepEqual(await ambiguous.runner.retryAll(), []);
+    assert.deepEqual(ambiguous.launches, []);
+    // Private sessions are hidden from locked reports and skipped by locked retry-all.
+    const priv = scenario(t, {
+        record: { nativeSessionId: 'private-sess', cwd: '/definitely-missing-recovery-workspace' },
+        deps: { isPrivate: r => r.nativeSessionId === 'private-sess' },
+    });
+    await priv.runner.start();
+    assert.equal(priv.runner.report().sessions.length, 1);
+    assert.deepEqual(priv.runner.report({ includePrivate: false }).sessions, []);
+    assert.equal(priv.runner.report({ includePrivate: false }).totalRecords, 0);
+    priv.setRecord({ ...priv.record, nativeSessionId: 'private-sess', cwd: path.dirname(priv.file) });
+    assert.deepEqual(await priv.runner.retryAll({ includePrivate: false }), []);
+    assert.deepEqual(priv.launches, [], 'locked retry-all must never launch a private session');
+    const unlocked = await priv.runner.retryAll({ includePrivate: true });
+    assert.deepEqual(unlocked.map(outcome => outcome.status), ['restored']);
+    assert.deepEqual(priv.launches, ['private-sess']);
+});
+test('persisted tmux loss limiter enforces exponential backoff, rolling cap, restart persistence and fail-closed corruption', t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-recovery-runner-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const stateFile = path.join(dir, 'tmux-recovery-state.json');
+    let clock = 1_000_000;
+    const open = () => (0, recovery_runner_1.createTmuxLossLimiter)({
+        file: () => stateFile,
+        now: () => clock,
+        baseBackoffMs: 10_000,
+        maxBackoffMs: 60_000,
+        windowMs: 100_000,
+        maxAttempts: 3,
+    });
+    const first = open();
+    assert.equal(first.check().allowed, true);
+    first.record();
+    assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
+    // Re-open (simulating a pi-dish restart): backoff must persist across processes.
+    const afterRestart = open();
+    clock += 5_000;
+    const blocked1 = afterRestart.check();
+    assert.equal(blocked1.allowed, false);
+    assert.match(blocked1.reason, /backoff/i);
+    // After baseBackoffMs (10s), attempt 2 succeeds and backoff doubles to 20s.
+    clock += 5_000;
+    assert.equal(afterRestart.check().allowed, true);
+    afterRestart.record();
+    clock += 15_000;
+    assert.equal(open().check().allowed, false, 'second backoff doubled to 20s');
+    // After 20s, attempt 3 succeeds and reaches maxAttempts=3 in the 100s window.
+    clock += 5_000;
+    assert.equal(open().check().allowed, true);
+    open().record();
+    clock += 50_000;
+    const capped = open().check();
+    assert.equal(capped.allowed, false);
+    assert.match(capped.reason, /limit of 3 attempt/);
+    // Once the oldest attempt ages past windowMs (100s from initial 1_000_000), recovery opens again.
+    clock = 1_000_000 + 100_000;
+    assert.equal(open().check().allowed, true);
+    // Corrupt state file fails closed.
+    fs.writeFileSync(stateFile, '{corrupt');
+    const corrupt = open().check();
+    assert.equal(corrupt.allowed, false);
+    assert.match(corrupt.reason, /corrupt/i);
+});
+test('watchTmuxServer distinguishes dead/replaced servers from slow servers and single-session exits', async (t) => {
+    const sleeper = (0, node_child_process_1.spawn)('sleep', ['30'], { stdio: 'ignore' });
+    t.after(() => sleeper.kill('SIGKILL'));
+    const deadPid = sleeper.pid;
+    assert.ok(deadPid);
+    const deadIdentity = (0, process_identity_1.processIdentity)(deadPid);
+    const selfIdentity = (0, process_identity_1.processIdentity)(process.pid);
+    const parentIdentity = (0, process_identity_1.processIdentity)(process.ppid);
+    assert.ok(deadIdentity && selfIdentity && parentIdentity);
+    const livePane = (paneId) => ({ paneId, panePid: process.pid, dead: false, paneProcess: selfIdentity });
+    let snapshot = { pid: selfIdentity.pid, server: selfIdentity, panes: new Map([['%0', livePane('%0')]]) };
+    let agentIds = ['a', 'b'];
+    let botIds = ['bot-1'];
+    const lost = [];
+    let configuredCount = 0;
+    const watch = (0, recovery_runner_1.watchTmuxServer)({
+        socket: '/unused',
+        inspectServer: async () => snapshot,
+        configureServer: async () => { configuredCount++; },
+        snapshotSessions: (_socket, panes) => {
+            const livePanes = [...panes.values()].filter(pane => !pane.dead);
+            return livePanes.length
+                ? { agentIds: [...agentIds], botIds: [...botIds], processes: [] }
+                : { agentIds: [], botIds: [], processes: [] };
+        },
+        onLost: async (event) => { lost.push(event); },
+        intervalMs: 3_600_000,
+        settleMs: 0,
+        exitWaitMs: 0,
+    });
+    t.after(() => watch.stop());
+    await watch.tick();
+    assert.equal(configuredCount, 1, 'configures exit-empty off once when first observing a server');
+    // Slow running server: snapshot is null while server process is still alive -> NOT a loss.
+    snapshot = null;
+    await watch.tick();
+    assert.equal(lost.length, 0, 'no answer from a live server process is not a loss');
+    // Single session exits while server keeps the same identity -> NOT a loss.
+    snapshot = { pid: selfIdentity.pid, server: selfIdentity, panes: new Map() };
+    await watch.tick();
+    assert.equal(lost.length, 0, 'an empty server with the same identity means sessions exited on their own');
+    // Dead remain-on-exit pane is excluded and never queued for recovery.
+    snapshot = {
+        pid: selfIdentity.pid,
+        server: selfIdentity,
+        panes: new Map([['%0', { paneId: '%0', panePid: null, dead: true, paneProcess: null }]]),
+    };
+    await watch.tick();
+    assert.equal(lost.length, 0);
+    // Re-populate live pane, then replace server PID -> triggers onLost with agents and bots.
+    snapshot = { pid: selfIdentity.pid, server: selfIdentity, panes: new Map([['%0', livePane('%0')]]) };
+    await watch.tick();
+    snapshot = { pid: parentIdentity.pid, server: parentIdentity, panes: new Map() };
+    await watch.tick();
+    assert.equal(lost.length, 1);
+    assert.deepEqual(lost[0]?.agentIds, ['a', 'b']);
+    assert.deepEqual(lost[0]?.botIds, ['bot-1']);
+    assert.equal(lost[0]?.replacementPid, parentIdentity.pid);
+    // Dead server process exits -> triggers onLost.
+    agentIds = ['c'];
+    botIds = [];
+    snapshot = { pid: deadIdentity.pid, server: deadIdentity, panes: new Map([['%1', livePane('%1')]]) };
+    await watch.tick();
+    sleeper.kill('SIGKILL');
+    await new Promise(resolve => sleeper.once('exit', resolve));
+    snapshot = null;
+    await watch.tick();
+    assert.equal(lost.length, 2);
+    assert.deepEqual(lost[1]?.agentIds, ['c']);
+    assert.deepEqual(lost[1]?.botIds, []);
+    assert.equal(lost[1]?.replacementPid, null);
 });

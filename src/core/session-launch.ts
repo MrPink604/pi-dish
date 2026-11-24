@@ -424,6 +424,11 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       if (descriptor.launchCommand && descriptor.commandEnv && configuredCommand) {
         env[descriptor.commandEnv] = configuredCommand;
       }
+      if (descriptor.id === 'agy') {
+        for (const key of ['PI_DISH_AGY_AUTONOMOUS_IDLE_MS', 'PI_DISH_AGY_UNFINISHED_IDLE_MS', 'PI_DISH_AGY_BRAIN_DIR']) {
+          if (!Object.hasOwn(env, key)) env[key] = process.env[key] || '';
+        }
+      }
     }
     let paneId: string;
     let restartedPaneProcess: ProcessIdentity | null = null;

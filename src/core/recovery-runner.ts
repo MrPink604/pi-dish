@@ -1,16 +1,21 @@
 import fs = require('fs');
+import path = require('path');
 import readline = require('readline');
 import crypto = require('crypto');
+import { setTimeout as delay } from 'timers/promises';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
+import { dishDir, replaceFileDurably, syncDirectory } from './dish-store';
 import { formatModelRef } from './helper-models';
-import { processIdentity } from './process-identity';
+import type { ProcessIdentity } from './contracts';
+import { processIdentity, processIdentityAlive } from './process-identity';
 import { SessionOperationError } from './session-operations';
 import type { ResumeSessionResult, SessionOperations } from './session-operations';
-import { liveSessionSupports, recoveryRouteId, validateRecoveryRecord } from './session-ownership';
+import { liveSessionSupports, recoveryRouteId, sameProcessIdentity, validateRecoveryRecord } from './session-ownership';
 import type { LiveSession, SessionOwnership } from './session-ownership';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryAttempt, RecoveryRecord } from './session-recovery';
+import type { LiveTmuxPane, TmuxServerSnapshot } from './tmux';
 import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
 
@@ -41,10 +46,28 @@ export interface RecoveryReport {
   totalRecords: number;
 }
 
+export interface RecoveryReportOptions {
+  /** Include PIN-protected private sessions; callers must gate this on private unlock. */
+  includePrivate?: boolean;
+}
+
+export interface RecoveryRetryAllOptions {
+  /** Include PIN-protected private sessions; defaults false (fail closed). */
+  includePrivate?: boolean;
+}
+
 export interface RecoveryRunner {
   start(): Promise<void>;
   retry(id: string): Promise<RecoveryOutcome>;
-  report(): RecoveryReport;
+  /** Explicitly retries failed rows and pending tmux-lost sessions, one at a time. */
+  retryAll(options?: RecoveryRetryAllOptions): Promise<RecoveryOutcome[]>;
+  /** Automatic restore-only recovery of sessions that were live in a lost tmux server. */
+  recoverLost(ids: readonly string[]): Promise<RecoveryOutcome[]>;
+  /** Records a persisted needs-review outcome when automatic server-loss recovery is rate-limited. */
+  markLostRateLimited(ids: readonly string[], reason: string): RecoveryOutcome[];
+  /** True while a recovery launch/check flight is currently active for `id`. */
+  isRecovering(id: string): boolean;
+  report(options?: RecoveryReportOptions): RecoveryReport;
   outcome(id: string): RecoveryOutcome | null;
   stop(): void;
 }
@@ -58,6 +81,10 @@ export interface RecoveryPresentationOptions {
   log?: { error?: (message: string) => void };
   /** Memory-pressure hibernation keeps a session for wake-on-message, not startup restore. */
   hibernated?(routeId: string): boolean;
+  /** Completed one-shot routines awaiting auto-close must not be resurrected by loss recovery. */
+  isPendingClose?(routeId: string): boolean;
+  /** Identifies private PIN-gated sessions so locked reports and retry-all omit them. */
+  isPrivate?(record: RecoveryRecord): boolean;
 }
 
 /** Isolated runner seams; production policy is composed by createRecoveryRuntime below. */
@@ -78,8 +105,17 @@ export interface RecoveryRuntimeOptions extends RecoveryPresentationOptions {
 const MAX_SESSIONS = 5000;
 export const RECOVERY_PROMPT = 'pi-dish recovery: this session was interrupted while work was in progress. Before continuing, inspect the transcript, working files, and any external state affected by prior tools. A tool or external action may have completed without its result being recorded. Do not blindly repeat commands, writes, deployments, purchases, or other side effects. Reconcile what actually happened, explain any uncertainty, and ask for confirmation where safe continuation cannot be established. Continue the existing task only after this inspection; this message is not an instruction to replay the last prompt or retry a tool.';
 const HIBERNATED_REASON = 'Hibernated under memory pressure; a message resumes it.';
+const RUNNING_STATUSES: Record<string, true> = { live: true, restored: true, continued: true };
+/** startup: pi-dish started; explicit: an API retry; tmux-lost: the tmux server holding the live agent died or was replaced. */
+type RecoveryTrigger = 'startup' | 'explicit' | 'tmux-lost';
 /** Harnesses whose lifecycle observations and bridge prompt path are verified. */
 const PROMPT_RECOVERY_HARNESSES: Record<string, true> = { pi: true, omp: true, agy: true };
+const TMUX_LOSS_STATE_VERSION = 1;
+const MAX_TMUX_LOSS_STATE_BYTES = 64 * 1024;
+const DEFAULT_LOSS_BACKOFF_MS = 5 * 60_000;
+const DEFAULT_LOSS_MAX_BACKOFF_MS = 30 * 60_000;
+const DEFAULT_LOSS_WINDOW_MS = 60 * 60_000;
+const DEFAULT_LOSS_MAX_ATTEMPTS = 3;
 
 export function recoveryMode(value: unknown): RecoveryMode {
   return value === 'off' || value === 'restore' || value === 'continue' ? value : 'off';
@@ -137,10 +173,13 @@ export async function continuationSafety(file: string): Promise<string | null> {
 
 export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunner {
   const { store, getMode, routeId, probeLive, validateRecord, restore, continueSession,
-    now = () => Date.now(), log = console, hibernated = () => false } = deps;
+    now = () => Date.now(), log = console, hibernated = () => false,
+    isPendingClose = () => false, isPrivate = () => false } = deps;
   const reports = new Map<string, RecoveryOutcome>();
   const reportObservations = new Map<string, string>();
   const flights = new Map<string, Promise<RecoveryOutcome>>();
+  /** Sessions a tmux server loss took down, until one of them runs again. */
+  const lost = new Set<string>();
   let startPromise: Promise<void> | null = null;
   let stopped = false;
 
@@ -173,9 +212,10 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     return store.listRecords().sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
 
-  function report(): RecoveryReport {
+  function report({ includePrivate = true }: RecoveryReportOptions = {}): RecoveryReport {
     const rows = new Map<string, RecoveryReportSession>();
-    const records = newestRecords();
+    const allRecords = newestRecords();
+    const records = includePrivate ? allRecords : allRecords.filter(record => !isPrivate(record));
     for (const record of records.slice(0, MAX_SESSIONS)) {
       const id = routeId(record);
       const control = store.getControl(record.harnessId, record.nativeSessionId);
@@ -201,8 +241,9 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       truncated: records.length > MAX_SESSIONS, totalRecords: records.length };
   }
 
-  async function run(record: RecoveryRecord, explicit: boolean): Promise<RecoveryOutcome> {
+  async function run(record: RecoveryRecord, trigger: RecoveryTrigger): Promise<RecoveryOutcome> {
     const id = routeId(record);
+    const explicit = trigger === 'explicit';
     const previous = store.getControl(record.harnessId, record.nativeSessionId).attempt;
     const ambiguous = previous?.delivery === 'uncertain' || previous?.status === 'restoring';
     // Settings or a newer observation can cancel a continuation at any await.
@@ -223,10 +264,14 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
         ? 'The session is live, but an earlier recovery prompt has uncertain delivery. It was not resent.' : 'Attached to the surviving session; no prompt was sent.');
       const control = store.getControl(record.harnessId, record.nativeSessionId);
       if (control.closed) return remember(record, 'closed', 'This session was explicitly closed.');
+      if (isPendingClose(id) && !explicit) return remember(record, 'closed', 'Routine one-shot session was pending auto-close.');
       if (hibernated(id) && !explicit) return remember(record, 'pending', HIBERNATED_REASON);
       if (control.excluded) return remember(record, 'pending', 'Excluded from automatic recovery.');
       if (stopped || (!explicit && recoveryMode(getMode()) === 'off')) return remember(record, 'pending', 'Automatic recovery is off.');
-      if (!explicit && record.shutdown) return remember(record, 'needs-review', 'The harness shut down; quit, reload, and operating-system shutdown cannot be distinguished.');
+      // A confirmed tmux server loss hangs up every agent inside it: that SIGHUP shutdown is the loss, not a quit.
+      if (!explicit && record.shutdown && trigger !== 'tmux-lost') {
+        return remember(record, 'needs-review', 'The harness shut down; quit, reload, and operating-system shutdown cannot be distinguished.');
+      }
       const repeatIdleRestore = record.activity === 'idle' && previous?.status === 'restored'
         && !previous.delivery;
       if (!explicit && previous?.observationId === record.observationId && !repeatIdleRestore) {
@@ -235,18 +280,38 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       await validateRecord(record);
       const matched = store.checkpointMatches(record);
       let safety: string | null = null;
-      if (!explicit && recoveryMode(getMode()) === 'continue' && record.activity !== 'idle') {
+      if (trigger === 'startup' && recoveryMode(getMode()) === 'continue' && record.activity !== 'idle') {
         safety = record.activity !== 'running' || !record.runId
           ? 'The interrupted activity cannot be classified safely.'
             : !matched ? 'The transcript changed after the last durable observation; no prompt was sent.'
             : !Object.hasOwn(PROMPT_RECOVERY_HARNESSES, record.harnessId) ? 'This harness has no verified recovery prompt path.'
               : await continuationSafety(record.sessionFile);
+      } else if (trigger === 'tmux-lost' && recoveryMode(getMode()) === 'continue' && record.activity === 'running') {
+        // Server-loss recovery never starts a new paid turn on its own; still inspect
+        // the transcript with continuationSafety so interrupted work is flagged clearly.
+        safety = !matched
+          ? 'The transcript changed after the last durable observation; restored idle without prompting.'
+          : await continuationSafety(record.sessionFile);
       }
       // Durable intent precedes even the launch. A crash after this point is
       // ambiguous until a live identity or an explicit restore-only retry.
       save(record, 'restoring', null, { id: crypto.randomUUID(), delivery: previous?.delivery === 'uncertain' ? 'uncertain' : null });
       const result = await restore(record);
+      // A returned launch is not a running agent: restored means a live, registered session now.
+      const session = await probeLive(record);
+      if (!session) {
+        throw new Error('The agent was launched but is not running with a registered bridge, so it was not restored.');
+      }
       if (result.alreadyActive || result.sharedResume) return save(record, 'live', 'Another caller restored this session; no recovery prompt was sent.');
+      if (trigger === 'tmux-lost') {
+        if (previous?.delivery === 'uncertain') {
+          return save(record, 'needs-review', 'Restored without resending the earlier uncertain recovery prompt.');
+        }
+        if (recoveryMode(getMode()) === 'continue' && record.activity === 'running') {
+          return save(record, 'needs-review', safety || 'Restored idle after tmux server loss without sending a prompt; inspect interrupted work before continuing.');
+        }
+        return save(record, 'restored', 'Restored after tmux server loss without sending a prompt.');
+      }
       if (explicit || recoveryMode(getMode()) !== 'continue' || record.activity === 'idle') {
         return save(record, previous?.delivery === 'uncertain' ? 'needs-review' : 'restored', previous?.delivery === 'uncertain'
           ? 'Restored without resending the earlier uncertain recovery prompt.' : 'Restored without sending a prompt.');
@@ -254,8 +319,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       if (safety) return save(record, 'needs-review', safety);
       const refusal = continuationRefusal('The session or transcript advanced during recovery; no prompt was sent.');
       if (refusal) return save(record, refusal.status, refusal.reason);
-      const session = await probeLive(record);
-      if (!session || session.turnInProgress || session.compacting) return save(record, 'needs-review', 'The restored session is unavailable, already working, or compacting; no prompt was sent.');
+      if (session.turnInProgress || session.compacting) return save(record, 'needs-review', 'The restored session is unavailable, already working, or compacting; no prompt was sent.');
       // A second checkpoint immediately before durable delivery intent closes
       // the asynchronous live-handshake window. Delivery is never retried.
       const beforeDelivery = continuationRefusal('The session advanced before delivery; no prompt was sent.');
@@ -274,11 +338,14 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     }
   }
 
-  function recover(record: RecoveryRecord, explicit = false): Promise<RecoveryOutcome> {
+  function recover(record: RecoveryRecord, trigger: RecoveryTrigger = 'startup'): Promise<RecoveryOutcome> {
     const id = routeId(record);
     const existing = flights.get(id);
     if (existing) return existing;
-    const flight = Promise.resolve().then(() => run(record, explicit));
+    const flight = Promise.resolve().then(() => run(record, trigger)).then(outcome => {
+      if (Object.hasOwn(RUNNING_STATUSES, outcome.status)) lost.delete(id);
+      return outcome;
+    });
     flights.set(id, flight);
     flight.finally(() => { if (flights.get(id) === flight) flights.delete(id); }).catch(() => {});
     return flight;
@@ -299,7 +366,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     startPromise = (async () => {
       for (const record of records) {
         if (stopped) break;
-        await recover(record);
+        await recover(record, 'startup');
       }
     })();
     return startPromise;
@@ -308,20 +375,393 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
   async function retry(id: string): Promise<RecoveryOutcome> {
     const record = store.listRecords().find(candidate => routeId(candidate) === id);
     if (!record) throw new SessionOperationError(404, 'Recovery record not found');
-    return recover(record, true);
+    return recover(record, 'explicit');
   }
 
-  return { start, retry, report, outcome: id => reports.get(id) ?? null, stop: () => { stopped = true; } };
+  // Sequential: each launch waits for its registration, and a host that just
+  // lost its tmux server may be short of memory. Needs-review, ambiguous and
+  // locked private sessions stay out of bulk retry.
+  async function retryAll({ includePrivate = false }: RecoveryRetryAllOptions = {}): Promise<RecoveryOutcome[]> {
+    const statusById = new Map(report({ includePrivate }).sessions.map(row => [row.id, row.status]));
+    const outcomes: RecoveryOutcome[] = [];
+    for (const record of newestRecords()) {
+      if (stopped) break;
+      if (!includePrivate && isPrivate(record)) continue;
+      const id = routeId(record);
+      const control = store.getControl(record.harnessId, record.nativeSessionId);
+      if (control.closed || control.excluded || hibernated(id) || isPendingClose(id)) continue;
+      const previous = control.attempt;
+      if (previous?.delivery === 'uncertain' || previous?.status === 'restoring') continue;
+      const status = statusById.get(id);
+      if (status !== 'failed' && !(lost.has(id) && status === 'pending')) continue;
+      outcomes.push(await recover(record, 'explicit'));
+    }
+    return outcomes;
+  }
+
+  async function recoverLost(ids: readonly string[]): Promise<RecoveryOutcome[]> {
+    const wanted = new Set(ids);
+    const outcomes: RecoveryOutcome[] = [];
+    for (const record of newestRecords()) {
+      if (stopped) break;
+      const id = routeId(record);
+      if (!wanted.has(id)) continue;
+      lost.add(id);
+      outcomes.push(await recover(record, 'tmux-lost'));
+    }
+    return outcomes;
+  }
+
+  function markLostRateLimited(ids: readonly string[], reason: string): RecoveryOutcome[] {
+    const wanted = new Set(ids);
+    const outcomes: RecoveryOutcome[] = [];
+    for (const record of newestRecords()) {
+      const id = routeId(record);
+      if (!wanted.has(id)) continue;
+      const control = store.getControl(record.harnessId, record.nativeSessionId);
+      if (control.closed || control.excluded || hibernated(id) || isPendingClose(id)) continue;
+      lost.add(id);
+      try {
+        outcomes.push(save(record, 'needs-review', reason));
+      } catch (persistError) {
+        log.error?.(`Recovery ${id}: ${errorMessage(persistError)}`);
+        outcomes.push(remember(record, 'needs-review', reason));
+      }
+    }
+    return outcomes;
+  }
+
+  return {
+    start, retry, retryAll, recoverLost, markLostRateLimited,
+    isRecovering: id => flights.has(id),
+    report, outcome: id => reports.get(id) ?? null,
+    stop: () => { stopped = true; },
+  };
+}
+
+export interface TmuxLossLimiterOptions {
+  /** Override state file path; defaults to ~/.pi/dish/tmux-recovery-state.json. */
+  file?: () => string;
+  now?: () => number;
+  baseBackoffMs?: number;
+  maxBackoffMs?: number;
+  windowMs?: number;
+  maxAttempts?: number;
+}
+
+export type TmuxLossVerdict =
+  | { allowed: true }
+  | { allowed: false; retryAt: number | null; reason: string };
+
+export interface TmuxLossLimiter {
+  check(at?: number): TmuxLossVerdict;
+  record(at?: number): void;
+}
+
+interface TmuxLossState {
+  version: 1;
+  attempts: number[];
+  nextAllowedAt: number;
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.max(1, Math.ceil(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes}m`;
+}
+
+function ensurePrivateDir(dir: string): void {
+  const firstCreated = fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+  if (firstCreated) {
+    let current = dir;
+    for (;;) {
+      syncDirectory(current);
+      if (current === path.dirname(firstCreated)) break;
+      current = path.dirname(current);
+    }
+  }
+}
+
+/**
+ * Durable exponential-backoff and rolling-window limiter for automatic tmux
+ * server-loss recovery. Persisted on disk so crash loops across pi-dish
+ * restarts cannot respawn forever; fails closed if the state file is corrupt.
+ */
+export function createTmuxLossLimiter(options: TmuxLossLimiterOptions = {}): TmuxLossLimiter {
+  const fileOf = options.file ?? (() => path.join(dishDir(), 'tmux-recovery-state.json'));
+  const now = options.now ?? (() => Date.now());
+  const baseBackoffMs = options.baseBackoffMs ?? DEFAULT_LOSS_BACKOFF_MS;
+  const maxBackoffMs = Math.max(baseBackoffMs, options.maxBackoffMs ?? DEFAULT_LOSS_MAX_BACKOFF_MS);
+  const windowMs = options.windowMs ?? DEFAULT_LOSS_WINDOW_MS;
+  const maxAttempts = options.maxAttempts ?? DEFAULT_LOSS_MAX_ATTEMPTS;
+
+  function readState(): TmuxLossState {
+    const file = fileOf();
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > MAX_TMUX_LOSS_STATE_BYTES) {
+        throw new Error('Invalid tmux recovery rate-limit state file');
+      }
+      const parsed: unknown = JSON.parse(fs.readFileSync(fd, 'utf8'));
+      if (!isRecord(parsed)
+          || parsed.version !== TMUX_LOSS_STATE_VERSION
+          || !Array.isArray(parsed.attempts)
+          || !parsed.attempts.every(entry => typeof entry === 'number' && Number.isFinite(entry) && entry >= 0)
+          || typeof parsed.nextAllowedAt !== 'number'
+          || !Number.isFinite(parsed.nextAllowedAt)
+          || parsed.nextAllowedAt < 0) {
+        throw new Error('Corrupt tmux recovery rate-limit state');
+      }
+      return {
+        version: TMUX_LOSS_STATE_VERSION,
+        attempts: [...parsed.attempts],
+        nextAllowedAt: parsed.nextAllowedAt,
+      };
+    } catch (error) {
+      if (isRecord(error) && error.code === 'ENOENT') {
+        return { version: TMUX_LOSS_STATE_VERSION, attempts: [], nextAllowedAt: 0 };
+      }
+      throw error;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  }
+
+  function check(at = now()): TmuxLossVerdict {
+    let state: TmuxLossState;
+    try {
+      state = readState();
+    } catch {
+      return {
+        allowed: false,
+        retryAt: null,
+        reason: 'Tmux recovery rate-limit state is corrupt or unreadable; automatic recovery is paused until inspected.',
+      };
+    }
+    const recent = state.attempts.filter(ts => at - ts < windowMs);
+    if (recent.length >= maxAttempts) {
+      const oldest = Math.min(...recent);
+      const retryAt = oldest + windowMs;
+      return {
+        allowed: false,
+        retryAt,
+        reason: `Automatic tmux server-loss recovery reached its limit of ${maxAttempts} attempt(s) within ${formatDuration(windowMs)}; inspect why the tmux server is dying before retrying.`,
+      };
+    }
+    if (state.nextAllowedAt > at) {
+      return {
+        allowed: false,
+        retryAt: state.nextAllowedAt,
+        reason: `Tmux server was lost again during automatic recovery backoff (${formatDuration(state.nextAllowedAt - at)} remaining); inspect why the tmux server is dying before retrying.`,
+      };
+    }
+    return { allowed: true };
+  }
+
+  function record(at = now()): void {
+    const state = readState();
+    const recent = [...state.attempts.filter(ts => at - ts < windowMs), at];
+    const backoff = Math.min(maxBackoffMs, baseBackoffMs * (2 ** (recent.length - 1)));
+    const next: TmuxLossState = {
+      version: TMUX_LOSS_STATE_VERSION,
+      attempts: recent,
+      nextAllowedAt: Math.max(state.nextAllowedAt, at + backoff),
+    };
+    const file = fileOf();
+    ensurePrivateDir(path.dirname(file));
+    replaceFileDurably(file, JSON.stringify(next));
+  }
+
+  return { check, record };
+}
+
+export interface WatchedTmuxServerSessions {
+  agentIds: string[];
+  botIds: string[];
+  /** Live processes inside the server's panes (pane roots + agents/bots) to wait out on loss. */
+  processes: ProcessIdentity[];
+}
+
+export interface TmuxServerLossEvent {
+  server: ProcessIdentity;
+  replacementPid: number | null;
+  agentIds: string[];
+  botIds: string[];
+}
+
+export interface TmuxServerWatchOptions {
+  socket: string;
+  inspectServer(socket: string): Promise<TmuxServerSnapshot | null>;
+  configureServer?(socket: string): Promise<void>;
+  snapshotSessions(socket: string, panes: ReadonlyMap<string, LiveTmuxPane>): WatchedTmuxServerSessions;
+  onLost(event: TmuxServerLossEvent): Promise<unknown>;
+  intervalMs?: number;
+  /** Post-exit settle delay after dead-pane processes exit (default 500 ms). */
+  settleMs?: number;
+  /** Maximum time to wait for hung-up pane processes to exit before relaunching (default 10 s). */
+  exitWaitMs?: number;
+  processAlive?: (identity: ProcessIdentity) => boolean;
+  log?: { error?: (message: string) => void };
+}
+
+export interface TmuxServerWatch {
+  /** One poll; coalesced single-flight with concurrent checks. */
+  tick(): Promise<void>;
+  /** Trigger an immediate coalesced check (e.g., on tmux no-server error or after spawn). */
+  checkNow(): void;
+  stop(): void;
+}
+
+/**
+ * Watches one tmux server (pi-dish's own socket). Remembers its exact process
+ * identity and the live agents/bots verified inside its non-dead panes. Only
+ * when that server process exits or is replaced by a different server are those
+ * agents and bots handed to `onLost` — never when one session exits while the
+ * server stays alive, and never when a running server is merely slow to answer.
+ */
+export function watchTmuxServer({
+  socket,
+  inspectServer,
+  configureServer,
+  snapshotSessions,
+  onLost,
+  intervalMs = 10_000,
+  settleMs = 500,
+  exitWaitMs = 10_000,
+  processAlive = processIdentityAlive,
+  log = console,
+}: TmuxServerWatchOptions): TmuxServerWatch {
+  interface KnownServer {
+    server: ProcessIdentity;
+    agentIds: string[];
+    botIds: string[];
+    processes: ProcessIdentity[];
+    configured: boolean;
+  }
+  let known: KnownServer | null = null;
+  let timer: NodeJS.Timeout | undefined;
+  let stopped = false;
+  let inFlight: Promise<void> | null = null;
+  let pendingCheck = false;
+  const stopController = new AbortController();
+
+  async function sleep(ms: number): Promise<void> {
+    if (ms <= 0 || stopped) return;
+    try {
+      await delay(ms, undefined, { ref: false, signal: stopController.signal });
+    } catch { /* aborted on stop */ }
+  }
+
+  async function waitForProcessesExit(processes: readonly ProcessIdentity[]): Promise<void> {
+    if (processes.length && exitWaitMs > 0) {
+      const deadline = Date.now() + exitWaitMs;
+      while (!stopped && Date.now() < deadline && processes.some(processAlive)) {
+        await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+      }
+    }
+    await sleep(settleMs);
+  }
+
+  async function observeRunning(snapshot: TmuxServerSnapshot, alreadyConfigured: boolean): Promise<void> {
+    if (configureServer && !alreadyConfigured) {
+      await configureServer(socket).catch(() => {});
+    }
+    const observed = snapshotSessions(socket, snapshot.panes);
+    if (observed.agentIds.length || observed.botIds.length) {
+      known = { server: snapshot.server, ...observed, configured: true };
+    } else {
+      known = null;
+    }
+  }
+
+  async function pollOnce(): Promise<void> {
+    if (stopped) return;
+    const snapshot = await inspectServer(socket);
+    if (stopped) return;
+    if (known && (!snapshot || !sameProcessIdentity(snapshot.server, known.server))) {
+      // A server process that is still alive but did not answer is slow, not lost.
+      if (!snapshot && processAlive(known.server)) return;
+      const lostServer = known;
+      known = null;
+      await waitForProcessesExit(lostServer.processes);
+      if (stopped) return;
+      await onLost({
+        server: lostServer.server,
+        replacementPid: snapshot?.pid ?? null,
+        agentIds: lostServer.agentIds,
+        botIds: lostServer.botIds,
+      });
+      if (stopped) return;
+      // Immediately record the replacement server's identity and restored panes
+      // so a second crash within the backoff window is caught immediately.
+      const after = await inspectServer(socket);
+      if (!stopped && after) await observeRunning(after, false);
+      return;
+    }
+    if (snapshot) {
+      const sameServer = !!known && sameProcessIdentity(snapshot.server, known.server);
+      await observeRunning(snapshot, sameServer && known!.configured);
+    }
+  }
+
+  function runTick(): Promise<void> {
+    if (stopped) return Promise.resolve();
+    if (inFlight) {
+      pendingCheck = true;
+      return inFlight;
+    }
+    const run = (async () => {
+      try {
+        await pollOnce();
+      } finally {
+        inFlight = null;
+        if (pendingCheck && !stopped) {
+          pendingCheck = false;
+          void runTick().catch(error => log.error?.(`tmux server watch ${socket}: ${errorMessage(error)}`));
+        }
+      }
+    })();
+    inFlight = run;
+    return run;
+  }
+
+  function schedule(): void {
+    if (stopped) return;
+    timer = setTimeout(() => {
+      runTick().catch(error => log.error?.(`tmux server watch ${socket}: ${errorMessage(error)}`)).finally(schedule);
+    }, intervalMs);
+    timer.unref?.();
+  }
+  schedule();
+
+  return {
+    tick: runTick,
+    checkNow: () => {
+      if (stopped) return;
+      void runTick().catch(error => log.error?.(`tmux server watch ${socket}: ${errorMessage(error)}`));
+    },
+    stop: () => {
+      stopped = true;
+      clearTimeout(timer);
+      stopController.abort();
+    },
+  };
 }
 
 /** Checked production restore/delivery policy; callers provide owners and presentation, not authority callbacks. */
-export function createRecoveryRuntime({ operations, ownership, getMode, now, log, hibernated }: RecoveryRuntimeOptions): RecoveryRunner {
+export function createRecoveryRuntime({ operations, ownership, getMode, now, log, hibernated, isPendingClose, isPrivate }: RecoveryRuntimeOptions): RecoveryRunner {
   return createRecoveryRunner({
     store: recoveryStore,
     getMode,
     now,
     log,
     hibernated,
+    isPendingClose,
+    isPrivate,
     routeId: recoveryRouteId,
     probeLive: operations.probeRecoveryLive,
     validateRecord: validateRecoveryRecord,

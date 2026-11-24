@@ -777,6 +777,27 @@ before acting. Ambiguous delivery is never automatically repeated. A verified
 idle session can restore across repeated losses without sending any prompt.
 Routine reconciliation runs after recovery and preserves the invocation rather
 than spawning a second run or treating restored-idle work as completed.
+One-shot auto-close timers (`scheduleClose`) never arm on session exit/disconnect,
+verify the live session instance is unchanged and not mid-recovery before closing,
+and expose `isPendingClose` so tmux server-loss recovery does not resurrect a
+finished one-shot session.
+
+`watchTmuxServer` watches pi-dish's own headless `pi-dish` socket (periodic
+`inspectServer` poll via `PI_DISH_TMUX_WATCH_MS`, default 10 s, plus on-demand
+`onHeadlessNoServer`/`onHeadlessSpawn` hooks). The headless server sets
+`exit-empty off` (both at cold start and on already-running servers via `-N`),
+so a single session exiting keeps the same server PID and never triggers server
+loss. Each live agent/bot snapshot requires a non-dead pane matching the spawn
+placement's `paneProcess` birth identity and process ancestry; empty/dead panes
+and exited sessions are excluded. When the watched server process dies or is
+replaced by a different server identity, the watcher waits for hung-up pane
+processes to exit, checks the durable exponential-backoff/window limiter in
+`~/.pi/dish/tmux-recovery-state.json` (fail-closed on corruption, persisted
+before launching), recreates the server through `ensureHeadlessServer` (`-f /dev/null`,
+`-N` when running, systemd scope), runs restore-only `recoverLost` (never sends
+a continuation prompt on server loss; interrupted running turns stay flagged
+`needs-review` using `continuationSafety()`), requires `probeLive` after any
+launch, and restarts active non-closed bot relays (never retired bots).
 
 The Fleet view exposes host-scoped controls and a separate `.main.recovery-open`
 report takeover. `src/browser/recovery.ts` owns preference/report requests, selected endpoint
@@ -787,9 +808,12 @@ its row actions. Captured mutations cannot write a newer view.
 known id: the browser persists identity but not its descriptor. Opening
 the Fleet view refreshes the fleet; `refreshRecoveryHosts` updates only the pickers
 and unavailable-host guidance, not unsaved mode edits. `/api/recovery`
-reports outcomes and truncation;
+reports outcomes and truncation (omitting PIN-locked private rows);
 `PUT /api/sessions/:id/recovery` sets exclusion, and `/api/recovery/retry`
-explicitly restores idle, never replays an uncertain prompt. Continuation is
+(`{ id }` or `{ all: true }`: failed rows plus pending tmux-lost routes,
+sequentially, skipping needs-review/ambiguous rows and omitting PIN-locked
+private sessions; single `{ id }` returns 404 when locked) explicitly restores
+idle, never replays an uncertain prompt. Continuation is
 best effort, not exactly-once side effects; changed/unverifiable transcripts
 and unresolved tool results require review. Assistant content arrays containing
 non-object blocks are unverifiable: restore the session for inspection without

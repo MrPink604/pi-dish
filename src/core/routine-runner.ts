@@ -52,6 +52,8 @@ export interface RoutineRunner {
   nextRunAt(routine: Routine | null | undefined, from?: number): number | null;
   recoverAfterRestart(at?: number): Promise<void>;
   waitForInvocation(id: string, timeoutMs?: number): Promise<RoutineInvocation | null>;
+  /** True while a one-shot session is waiting out its post-turn auto-close grace period. */
+  isPendingClose(sessionId: string): boolean;
   start(): void;
   stop(): void;
   readonly watching: number;
@@ -66,6 +68,8 @@ export interface RoutineRunnerPorts {
   isTurnInProgress?(session: LiveSession): boolean;
   supports?(session: LiveSession, capability: BridgeCapability): boolean;
   recoveryOutcome?(sessionId: string): Pick<RecoveryOutcome, 'status' | 'reason'> | null;
+  /** True while recovery is actively launching/restoring `sessionId`; prevents close-timer races. */
+  isRecovering?(sessionId: string): boolean;
   /** Where routines whose destination is a bot are delivered; absent where bots do not run. */
   bots?: RoutineBots | null;
   now?(): number;
@@ -154,6 +158,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     isTurnInProgress = (sess) => !!sess?.turnInProgress,
     supports = () => true,
     recoveryOutcome = () => null,
+    isRecovering = () => false,
     bots = null,
     now = () => Date.now(),
     log = console,
@@ -162,7 +167,9 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   // In-flight invocation observers, so restart recovery and the watchdog can
   // tell a run this process is watching from one it is not.
   const watched = new Map<string, { detach(): void }>();
+  const pendingCloses = new Map<string, { session?: LiveSession; abort: AbortController }>();
   let timer: NodeJS.Timeout | null = null;
+  let stopped = false;
 
   function nextRunAt(routine: Routine | null | undefined, from = now()): number | null {
     const cron = routine?.schedule?.cron;
@@ -194,7 +201,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       watched.delete(invocationId);
     };
 
-    function finish(status: 'completed' | 'interrupted', error?: unknown) {
+    function finish(status: 'completed' | 'interrupted', error?: unknown, allowClose = true) {
       if (finished) return;
       finished = true;
       detach();
@@ -204,7 +211,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
         summary,
         error: error ? errorMessage(error) : null,
       });
-      if (invocation && mode === 'oneShot') void scheduleClose(invocation);
+      if (invocation && mode === 'oneShot' && allowClose) void scheduleClose(invocation, sess);
     }
 
     function onTurnEnd() { finish('completed'); }
@@ -223,7 +230,9 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       if (text) summary = text.slice(0, 500);
     }
 
-    function onGone() { finish('interrupted', 'the session ended'); }
+    // A dead/disconnected session (e.g. tmux server loss) is already gone:
+    // never arm a delayed close timer that would race with or kill a recovery.
+    function onGone() { finish('interrupted', 'the session ended', false); }
 
     sess.on('turn_end', onTurnEnd);
     sess.on('agent_end', onAgentEnd);
@@ -237,13 +246,39 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   /**
    * oneShot auto-close after a grace period (turn end ≠ pi done writing). A
    * refused/unprovable close records `closeError` and leaves the session live:
-   * never escalate, a routine is not a process manager.
+   * never escalate, a routine is not a process manager. Also never races with
+   * recovery or closes a replacement session that took over the route.
    */
-  async function scheduleClose(invocation: RoutineInvocation) {
-    if (!invocation.sessionId) return;
-    await delay(closeGraceMs(), undefined, { ref: false });
+  async function scheduleClose(invocation: RoutineInvocation, expectedSession?: LiveSession) {
+    const sessionId = invocation.sessionId;
+    if (!sessionId || stopped) return;
+    pendingCloses.get(sessionId)?.abort.abort();
+    const abort = new AbortController();
+    const entry = { session: expectedSession, abort };
+    pendingCloses.set(sessionId, entry);
     try {
-      const { status, body } = await closeSession(invocation.sessionId);
+      await delay(closeGraceMs(), undefined, { ref: false, signal: abort.signal });
+      if (stopped || pendingCloses.get(sessionId) !== entry) return;
+      if (isRecovering(sessionId)) {
+        store.updateInvocation(invocation.id, {
+          closed: false,
+          closeError: 'skipped scheduled close while session recovery is in flight',
+        });
+        return;
+      }
+      if (expectedSession) {
+        const current = await getLiveSession(sessionId).catch(() => null);
+        if (current !== expectedSession) {
+          store.updateInvocation(invocation.id, {
+            closed: false,
+            closeError: current
+              ? 'session was replaced before scheduled close'
+              : 'session ended before scheduled close',
+          });
+          return;
+        }
+      }
+      const { status, body } = await closeSession(sessionId);
       if (status >= 200 && status < 300) {
         store.updateInvocation(invocation.id, { closed: true, closeError: null });
       } else {
@@ -253,7 +288,10 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
         });
       }
     } catch (error) {
+      if (abort.signal.aborted || stopped) return;
       store.updateInvocation(invocation.id, { closed: false, closeError: errorMessage(error) });
+    } finally {
+      if (pendingCloses.get(sessionId) === entry) pendingCloses.delete(sessionId);
     }
   }
 
@@ -448,7 +486,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       });
       // A oneShot spawn whose delivery never landed would otherwise leave an
       // idle session nobody asked for. Only ever close what this run spawned.
-      if (failed && spawned && routine.mode === 'oneShot') void scheduleClose(failed);
+      if (failed && spawned && routine.mode === 'oneShot') void scheduleClose(failed, sess);
     }
   }
 
@@ -561,11 +599,12 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
         continue;
       }
       const completed = store.updateInvocation(invocation.id, { status: 'completed', endedAt: at });
-      if (completed && mode === 'oneShot') void scheduleClose(completed);
+      if (completed && mode === 'oneShot') void scheduleClose(completed, sess);
     }
   }
 
   function start() {
+    stopped = false;
     if (timer) return;
     timer = setInterval(() => {
       try {
@@ -578,9 +617,12 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   }
 
   function stop() {
+    stopped = true;
     clearInterval(timer ?? undefined);
     timer = null;
     for (const held of [...watched.values()]) held.detach();
+    for (const pending of [...pendingCloses.values()]) pending.abort.abort();
+    pendingCloses.clear();
   }
 
   return {
@@ -589,6 +631,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     nextRunAt,
     recoverAfterRestart,
     waitForInvocation,
+    isPendingClose: (sessionId: string) => pendingCloses.has(sessionId),
     start,
     stop,
     // Test visibility only: how many invocations this process is observing.

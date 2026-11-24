@@ -73,6 +73,12 @@ export interface PaneCleanupOptions extends PaneProcessOptions {
 export interface PaneCleanupError extends Error {
     remainingProcesses: ProcessIdentity[];
 }
+/** True when tmux rejected a command because no server listens on the target socket. */
+export declare function isNoServerError(error: unknown): boolean;
+/** Fires when a tmux command against pi-dish's headless socket fails with no server running. */
+export declare function onHeadlessNoServer(listener: (socket: string) => void): () => void;
+/** Fires after a spawn placement is recorded on pi-dish's headless socket. */
+export declare function onHeadlessSpawn(listener: (sessionId: string, socket: string) => void): () => void;
 /**
  * Argv prefix that starts the tmux server for `socket` in its own transient
  * user scope. A tmux server stays in the cgroup of whatever started it, and
@@ -120,6 +126,33 @@ export declare function paneLocation(socket: string, paneId: string): Promise<Pa
  */
 export declare function findPaneByPid(pid: number | string | null | undefined): Promise<(PaneTarget & PaneLocation) | null>;
 export declare function paneExists(socket: string, paneId: string): Promise<boolean>;
+export interface LiveTmuxPane {
+    paneId: string;
+    panePid: number | null;
+    dead: boolean;
+    paneProcess: ProcessIdentity | null;
+}
+export interface TmuxServerSnapshot {
+    pid: number;
+    server: ProcessIdentity;
+    panes: Map<string, LiveTmuxPane>;
+}
+/** PID of the server answering on `socket`; null when none answers. Never starts a server. */
+export declare function serverPid(socket: string): Promise<number | null>;
+/**
+ * Single-command snapshot of a running tmux server and its panes. Uses -N so
+ * it never starts a server; handles an empty server (exit-empty off) by
+ * falling back to serverPid when list-panes reports "no current target".
+ */
+export declare function inspectServer(socket: string): Promise<TmuxServerSnapshot | null>;
+/** Applies exit-empty off to an already-running headless server without ever starting one. */
+export declare function configureHeadlessServer(socket?: string): Promise<void>;
+/**
+ * Ensures pi-dish's headless tmux server is running using the same flags
+ * (-f /dev/null, HEADLESS_SERVER_OPTIONS, transient systemd scope) as
+ * spawnInTmux, and -N when a server is already running.
+ */
+export declare function ensureHeadlessServer(socket?: string): Promise<number | null>;
 /**
  * Clients attached to the pane's session, including grouped viewer sessions.
  * Null (unreadable) means "possibly watched", never "nobody is looking".
