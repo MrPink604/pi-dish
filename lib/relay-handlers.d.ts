@@ -1,5 +1,5 @@
 // Generated from src/core/relay-handlers.ts; edit that source and run npm run build:core.
-import type { IncomingMessage } from 'http';
+import type { ClientRequest, IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import type { ArtifactKind, FleetArtifactStore } from './fleet-artifacts';
 import type { HostDescriptor, TransportRequest, TransportResponse, TransportHandler } from './access-handlers';
@@ -32,6 +32,7 @@ export interface RelayPorts {
     publicBaseUrl(): string | undefined;
     hostDescriptor(): HostDescriptor;
     upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+    proxyResponseTimeoutMs?: number;
 }
 export interface RelayHandlers {
     rawApi: TransportHandler;
@@ -46,4 +47,5 @@ export interface RelayHandlers {
     publicArtifacts: PublicArtifactRelay;
     upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;
 }
+export declare function relayFirstResponse(opening: Promise<ClientRequest>, timeoutMs: number, send: (upstream: ClientRequest, progress: () => void) => void, respond: (peerRes: IncomingMessage) => void, onFailure: (reason: unknown) => void, classifyError: ((error: unknown) => unknown) | null): void;
 export declare function createRelayHandlers(ports: RelayPorts): RelayHandlers;

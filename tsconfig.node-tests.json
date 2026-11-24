@@ -17,6 +17,7 @@
     "test/omp-tree-bridge.test.ts",
     "test/session-refs.test.ts",
     "test/omp-native-projection.test.ts",
+    "test/relay-handlers.test.ts",
     "test/remote-hosts.test.ts",
     "test/session-control-cli.test.ts",
     "test/omp-bridge-compact.test.ts",

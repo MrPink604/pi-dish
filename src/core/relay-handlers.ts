@@ -67,6 +67,7 @@ export interface RelayPorts {
   publicBaseUrl(): string | undefined;
   hostDescriptor(): HostDescriptor;
   upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+  proxyResponseTimeoutMs?: number;
 }
 export interface RelayHandlers {
   rawApi: TransportHandler;
@@ -107,9 +108,10 @@ const HOP_BY_HOP_HEADERS: Record<string, true> = {
 
 // The request promise includes SSH setup, so the timer arms only once it yields a
 // request; any response clears it for good (idle SSE streams included). While a
-// request body is still uploading, `progress` restarts it: the peer answers a
-// large upload only after its last byte.
-function relayFirstResponse(
+// request body is still uploading, `progress` and advancing socket writes before
+// `writableFinished` restart it: the peer answers a large upload only after its
+// last byte.
+export function relayFirstResponse(
   opening: Promise<ClientRequest>,
   timeoutMs: number,
   send: (upstream: ClientRequest, progress: () => void) => void,
@@ -125,7 +127,26 @@ function relayFirstResponse(
   };
   const error = (cause: unknown) => fail(classifyError ? classifyError(cause) : undefined);
   opening.then((upstream) => {
-    const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail('timeout'); }, timeoutMs);
+    let lastBytesWritten = upstream.socket?.bytesWritten ?? 0;
+    upstream.once('socket', (socket) => {
+      lastBytesWritten = Math.max(lastBytesWritten, socket?.bytesWritten ?? 0);
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      const bytesWritten = upstream.socket?.bytesWritten ?? 0;
+      if (!upstream.writableFinished && bytesWritten > lastBytesWritten) {
+        lastBytesWritten = bytesWritten;
+        timer.refresh();
+        return;
+      }
+      try { upstream.destroy(); } catch {}
+      fail('timeout');
+    }, timeoutMs);
+    const progress = () => {
+      if (settled) return;
+      lastBytesWritten = Math.max(lastBytesWritten, upstream.socket?.bytesWritten ?? 0);
+      timer.refresh();
+    };
     upstream.on('error', (cause) => { clearTimeout(timer); error(cause); });
     upstream.on('response', (peerRes) => {
       clearTimeout(timer);
@@ -133,7 +154,7 @@ function relayFirstResponse(
       settled = true;
       respond(peerRes);
     });
-    send(upstream, () => { if (!settled) timer.refresh(); });
+    send(upstream, progress);
   }).catch(error);
 }
 
@@ -156,6 +177,7 @@ function boundedProbe(remote: Remote): Promise<BoundedProbe> {
 
 export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   const { fleetArtifacts } = ports;
+  const proxyResponseTimeoutMs = ports.proxyResponseTimeoutMs ?? PROXY_RESPONSE_TIMEOUT_MS;
   const rawApi: TransportHandler = (req, res) => {
     const remote = remoteHosts.getRemote(req.params.name);
     // Bare 404: the fleet map is not a discovery surface.
@@ -183,11 +205,13 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     const headers = hook ? { ...req.headers, 'accept-encoding': 'identity' } : req.headers;
     relayFirstResponse(
       remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers }),
-      PROXY_RESPONSE_TIMEOUT_MS,
+      proxyResponseTimeoutMs,
       (upstream, progress) => {
         req.on('aborted', () => { try { upstream.destroy(); } catch {} });
-        req.on('data', progress);
+        upstream.on('drain', progress);
+        upstream.on('finish', progress);
         req.pipe(upstream);
+        req.on('data', progress);
       },
       (peerRes) => {
           res.status(peerRes.statusCode!);
@@ -633,8 +657,10 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
 
     relayFirstResponse(
       remoteHosts.request(remote, { method: req.method, path: peerPath, headers }),
-      PROXY_RESPONSE_TIMEOUT_MS,
-      (upstream) => {
+      proxyResponseTimeoutMs,
+      (upstream, progress) => {
+        upstream.on('drain', progress);
+        upstream.on('finish', progress);
         if (payload !== null) upstream.write(payload);
         upstream.end();
       },
