@@ -117,7 +117,9 @@ export interface WorkerRecord {
 /** Whether a ref names this worker through any of the CLI's equivalent forms. */
 export declare function workerRefMatches(worker: WorkerRecord, wanted: string): boolean;
 /** Find one owned worker by unique direct id or alias prefix match. */
-export declare function findOwnedWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined;
+export declare function findOwnedWorker(memory: BotMemory | undefined, wanted: string, options?: {
+    openOnly?: boolean;
+}): [string, WorkerRecord] | undefined;
 export interface ClosedWindow {
     line: string;
     closedAt: string;

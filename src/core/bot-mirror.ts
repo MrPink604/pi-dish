@@ -51,6 +51,8 @@ export class BotMirror {
   lastEntryId = 0;
   /** The name the mirror shows now: its newest name entry, or the header's. */
   name: string;
+  /** Newest model recorded in the mirror (`provider/modelId`), or '' for none. */
+  lastModel = '';
 
   constructor(file: string, header: BotMirrorHeader) {
     this.file = file;
@@ -76,10 +78,13 @@ export class BotMirror {
       try { entry = JSON.parse(line); } catch { continue; }
       if (!isRecord(entry) || entry.type === 'session' || typeof entry.id !== 'string') continue;
       if (!named && entry.type === 'session_info' && typeof entry.name === 'string') { this.name = entry.name; named = true; }
+      if (!this.lastModel && entry.type === 'model_change' && typeof entry.provider === 'string' && typeof entry.modelId === 'string' && entry.provider && entry.modelId) {
+        this.lastModel = `${entry.provider}/${entry.modelId}`;
+      }
       this.parentId ??= entry.id;
       const match = ENTRY_ID.exec(entry.id);
       if (match && !this.lastEntryId) this.lastEntryId = Number(match[1]);
-      if (this.lastEntryId && named) break;
+      if (this.lastEntryId && named && this.lastModel) break;
     }
   }
 
@@ -123,6 +128,7 @@ export class BotMirror {
 
   appendModelChange(entryId: number, provider: string, modelId: string): void {
     this.append('model_change', `bot-${entryId}-model`, { provider, modelId });
+    if (provider && modelId) this.lastModel = `${provider}/${modelId}`;
   }
 
   /** A rename; the id is unique, as a bot may be renamed twice between two entries. */

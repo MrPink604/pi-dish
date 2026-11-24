@@ -17,6 +17,8 @@ export declare class BotMirror {
     lastEntryId: number;
     /** The name the mirror shows now: its newest name entry, or the header's. */
     name: string;
+    /** Newest model recorded in the mirror (`provider/modelId`), or '' for none. */
+    lastModel: string;
     constructor(file: string, header: BotMirrorHeader);
     private append;
     private advance;

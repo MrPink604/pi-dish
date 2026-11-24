@@ -31,12 +31,12 @@ async function until(predicate, message, timeout = 10_000) {
     }
 }
 const noIdleRollover = { settings: () => ({}), cacheRetention: () => ({ revision: 'none', rules: [] }) };
-async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses, pollMs = { first: 20, max: 40 }, scriptTimeoutMs, from, idleRollover = noIdleRollover, input } = {}) {
+async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses, pollMs = { first: 20, max: 40 }, scriptTimeoutMs, from, idleRollover = noIdleRollover, input, faux2ContextWindow } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-'));
     const faux = await import('@earendil-works/pi-ai/providers/faux');
     const { createModels } = await import('@earendil-works/pi-ai/models');
     // faux-2 is a second model for a bot told to run on another one.
-    const provider = faux.fauxProvider({ models: [{ id: 'faux-1', contextWindow, input }, { id: 'faux-2', contextWindow, input }] });
+    const provider = faux.fauxProvider({ models: [{ id: 'faux-1', contextWindow, input }, { id: 'faux-2', contextWindow: faux2ContextWindow ?? contextWindow, input }] });
     const models = createModels();
     models.setProvider(provider.provider);
     const requests = [];
@@ -324,6 +324,67 @@ test('sessions send canonicalizes direct owned worker refs and passes non-owned 
         ['send', 'desktop/01a1fc02-1', 'For non-owned C', '--json'],
         ['send', `desktop/${idA}`, 'For owned A', '--json'],
     ]);
+});
+test('sessions send skips closed owned workers while read still resolves them', async (t) => {
+    const idA = '2026-11-21T02-49-16-118Z_01a1fc02-2055-722e-84fc-ff1a34d00ade';
+    const idB = '2026-11-21T02-49-16-119Z_01a1fc02-3055-722e-84fc-ff1a34d00ade';
+    // Unit check: openOnly skips closed workers so shared prefixes resolve the open worker and closed-only refs miss.
+    const closedA = { ...workerRecord(idA, 'desktop', `desktop/${idA}`), closedAt: '2026-11-21T03:00:00.000Z' };
+    const openB = workerRecord(idB, 'desktop', `desktop/${idB}`);
+    const mixed = { notebook: '', notebookSavedIn: -1, windows: [], workers: { a: closedA, b: openB } };
+    assert.equal(findOwnedWorker(mixed, 'desktop/01a1fc02'), undefined, 'default lookup still treats closed + open prefix as ambiguous');
+    assert.equal(findOwnedWorker(mixed, 'desktop/01a1fc02', { openOnly: true })?.[0], 'b', 'openOnly skips closed A and resolves open B');
+    assert.equal(findOwnedWorker(mixed, 'desktop/01a1fc02-2')?.[0], 'a', 'default lookup still resolves closed A for read/close');
+    assert.equal(findOwnedWorker(mixed, 'desktop/01a1fc02-2', { openOnly: true }), undefined, 'openOnly never matches closed A');
+    const onlyClosed = { notebook: '', notebookSavedIn: -1, windows: [], workers: { a: closedA } };
+    assert.equal(findOwnedWorker(onlyClosed, 'desktop/01a1fc02', { openOnly: true }), undefined, 'openOnly never matches sole closed worker');
+    // Integration check through sessions tool: close A, then send using shared prefix and closed-A prefix; close B and send again.
+    const spawnIds = [idA, idB];
+    const calls = [];
+    const closedRefs = new Set();
+    const port = async (args) => {
+        calls.push(args);
+        if (args[0] === 'spawn')
+            return JSON.stringify({ sessionId: spawnIds.shift(), harness: 'pi' });
+        if (args[0] === 'close') {
+            closedRefs.add(args[1]);
+            return '{"ok":true}';
+        }
+        if (args[0] === 'resolve')
+            return JSON.stringify({ session: { id: args[1], isActive: !closedRefs.has(args[1]), turnInProgress: !closedRefs.has(args[1]) } });
+        if (args[0] === 'send')
+            return JSON.stringify({ ok: true, sentTo: args[1] });
+        if (args[0] === 'read')
+            return 'transcript text';
+        if (args[0] === 'show')
+            return JSON.stringify({ totalMessages: 1, messages: [{ role: 'assistant', content: 'done' }] });
+        throw new Error(`unexpected ${args[0]}`);
+    };
+    const bot = await openTestBot(t, port, { pollMs: { first: 60_000, max: 60_000 } });
+    bot.respond(bot.faux.fauxAssistantMessage([
+        bot.faux.fauxToolCall('spawn_worker', { name: 'worker A', host: 'desktop', brief: 'Work A' }),
+        bot.faux.fauxToolCall('spawn_worker', { name: 'worker B', host: 'desktop', brief: 'Work B' }),
+    ], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage([
+        bot.faux.fauxToolCall('sessions', { action: 'close', ref: 'desktop/01a1fc02-2' }),
+    ], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage([
+        bot.faux.fauxToolCall('sessions', { action: 'send', ref: 'desktop/01a1fc02', message: 'For open B' }),
+        bot.faux.fauxToolCall('sessions', { action: 'send', ref: 'desktop/01a1fc02-2', message: 'Raw closed prefix' }),
+        bot.faux.fauxToolCall('sessions', { action: 'read', ref: 'desktop/01a1fc02-2' }),
+    ], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage([
+        bot.faux.fauxToolCall('sessions', { action: 'close', ref: 'desktop/01a1fc02-3' }),
+    ], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage([
+        bot.faux.fauxToolCall('sessions', { action: 'send', ref: 'desktop/01a1fc02', message: 'For non-owned live session' }),
+    ], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage('Done.'));
+    await bot.runtime.prompt('Spawn, close A, send and read, then close B and send', 'followUp');
+    await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === 'Done.'), 'send/read sequence completes');
+    const sends = calls.filter(args => args[0] === 'send');
+    assert.deepEqual(sends, [
+        ['send', `desktop/${idB}`, 'For open B', '--json'],
+        ['send', 'desktop/01a1fc02-2', 'Raw closed prefix', '--json'],
+        ['send', 'desktop/01a1fc02', 'For non-owned live session', '--json'],
+    ]);
+    const reads = calls.filter(args => args[0] === 'read');
+    assert.deepEqual(reads, [['read', `desktop/${idA}`]]);
 });
 /** A sessions port for one worker the test drives: it works until `answer`, and `close` stops it. */
 function scriptedWorker() {
@@ -1701,6 +1762,68 @@ test('idle rollover regression 2: a failed draft, a restart during one and a dec
     await until(() => said(restarted.bot, 'Back.'), 'answered');
     assert.ok(!requestHas(liveRequests(restarted.bot).at(-1), 'pi-dish: this context window'));
 });
+test('idle rollover regression: a fork.submit() failure clears draft, settles idleAttempt, and does not block later planning', async (t) => {
+    const durable = await import('@earendil-works/pi-durable');
+    const originalOpen = durable.Harness.open;
+    t.after(() => { durable.Harness.open = originalOpen; });
+    const failFirstForkSubmit = (message) => {
+        let failed = 0;
+        durable.Harness.open = async (...args) => {
+            const harness = await originalOpen.apply(durable.Harness, args);
+            const originalConversation = harness.conversation.bind(harness);
+            harness.conversation = async (id, context) => {
+                const conv = await originalConversation(id, context);
+                if (conv && id !== durable.ROOT_CONVERSATION_ID && failed === 0) {
+                    const originalSubmit = conv.submit.bind(conv);
+                    conv.submit = ((...submitArgs) => {
+                        if (failed === 0) {
+                            failed++;
+                            return Promise.reject(new Error(message));
+                        }
+                        return originalSubmit(...submitArgs);
+                    });
+                }
+                return conv;
+            };
+            return harness;
+        };
+        return () => failed;
+    };
+    const failedSubmits = failFirstForkSubmit('fork submit boom');
+    const { bot, time, records } = await armedBot(t);
+    durable.Harness.open = originalOpen;
+    time.advance(55 * MINUTE);
+    await until(() => decided(records, 'result', 'not-rolled-over').length === 1, 'failed fork.submit settles attempt');
+    assert.equal(failedSubmits(), 1);
+    assert.equal(decided(records, 'result', 'not-rolled-over')[0].reason, 'the draft failed: fork submit boom');
+    assert.ok(records.some(entry => entry.event === 'fire' && entry.outcome === 'triggered'));
+    assert.deepEqual(await bot.runtime.activity(), { running: false, queued: false });
+    // draft must be cleared so reconsiderIdle() still plans (and sees already-tried, not busy).
+    bot.runtime.reconsiderIdle();
+    await until(() => records.some(entry => entry.source === 'change' && entry.outcome === 'skipped'), 'reconsiderIdle plans after submit failure');
+    const afterFailure = records.filter(entry => entry.source === 'change').at(-1);
+    assert.equal(afterFailure.reason, 'already tried in this window');
+    // Opening a new window on the SAME runtime instance must allow idle rollover to arm and complete cleanly.
+    bot.respond(toolCall(bot, 'context_notes', { action: 'write', text: 'Saved before window 2.' }), toolCall(bot, 'new_context', { summary: 'Window 1 done' }), bot.faux.fauxAssistantMessage('Opened window 2.'));
+    await bot.runtime.prompt('Open a fresh window', 'followUp');
+    await until(() => said(bot, 'Opened window 2.'), 'window 2 opened');
+    const armedBefore = decided(records, 'plan', 'armed').length;
+    bot.respond(bot.faux.fauxAssistantMessage('Filled window 2.', { timestamp: time.clock.now() }), bot.faux.fauxAssistantMessage('Done.', { timestamp: time.clock.now() }), bot.faux.fauxAssistantMessage(DRAFT, { timestamp: time.clock.now() }));
+    await bot.runtime.prompt(MID_WINDOW, 'followUp');
+    await until(() => decided(records, 'plan', 'armed').length === armedBefore + 1, 'window 2 arms idle rollover');
+    await bot.runtime.prompt('Done for now.', 'followUp');
+    await until(() => decided(records, 'plan', 'armed').length === armedBefore + 2, 'window 2 re-arms after short turn');
+    time.advance(55 * MINUTE);
+    await until(() => decided(records, 'result', 'rolled-over').length === 1, 'window 2 rolls over without being blocked by leaked draft');
+    // Reopening after a fork.submit() failure must NOT see an unsettled idleAttempt needing recovery.
+    failFirstForkSubmit('second submit boom');
+    const persisted = await armedBot(t);
+    durable.Harness.open = originalOpen;
+    persisted.time.advance(55 * MINUTE);
+    await until(() => decided(persisted.records, 'result', 'not-rolled-over').length === 1, 'second failed submit settles');
+    await persisted.bot.reopen();
+    assert.equal(persisted.records.filter(entry => entry.event === 'result').length, 1, 'reopen does not recover an already-settled attempt');
+});
 test('idle rollover regression 3: after a restart that follows the new window, a steer starts its own run in it', async (t) => {
     const { bot, time, records } = await armedBot(t);
     bot.respond(bot.faux.fauxAssistantMessage(DRAFT));
@@ -2266,4 +2389,65 @@ test('a mirror reopened after a large image row keeps its cursor and its chain',
     assert.equal(lines.at(-1).parentId, 'bot-8', 'one chain');
     assert.deepEqual(readBotMirrorHeader(file), header);
     assert.equal(lastBotTurn(file), '2026-11-22T10:05:00.000Z');
+});
+test('reopening a mirror and runtime restores lastModel without duplicate model_change and restores lastUsage for contextUsage and forced rollover', async (t) => {
+    // Unit checks on BotMirror.lastModel across creation, model changes, renames and reopen.
+    const mirrorDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-mirror-model-'));
+    t.after(() => fs.rmSync(mirrorDir, { recursive: true, force: true }));
+    const mirrorFile = path.join(mirrorDir, `${BOT.id}.jsonl`);
+    const mirrorHeader = { id: BOT.id, cwd: mirrorDir, name: 'Fleet' };
+    const freshMirror = new BotMirror(mirrorFile, mirrorHeader);
+    assert.equal(freshMirror.lastModel, '', 'brand-new mirror starts with empty lastModel');
+    freshMirror.appendModelChange(2, 'faux', 'faux-1');
+    assert.equal(freshMirror.lastModel, 'faux/faux-1');
+    freshMirror.appendMessage(2, { role: 'assistant', content: [{ type: 'text', text: 'Hi.' }], timestamp: Date.now() });
+    freshMirror.appendName(2, 'Fleet Prime');
+    const reopenedMirror = new BotMirror(mirrorFile, mirrorHeader);
+    assert.equal(reopenedMirror.lastModel, 'faux/faux-1', 'reopen scans past newer session_info and messages to restore lastModel');
+    assert.equal(reopenedMirror.name, 'Fleet Prime');
+    reopenedMirror.appendModelChange(3, 'faux', 'faux-2');
+    reopenedMirror.appendMessage(3, { role: 'assistant', content: [{ type: 'text', text: 'Switched.' }], timestamp: Date.now() });
+    assert.equal(new BotMirror(mirrorFile, mirrorHeader).lastModel, 'faux/faux-2', 'reopen picks the newest model_change');
+    // Runtime restart: same model emits no duplicate model_change, restores contextUsage immediately, and enforces forceRolloverIfFull.
+    let currentRow = { ...BOT, model: 'faux/faux-1' };
+    const bot = await openTestBot(t, noSessions, { contextWindow: 200_000, faux2ContextWindow: 100_000, row: () => currentRow });
+    bot.respond(bot.faux.fauxAssistantMessage('First answer.'));
+    await bot.runtime.prompt('Hello once', 'followUp');
+    await until(() => said(bot, 'First answer.'), 'first turn completes');
+    const usageBefore = bot.runtime.contextUsage();
+    assert.ok(usageBefore && usageBefore.tokens > 0, 'usage recorded after first turn');
+    assert.deepEqual(bot.mirrorLines().filter(line => line.type === 'model_change').map(line => `${String(line.provider)}/${String(line.modelId)}`), ['faux/faux-1']);
+    // Reopen on the same model: contextUsage is restored immediately before any turn, and next turn emits no duplicate model_change.
+    await bot.reopen();
+    assert.deepEqual(bot.runtime.contextUsage(), usageBefore, 'contextUsage is restored immediately after restart');
+    bot.respond(bot.faux.fauxAssistantMessage('Filled to ~98k.'), bot.faux.fauxAssistantMessage('Short follow-up done.'));
+    await bot.runtime.prompt(`Big payload ${'w'.repeat(380_000)}`, 'followUp');
+    await until(() => said(bot, 'Filled to ~98k.'), 'second turn completes under 200k limit');
+    await bot.runtime.prompt('Short follow-up.', 'followUp');
+    await until(() => said(bot, 'Short follow-up done.'), 'short turn keeps latest request small');
+    assert.equal(bot.mirrorLines().filter(line => line.customType === 'bot-context-window').length, 0, 'under 200k limit does not roll over yet');
+    assert.deepEqual(bot.mirrorLines().filter(line => line.type === 'model_change').map(line => `${String(line.provider)}/${String(line.modelId)}`), ['faux/faux-1'], 'restarting on the same model emits no duplicate model_change');
+    // Reopen onto faux-2 (100k context window): restored ~98k tokens is >=97% hard limit, so contextUsage shows >=97% and next prompt force-rolls over first.
+    currentRow = { ...BOT, model: 'faux/faux-2' };
+    await bot.reopen();
+    const usageAfterSwitch = bot.runtime.contextUsage();
+    assert.ok(usageAfterSwitch && usageAfterSwitch.contextWindow === 100_000 && usageAfterSwitch.percent >= 97, `expected restored usage >=97% of 100k after restart, got ${JSON.stringify(usageAfterSwitch)}`);
+    bot.respond(bot.faux.fauxAssistantMessage('Answered in window 2.'));
+    await bot.runtime.prompt('Continue after restart', 'followUp');
+    await until(() => said(bot, 'Answered in window 2.'), 'prompt after restart answered');
+    assert.equal(bot.mirrorLines().filter(line => line.customType === 'bot-context-window').length, 1, 'forceRolloverIfFull closed window 1 immediately after restart');
+    const postRestartReq = bot.requests.at(-1);
+    assert.match(textOf(postRestartReq.find(message => message.role === 'user')), /^\[Context window 2\./, 'prompt ran in fresh window 2');
+    assert.deepEqual(bot.mirrorLines().filter(line => line.type === 'model_change').map(line => `${String(line.provider)}/${String(line.modelId)}`), ['faux/faux-1', 'faux/faux-2'], 'real model change across restart still emits model_change');
+    // Reopening when the newest entry is pi.reset (empty fresh window) restores lastUsage = 0 (contextUsage() === null), not window 1's usage.
+    const resetBot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
+    resetBot.respond(resetBot.faux.fauxAssistantMessage('Spiked past 97%.'));
+    await resetBot.runtime.prompt(`Huge spike ${'w'.repeat(380_000)}`, 'followUp');
+    await until(() => resetBot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'forced rollover writes pi.reset');
+    await resetBot.reopen();
+    assert.equal(resetBot.runtime.contextUsage(), null, 'restored usage stops at pi.reset boundary');
+    resetBot.respond(resetBot.faux.fauxAssistantMessage('In fresh window.'));
+    await resetBot.runtime.prompt('Hello window 2', 'followUp');
+    await until(() => said(resetBot, 'In fresh window.'), 'window 2 turn completes');
+    assert.equal(resetBot.mirrorLines().filter(line => line.type === 'model_change').length, 1, 'no duplicate model_change after reset + restart');
 });

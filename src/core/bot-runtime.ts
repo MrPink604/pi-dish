@@ -347,11 +347,16 @@ export function workerRefMatches(worker: WorkerRecord, wanted: string): boolean 
 }
 
 /** Find one owned worker by unique direct id or alias prefix match. */
-export function findOwnedWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined {
+export function findOwnedWorker(
+  memory: BotMemory | undefined,
+  wanted: string,
+  options?: { openOnly?: boolean },
+): [string, WorkerRecord] | undefined {
   const parsed = splitWorkerRef(wanted);
   if (!parsed.id) return undefined;
   const entries = Object.entries(memory?.workers ?? {});
-  const direct = entries.filter(([, worker]) => workerRefMatches(worker, wanted));
+  const openOnly = options?.openOnly === true;
+  const direct = entries.filter(([, worker]) => (!openOnly || !worker.closedAt) && workerRefMatches(worker, wanted));
   return direct.length === 1 ? direct[0] : undefined;
 }
 
@@ -1259,8 +1264,12 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   });
 
   /** A worker this bot started, by any equivalent CLI ref form. */
-  function ownWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined {
-    return findOwnedWorker(memory, wanted);
+  function ownWorker(
+    memory: BotMemory | undefined,
+    wanted: string,
+    options?: { openOnly?: boolean },
+  ): [string, WorkerRecord] | undefined {
+    return findOwnedWorker(memory, wanted, options);
   }
 
   /** Closes a session this bot started; any other ref is refused. */
@@ -1484,7 +1493,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       if (args.action === 'wait') return waitFor(need(args.ref, 'ref'), args.since, args.timeout, api, callContext);
       if (args.action === 'send') {
         const rawRef = need(args.ref, 'ref');
-        const ref = ownWorker(await api.snapshot(MemoryDoc, api.conversationId, callContext), rawRef)?.[1].ref ?? rawRef;
+        const ref = ownWorker(await api.snapshot(MemoryDoc, api.conversationId, callContext), rawRef, { openOnly: true })?.[1].ref ?? rawRef;
         if (await api.memo<boolean>('sending', callContext)) {
           return refusal(`The send to ${ref} was cut off by a restart and its outcome is unknown, so it was not sent again. Read the session before sending it again.`);
         }
@@ -2370,11 +2379,28 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
 
   // Event mapping --------------------------------------------------------------
 
+  /** Usage of the newest assistant message in the current window at or before `through`, or 0. */
+  async function restoredUsage(through: number): Promise<number> {
+    if (through <= 0) return 0;
+    let cursor: Durable.Cursor | undefined;
+    do {
+      const page = await conversation().entries({ order: 'descending', maxEntryId: through as Durable.EntryId }, 200, cursor, ctx);
+      for (const entry of page.items) {
+        if (entry.kind === 'pi.reset') return 0;
+        if (entry.kind !== 'pi.assistant') continue;
+        const tokens = usageTokens(entryMessage(entry));
+        if (tokens) return tokens;
+      }
+      cursor = page.next;
+    } while (cursor);
+    return 0;
+  }
+
   let busy = false;
   let processed = mirror.lastEntryId;
   let streaming = false;
-  let lastUsage = 0;
-  let lastModel = '';
+  let lastUsage = await restoredUsage(processed);
+  let lastModel = mirror.lastModel;
   let lastFailure = -1;
   let rescueSubmittedIn: number | null = null;
   const calls = new Map<string, { name: string; args: unknown }>();
@@ -2806,10 +2832,23 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       endDraft('input arrived first');
       return null;
     }
-    const submission = await fork.submit({ type: 'input', requestId: 'idle-draft', content: input }, ctx);
+    let submission: Durable.Submission;
+    try {
+      submission = await fork.submit({ type: 'input', requestId: 'idle-draft', content: input }, ctx);
+    } catch (error) {
+      // A relay that closes leaves its draft to the next one, which abandons it.
+      if (!closed && draft?.fork === fork) endDraft(`the draft failed: ${describe(error)}`);
+      else if (draft?.fork === fork) draft = null;
+      return null;
+    }
+    if (draft?.fork !== fork) {
+      if (!closed) fork.abort(ctx).catch((error: unknown) => log(`idle rollover: aborting the draft failed: ${describe(error)}`));
+      return null;
+    }
     awaitDraft(fork, submission).catch((error: unknown) => {
       // A relay that closes leaves its draft to the next one, which abandons it.
       if (!closed && draft?.fork === fork) endDraft(`the draft failed: ${describe(error)}`);
+      else if (draft?.fork === fork) draft = null;
     });
     return null;
   }
