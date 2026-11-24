@@ -194,6 +194,8 @@ export interface HandoffInput {
     notebookUnsaved?: boolean;
     /** True when pi-dish opened the window while the bot was idle, before the prompt cache expired. */
     idle?: boolean;
+    /** True when the bot called new_context in response to a bot.limit rescue notice after answering its last request. */
+    afterLimit?: boolean;
 }
 /** An idle rollover's handoff quotes at most this much of the latest request; history has the rest. */
 export declare const IDLE_HANDOFF_REQUEST_CHARS = 1500;
@@ -206,7 +208,7 @@ export declare function cutText(text: string, chars: number): string;
  * shown with what became of it: a rollover the bot made while handling it is done, and must not be read as a request
  * to roll over again. An idle rollover quotes only the start of a long request, so the new window stays small.
  */
-export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved, idle }: HandoffInput): string;
+export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved, idle, afterLimit }: HandoffInput): string;
 /** A sub-bot's start, written by its parent into the sub-bot's directory and read once by its first relay. */
 export declare const FORK_SEED = "fork.json";
 /** A sub-bot that starts from a copy of its parent's conversation. */

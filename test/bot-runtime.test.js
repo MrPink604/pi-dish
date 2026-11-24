@@ -1501,7 +1501,20 @@ test('at 90%-96% with an unsaved notebook, pi-dish grants one durable rescue tur
     assert.ok(marker, 'window rolled over');
     assert.match(textOf(marker), /1\. Rescued before limit/);
     assert.doesNotMatch(textOf(marker), /WARNING:/, 'no unsaved warning when rescue succeeded');
+    assert.match(textOf(marker), /Prior request \(context only\): Do some heavy work /, 'bot.limit rescue labels prior request as context only');
+    assert.match(textOf(marker), /already handled.*do NOT repeat it/i, 'bot.limit rescue instructs not to repeat prior request');
+    assert.doesNotMatch(textOf(marker), /carry on with whatever else it asks/, 'bot.limit rescue does not tell bot to carry on with already-handled request');
     assert.match(instructionsText(bot.requests.at(-1)), /Rescued facts\./);
+    // Ordinary mid-request new_context keeps the continuation wording so the bot finishes what the user asked.
+    const midBot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
+    midBot.respond(midBot.faux.fauxAssistantMessage([midBot.faux.fauxToolCall('context_notes', { action: 'write', text: 'Mid-request notes.' })], { stopReason: 'toolUse' }), midBot.faux.fauxAssistantMessage([midBot.faux.fauxToolCall('new_context', { summary: 'Fresh window mid-request' })], { stopReason: 'toolUse' }), midBot.faux.fauxAssistantMessage('Finished in window 2.'));
+    await midBot.runtime.prompt('Roll over and then summarize status', 'followUp');
+    await until(() => said(midBot, 'Finished in window 2.'), 'mid-request rollover completes');
+    const midMarker = midBot.mirrorLines().find(line => line.customType === 'bot-context-window');
+    assert.ok(midMarker, 'ordinary new_context rolled over');
+    assert.match(textOf(midMarker), /Latest request: Roll over and then summarize status/);
+    assert.match(textOf(midMarker), /carry on with whatever else it asks/);
+    assert.doesNotMatch(textOf(midMarker), /Prior request \(context only\):/);
 });
 test('ignoring the 90% rescue turn force-closes after one turn with an unsaved-notebook WARNING, and >=97% skips the rescue turn', async (t) => {
     // Case 1: ~93% unsaved, bot ignores rescue turn -> force-closes after that one turn with WARNING.

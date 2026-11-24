@@ -534,6 +534,8 @@ export interface HandoffInput {
   notebookUnsaved?: boolean;
   /** True when pi-dish opened the window while the bot was idle, before the prompt cache expired. */
   idle?: boolean;
+  /** True when the bot called new_context in response to a bot.limit rescue notice after answering its last request. */
+  afterLimit?: boolean;
 }
 
 /** An idle rollover's handoff quotes at most this much of the latest request; history has the rest. */
@@ -553,7 +555,7 @@ export function cutText(text: string, chars: number): string {
  * shown with what became of it: a rollover the bot made while handling it is done, and must not be read as a request
  * to roll over again. An idle rollover quotes only the start of a long request, so the new window stays small.
  */
-export function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved, idle }: HandoffInput): string {
+export function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved, idle, afterLimit }: HandoffInput): string {
   const lines = [`[Context window ${windowNumber}. Your identity and notebook are in your instructions; earlier windows are readable with the history tool.]`];
   if (notebookUnsaved) {
     lines.push('', `WARNING: Window ${windowNumber - 1} was closed at the context limit without saving your notebook in that window. Before starting new work, check whether facts from window ${windowNumber - 1} are missing from <notebook> (use history read or search on window ${windowNumber - 1}) and save context_notes.`);
@@ -571,13 +573,15 @@ export function composeHandoff({ windowNumber, closed, tail, request, workers, f
   const quoted = excerpt !== null
     ? `${excerpt}… [the first ${excerpt.length} of ${request!.length} characters; history read ${windowNumber - 1} has all of it]`
     : request;
-  lines.push('', `Latest request: ${quoted ?? '(none)'}`);
+  lines.push('', `${afterLimit ? 'Prior request (context only)' : 'Latest request'}: ${quoted ?? '(none)'}`);
   if (request !== null) {
     lines.push(forced
       ? 'It was answered in the last window, which was then closed at the context limit.'
       : idle
         ? 'It was answered in the last window. While you were idle, pi-dish opened this window before the prompt cache expired, with the notebook you drafted for it: this is the new window. Do not call new_context for it; answer what comes next.'
-        : 'You opened this window with new_context while handling it, and that call is done: this is the new window. Do not call new_context again for it; carry on with whatever else it asks, or tell the user the new window is open.');
+        : afterLimit
+          ? 'It was already handled in the last window before the context-limit rescue rollover: this is prior context only, so do NOT repeat it or re-run any side effects. This is the new window; do not call new_context again, and wait for or answer what comes next.'
+          : 'You opened this window with new_context while handling it, and that call is done: this is the new window. Do not call new_context again for it; carry on with whatever else it asks, or tell the user the new window is open.');
   }
   lines.push('', workers.length ? 'Workers you started that are still open (each new answer arrives as a report):' : 'No workers are open.');
   for (const worker of workers) lines.push(`- ${worker.name}: ${worker.ref} (${worker.harness}${worker.host ? ` on ${worker.host}` : ''}, started ${worker.startedAt}${worker.watchEndedAt ? ', no longer watched' : ''})`);
@@ -1045,6 +1049,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       ...(notebookUnsaved ? { notebookUnsaved: true } : {}),
       ...(close.idle ? { idle: true } : {}),
     });
+    const latestInput = window.find(entry => Object.hasOwn(INPUT_KINDS, entry.kind));
+    const afterLimit = !forced && !close.idle && latestInput?.kind === 'bot.limit';
     const isHandoffInput = (kind: string) => Object.hasOwn(INPUT_KINDS, kind) && kind !== 'bot.limit';
     const request = window.find(entry => isHandoffInput(entry.kind));
     const requestText = request ? messageTextNotingImages(entryMessage(request)) : null;
@@ -1069,6 +1075,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       forced,
       notebookUnsaved,
       idle: close.idle,
+      afterLimit,
     });
     await close.place?.(handoff);
     const current = options.loadBot();
