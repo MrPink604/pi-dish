@@ -93,3 +93,58 @@ test('bash, wait and eval results keep only the timing, exit, job and cell field
     const split = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_end', { toolCallId: 'e', toolName: 'eval', isError: false, result: { content: [], details: { cells: [evalCell, evalCell] } } })));
     assert.equal(split.result.details.cells[1].output, '1');
 });
+test('codemode updates and completions preserve bounded call rows without reading native traces', () => {
+    const runningDetails = {
+        get trace() { throw new Error('native details trace must not be read'); },
+        journal: ['huge'],
+        calls: [
+            {
+                id: 1, name: 'sessions', args: '{"action":"read","ref":"desktop/01a1fc02"}', status: 'running',
+                output: 'bulky', get trace() { throw new Error('native call trace must not be read'); },
+            },
+            'bad',
+            { id: 2, status: 'ok' },
+        ],
+    };
+    const updated = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_update', {
+        toolCallId: 'cm_1', toolName: 'codemode', args: { code: 'return 1;' }, isError: false,
+        partialResult: { content: [{ type: 'text', text: 'running' }], details: runningDetails },
+    })));
+    assert.deepEqual(updated.partialResult.details, {
+        calls: [{ id: 1, name: 'sessions', args: '{"action":"read","ref":"desktop/01a1fc02"}', status: 'running' }],
+    });
+    const circular = {};
+    circular.self = circular;
+    const doneDetails = {
+        get trace() { throw new Error('native details trace must not be read'); },
+        calls: [
+            { id: 1, name: 'sessions', args: 'a'.repeat(700), status: 'ok', durationMs: 42, rawResult: { huge: true } },
+            { id: 2, name: 'bash', args: { command: 'ls' }, status: 'error', durationMs: 120, error: 'e'.repeat(700), extra: 9 },
+            { id: 3, name: 'read', args: circular, status: 'cancelled' },
+        ],
+    };
+    const ended = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_end', {
+        toolCallId: 'cm_1', toolName: 'codemode', args: { code: 'return 1;' }, isError: false,
+        result: { content: [{ type: 'text', text: 'Done\n---\n0.2s' }], details: doneDetails },
+    })));
+    assert.deepEqual(ended.result.details, {
+        calls: [
+            { id: 1, name: 'sessions', args: 'a'.repeat(500), status: 'ok', durationMs: 42 },
+            { id: 2, name: 'bash', args: '{"command":"ls"}', status: 'error', durationMs: 120, error: 'e'.repeat(500) },
+            { id: 3, name: 'read', status: 'cancelled' },
+        ],
+    });
+    const manyCalls = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, name: 'read', args: '{}', status: 'ok', durationMs: 1 }));
+    const capped = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_end', {
+        toolCallId: 'cm_2', toolName: 'codemode', isError: false,
+        result: { content: [], details: { calls: manyCalls } },
+    })));
+    assert.equal(capped.result.details.calls.length, 100);
+    assert.equal(capped.result.details.calls[0].id, 1);
+    assert.equal(capped.result.details.calls[99].id, 100);
+    const nonArray = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_end', {
+        toolCallId: 'cm_3', toolName: 'codemode', isError: false,
+        result: { content: [], details: { calls: 'invalid', extra: true } },
+    })));
+    assert.equal('details' in nonArray.result, false);
+});

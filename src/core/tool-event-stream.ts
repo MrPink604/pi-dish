@@ -1,4 +1,4 @@
-import { record } from './helper-values';
+import { finite, record } from './helper-values';
 
 const BASH_DETAIL_KEYS = ['wallTimeMs', 'exitCode', 'timedOut', 'timeoutSeconds', 'timeoutDisabled'] as const;
 const WAIT_JOB_KEYS = ['id', 'type', 'status', 'label', 'durationMs', 'exitCode', 'agentUrlId'] as const;
@@ -7,6 +7,8 @@ const EVAL_CELL_KEYS = ['index', 'title', 'language', 'status', 'exitCode', 'dur
 const EVAL_EVENT_KEYS = ['op', 'detail', 'path', 'cmd', 'args', 'key', 'action', 'chars', 'bytes', 'count', 'error', 'exit_code'] as const;
 const EVAL_EVENT_LIMIT = 50;
 const EVAL_EVENT_TEXT_LIMIT = 300;
+const CODEMODE_CALL_LIMIT = 100;
+const CODEMODE_CALL_TEXT_LIMIT = 500;
 
 function pick(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -16,8 +18,8 @@ function pick(source: Record<string, unknown>, keys: readonly string[]): Record<
 
 /**
  * The few result details the browser formats: OMP bash timing/exit/deadline,
- * wait job rows and eval cell status/activity. Everything else in
- * result.details (task traces, widgets, previews) stays on the server.
+ * wait job rows, eval cell status/activity and codemode call rows. Everything
+ * else in result.details (task traces, widgets, previews) stays on the server.
  */
 function projectToolDetails(toolName: unknown, details: unknown): Record<string, unknown> | undefined {
   if (!record(details)) return undefined;
@@ -33,6 +35,26 @@ function projectToolDetails(toolName: unknown, details: unknown): Record<string,
       for (const key of ['resultText', 'errorText'] as const) {
         if (typeof job[key] === 'string') out[key] = job[key].slice(0, OUTPUT_TEXT_LIMIT);
       }
+      return [out];
+    }) };
+  }
+  if (toolName === 'codemode' && Array.isArray(details.calls)) {
+    return { calls: details.calls.slice(0, CODEMODE_CALL_LIMIT).flatMap((call: unknown) => {
+      if (!record(call) || typeof call.name !== 'string' || !call.name) return [];
+      const out: Record<string, unknown> = {};
+      if (finite(call.id)) out.id = call.id;
+      else if (typeof call.id === 'string') out.id = call.id.slice(0, CODEMODE_CALL_TEXT_LIMIT);
+      out.name = call.name.slice(0, CODEMODE_CALL_TEXT_LIMIT);
+      if (typeof call.args === 'string') out.args = call.args.slice(0, CODEMODE_CALL_TEXT_LIMIT);
+      else if (record(call.args)) {
+        try {
+          const serialized = JSON.stringify(call.args);
+          if (typeof serialized === 'string') out.args = serialized.slice(0, CODEMODE_CALL_TEXT_LIMIT);
+        } catch {}
+      }
+      if (typeof call.status === 'string') out.status = call.status.slice(0, CODEMODE_CALL_TEXT_LIMIT);
+      if (finite(call.durationMs)) out.durationMs = call.durationMs;
+      if (typeof call.error === 'string') out.error = call.error.slice(0, CODEMODE_CALL_TEXT_LIMIT);
       return [out];
     }) };
   }
