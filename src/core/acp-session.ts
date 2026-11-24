@@ -381,6 +381,8 @@ export class AcpSession extends TransportSession {
   declare private planEntries: NormalizedPlanEntry[];
   /** Polls live task-*.log tails onto long-running `run_command` tool cards. */
   declare private taskLogTimer: NodeJS.Timeout | null;
+  /** Brain task ids already reconciled into tool results so they never close a later re-run. */
+  declare private reconciledTaskIds: Set<string>;
   /** Sibling ACP session ids opened for ephemeral `/btw` side chats. */
   declare private sideSessionIds: Set<string>;
   /** Tombstones for closed side-chat session ids so late/post-close frames stay isolated. */
@@ -432,6 +434,7 @@ export class AcpSession extends TransportSession {
     this.turnTtftSumMs = 0;
     this.planEntries = [];
     this.taskLogTimer = null;
+    this.reconciledTaskIds = new Set();
     this.sideSessionIds = new Set();
     this.closedSideSessionIds = new Set();
     this.openingSideSessions = 0;
@@ -489,6 +492,7 @@ export class AcpSession extends TransportSession {
       this.inbound.clear();
       this.toolCalls.clear();
       this.askQuestions.clear();
+      this.reconciledTaskIds.clear();
       this.emitEvent('exit', { code });
       this.emitEvent('close', {});
       if (acpSessions.get(this.id) === this) acpSessions.delete(this.id);
@@ -622,7 +626,6 @@ export class AcpSession extends TransportSession {
     if (this.sideSessionIds.has(sid) || this.closedSideSessionIds.has(sid)) return true;
     if (this.openingSideSessions > 0 && sid !== this.nativeSessionId) {
       this.sideSessionIds.add(sid);
-      recordAgySideChatId(sid);
       return true;
     }
     return false;
@@ -637,6 +640,9 @@ export class AcpSession extends TransportSession {
       if (listener) listener(asRecord(payload.update));
       return;
     }
+    if (this.transcript !== null && !this.replaying && sid && sid !== this.nativeSessionId) {
+      return;
+    }
     this._sessionUpdate(payload.update);
   }
 
@@ -649,6 +655,12 @@ export class AcpSession extends TransportSession {
       if (method === 'elicitation/create') this._respond(id, { action: 'cancel' });
       else if (method === 'session/request_permission') this._respond(id, { outcome: { outcome: 'cancelled' } });
       else this._respondError(id, -32601, `Unsupported side-session ACP method: ${method}`);
+      return;
+    }
+    if (this.transcript !== null && !this.replaying && sid && sid !== this.nativeSessionId) {
+      if (method === 'elicitation/create') this._respond(id, { action: 'cancel' });
+      else if (method === 'session/request_permission') this._respond(id, { outcome: { outcome: 'cancelled' } });
+      else this._respondError(id, -32601, `Unsupported foreign-session ACP method: ${method}`);
       return;
     }
     const key = String(id);
@@ -1079,22 +1091,56 @@ export class AcpSession extends TransportSession {
     if (!transcriptFile || !fs.existsSync(transcriptFile)) return;
     const tasks = readAgyBackgroundTasks(this.nativeSessionId, true);
     if (!tasks.length) return;
+    let reconciledAny = false;
     for (const [toolCallId, tracked] of [...this.toolCalls]) {
       if (tracked.nonBlocking) continue;
       if (tracked.call.nativeName !== 'run_command' && tracked.call.nativeName !== 'run_workflow') continue;
       const expectedKind = tracked.call.nativeName === 'run_command' ? 'shell' : 'workflow';
       const expectedCmd = expectedKind === 'shell' ? text(tracked.call.args.command).trim() : '';
-      const matched = tasks.find((task) => {
-        if (task.kind !== expectedKind) return false;
+      const expectedWorkflow = expectedKind === 'workflow'
+        ? (text(tracked.call.args.Description)
+          || text(tracked.call.args.description)
+          || text(tracked.call.args.Title)
+          || text(tracked.call.args.title)
+          || text(tracked.call.args.ScriptPath)
+          || text(tracked.call.args.scriptPath)).trim()
+        : '';
+      const candidates: { task: (typeof tasks)[number]; startedMs: number }[] = [];
+      for (const task of tasks) {
+        if (task.kind !== expectedKind) continue;
+        if (this.reconciledTaskIds.has(task.id)) continue;
         if (expectedKind === 'shell') {
-          if (!expectedCmd || !task.command || task.command.trim() !== expectedCmd) return false;
+          if (!expectedCmd || !task.command || task.command.trim() !== expectedCmd) continue;
+        } else if (expectedWorkflow) {
+          const taskTitle = text(task.title).trim();
+          const taskCmd = text(task.command).trim();
+          if (taskTitle || taskCmd) {
+            const truncated = expectedWorkflow.slice(0, 100).trim();
+            const matchesTitle = taskTitle === expectedWorkflow || taskTitle === truncated;
+            const matchesCmd = taskCmd === expectedWorkflow || taskCmd === truncated;
+            if (!matchesTitle && !matchesCmd) continue;
+          }
         }
         const startedMs = task.startedAt ? Date.parse(task.startedAt) : NaN;
-        return !Number.isFinite(startedMs) || Math.abs(startedMs - tracked.startedAt) <= 60_000;
-      });
-      if (!matched || (matched.status !== 'completed' && matched.status !== 'failed' && matched.status !== 'killed')) continue;
+        if (!Number.isFinite(startedMs)) continue;
+        if (startedMs < tracked.startedAt - 5_000 || startedMs > tracked.startedAt + 15_000) continue;
+        const finishedMs = task.finishedAt ? Date.parse(task.finishedAt) : NaN;
+        if (Number.isFinite(finishedMs) && finishedMs < tracked.startedAt - 2_000) continue;
+        candidates.push({ task, startedMs });
+      }
+      if (!candidates.length) continue;
+      if (candidates.some(candidate => candidate.task.status === 'running')) continue;
+      let newest = candidates[0];
+      for (let i = 1; i < candidates.length; i++) {
+        if (candidates[i].startedMs > newest.startedMs) newest = candidates[i];
+      }
+      const matched = newest.task;
+      if (matched.status !== 'completed' && matched.status !== 'failed' && matched.status !== 'killed') continue;
+      if (this.segment) this._closeSegment('stop', null, null);
+      this.reconciledTaskIds.add(matched.id);
       this.toolCalls.delete(toolCallId);
       this.askQuestions.delete(toolCallId);
+      reconciledAny = true;
       const isError = matched.status !== 'completed';
       const summaryText = matched.status === 'killed'
         ? 'Background task stopped.'
@@ -1113,6 +1159,13 @@ export class AcpSession extends TransportSession {
         isError,
         result: { content: [{ type: 'text', text: summaryText }] },
       });
+    }
+    if (reconciledAny) {
+      const now = Date.now();
+      this.lastOutputAt = now;
+      this.lastOutputWasProse = false;
+      this.nextStepStartedAt = now;
+      this.sawStepSignal = false;
     }
     this._syncTaskLogTimer();
   }
@@ -1272,6 +1325,7 @@ export class AcpSession extends TransportSession {
     options: { transcript?: AcpTranscript; register?: boolean } = {},
   ): void {
     if (!validSessionId(sessionId)) throw new TypeError('Invalid Antigravity session id');
+    if (this.nativeSessionId !== sessionId) this.reconciledTaskIds.clear();
     this.id = sessionId as NativeSessionId;
     this.nativeSessionId = this.id;
     this.sessionFile = sessionFile;
@@ -1740,6 +1794,12 @@ export class AcpSession extends TransportSession {
     } else if (dialog.kind === 'elicitation' && dialog.questions) {
       this._respond(dialog.id, askElicitationResult(response, dialog.questions));
     }
+    const now = Date.now();
+    this.lastOutputAt = now;
+    this.lastOutputWasProse = false;
+    this.nextStepStartedAt = now;
+    this.sawStepSignal = false;
+    if (this.newestPromptId === null && this.turnInProgress) this._armAutonomousTimer();
     return Promise.resolve();
   }
 

@@ -476,6 +476,116 @@ function handlePrompt(id: number, params: Frame): void {
       }, 5);
       return;
     }
+    case 'background-rerun': {
+      // Each prompt launches a fresh background run_command (or run_workflow) that stays
+      // open past end_turn so brain reconciliation can be exercised across re-runs.
+      const promptArr = Array.isArray(params.prompt) ? params.prompt : [];
+      const firstText = promptArr.find((p): p is Frame => !!p && typeof p === 'object' && (p as Frame).type === 'text');
+      const promptText = typeof firstText?.text === 'string' ? firstText.text : '';
+      setTimeout(() => {
+        if (promptText.includes('workflow')) {
+          toolCall(`call-wf-${id}`, 'run_workflow', { Description: 'Audit modules' }, 'Audit modules', 'other');
+          textChunk('Running workflow.');
+        } else {
+          toolCall(`call-bg-run-${id}`, 'run_command', { CommandLine: 'npm test', WaitMsBeforeAsync: 5000 }, 'npm test', 'execute');
+          textChunk('Running background test.');
+        }
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+      }, 5);
+      return;
+    }
+    case 'autonomous-permission': {
+      // After end_turn and background tool completion, the agent emits closing prose
+      // and requests permission with no open tools; after approval it pauses before replying.
+      setTimeout(() => {
+        toolCall('call-bg-auto-perm', 'run_command', { CommandLine: 'npm run build', WaitMsBeforeAsync: 5000 }, 'npm run build', 'execute');
+        textChunk('Building in background.');
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+        setTimeout(() => {
+          toolUpdate('call-bg-auto-perm', 'run_command', 'completed', {
+            title: 'npm run build',
+            kind: 'execute',
+            content: [{ type: 'content', content: { type: 'text', text: 'built\n' } }],
+            rawOutput: { output: 'built\n', exit_code: 0 },
+          });
+          textChunk('Need permission to continue.');
+          const permReqId = 600 + id;
+          pendingClientRequests.set(String(permReqId), { kind: 'autonomous-permission' });
+          write({
+            jsonrpc: '2.0',
+            id: permReqId,
+            method: 'session/request_permission',
+            params: {
+              sessionId,
+              toolCall: { title: 'Deploy build' },
+              options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'deny', name: 'Deny', kind: 'reject_once' }],
+            },
+          });
+        }, 30);
+      }, 5);
+      return;
+    }
+    case 'foreign-live': {
+      const foreignSid = '44444444-4444-4444-8444-444444444444';
+      const collected: Record<string, unknown> = {};
+      const maybeFinish = () => {
+        if (!('perm' in collected && 'elicit' in collected && 'unknown' in collected)) return;
+        notify('session/update', {
+          sessionId: '',
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'empty-sid-ok ' } },
+        });
+        textChunk(`foreign-responses:${JSON.stringify(collected)}`);
+        usageUpdate(200);
+        finishPrompt(id, 'end_turn');
+      };
+      setTimeout(() => {
+        notify('session/update', {
+          sessionId: foreignSid,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'FOREIGN LEAK CHUNK' } },
+        });
+        notify('session/update', {
+          sessionId: foreignSid,
+          update: { sessionUpdate: 'session_info_update', title: 'Foreign Title' },
+        });
+        pendingClientRequests.set('foreign-perm-1', { kind: 'foreign-probe', slot: 'perm', collected, maybeFinish });
+        write({
+          jsonrpc: '2.0',
+          id: 'foreign-perm-1',
+          method: 'session/request_permission',
+          params: {
+            sessionId: foreignSid,
+            toolCall: { title: 'Foreign command' },
+            options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+          },
+        });
+        pendingClientRequests.set('foreign-elicit-1', { kind: 'foreign-probe', slot: 'elicit', collected, maybeFinish });
+        write({
+          jsonrpc: '2.0',
+          id: 'foreign-elicit-1',
+          method: 'elicitation/create',
+          params: {
+            sessionId: foreignSid,
+            toolCallId: 'foreign-ask-1',
+            mode: 'form',
+            message: 'Foreign question',
+            requestedSchema: {
+              type: 'object',
+              properties: { q1: { type: 'string', title: 'Foreign?', oneOf: [{ const: '1', title: 'yes' }] } },
+            },
+          },
+        });
+        pendingClientRequests.set('foreign-unknown-1', { kind: 'foreign-probe', slot: 'unknown', collected, maybeFinish });
+        write({
+          jsonrpc: '2.0',
+          id: 'foreign-unknown-1',
+          method: 'custom/ping',
+          params: { sessionId: foreignSid },
+        });
+      }, 5);
+      return;
+    }
     case 'background-reconnect': {
       // Background command stays running long enough for a bridge reconnect test.
       setTimeout(() => {
@@ -684,11 +794,28 @@ function handlePrompt(id: number, params: Frame): void {
   }
 }
 
-function clientResult(id: unknown, result: Frame): void {
+function clientResult(id: unknown, result: Frame, error?: unknown): void {
   const request = pendingClientRequests.get(String(id));
   pendingClientRequests.delete(String(id));
   if (!request || typeof request !== 'object') return;
   const state = request as Frame;
+  if (state.kind === 'foreign-probe') {
+    const collected = state.collected as Record<string, unknown>;
+    collected[String(state.slot)] = error !== undefined ? { error } : { result };
+    if (typeof state.maybeFinish === 'function') (state.maybeFinish as () => void)();
+    return;
+  }
+  if (state.kind === 'autonomous-permission') {
+    const option = typeof result.outcome === 'object' && result.outcome
+      ? String((result.outcome as Frame).optionId ?? '')
+      : '';
+    const replyDelay = Number(process.env.FAKE_AGY_FINAL_DELAY_MS) || 180;
+    setTimeout(() => {
+      textChunk(`Approved:${option || 'cancelled'}.`);
+      usageUpdate(900);
+    }, replyDelay);
+    return;
+  }
   if (state.kind === 'elicitation') {
     const toolCallId = String(state.toolCallId ?? 'call-ask');
     toolUpdate(toolCallId, 'ask_question', 'completed', { kind: 'other' });
@@ -759,6 +886,11 @@ function handleRequest(id: unknown, method: string, params: Frame): void {
         sideSessions.add(freshId);
         if (SCRIPT === 'side-trailing-close') {
           notify('session/update', { sessionId: freshId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'EARLY SIDE CHUNK' } } });
+        } else if (SCRIPT === 'side-speculative-open') {
+          notify('session/update', {
+            sessionId: '33333333-3333-4333-8333-333333333333',
+            update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'SPECULATIVE FOREIGN CHUNK' } },
+          });
         }
         respond(id, sessionState(freshId));
       }
@@ -892,7 +1024,7 @@ process.stdin.on('data', (chunk: Buffer) => {
       continue;
     }
     if (message.id !== undefined && (message.result !== undefined || message.error !== undefined)) {
-      if (message.error !== undefined) clientResult(message.id, { action: 'cancel' });
+      if (message.error !== undefined) clientResult(message.id, { action: 'cancel' }, message.error);
       else clientResult(message.id, message.result as Frame);
     }
   }

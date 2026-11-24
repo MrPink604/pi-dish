@@ -443,22 +443,13 @@ test('max_turn_requests surfaces as a length limit with the raw ACP reason', asy
     assert.equal(persisted.rawStopReason, 'max_turn_requests');
 });
 test('autonomous idle reconciles a stale background tool once brain records completion/cancellation', async (t) => {
-    const savedIdle = process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
-    const savedBrain = process.env.PI_DISH_AGY_BRAIN_DIR;
     const brainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-acp-reconcile-'));
-    process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = '80';
-    process.env.PI_DISH_AGY_BRAIN_DIR = brainDir;
-    t.after(() => {
-        if (savedIdle === undefined)
-            delete process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
-        else
-            process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = savedIdle;
-        if (savedBrain === undefined)
-            delete process.env.PI_DISH_AGY_BRAIN_DIR;
-        else
-            process.env.PI_DISH_AGY_BRAIN_DIR = savedBrain;
-        fs.rmSync(brainDir, { recursive: true, force: true });
+    withEnv(t, {
+        PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '80',
+        PI_DISH_AGY_UNFINISHED_IDLE_MS: '150',
+        PI_DISH_AGY_BRAIN_DIR: brainDir,
     });
+    t.after(() => fs.rmSync(brainDir, { recursive: true, force: true }));
     const session = await launch('background-abort');
     cleanup(t, session);
     const events = capture(session);
@@ -1000,4 +991,183 @@ test('a reused import agent replays messages for every imported conversation, no
     assert.ok(msgs1.length >= 6, `first imported mirror has messages (got ${msgs1.length})`);
     assert.equal(msgs2.length, msgs1.length, `second imported mirror must preserve all messages (got ${msgs2.length} vs ${msgs1.length})`);
     assert.ok(JSON.stringify(msgs2).includes('README.md contains a single heading.'));
+});
+test('re-running the same run_command within 60s does not false-close, reconciles once, and refreshes unfinished-idle window', async (t) => {
+    const brainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-acp-rerun-'));
+    withEnv(t, {
+        PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '60',
+        PI_DISH_AGY_UNFINISHED_IDLE_MS: '350',
+        PI_DISH_AGY_BRAIN_DIR: brainDir,
+    });
+    t.after(() => fs.rmSync(brainDir, { recursive: true, force: true }));
+    const session = await launch('background-rerun');
+    cleanup(t, session);
+    const events = capture(session);
+    const times = timed(session, events);
+    const sysDir = path.join(brainDir, session.nativeSessionId, '.system_generated');
+    const transcriptFile = path.join(sysDir, 'logs', 'transcript.jsonl');
+    const tasksDir = path.join(sysDir, 'tasks');
+    fs.mkdirSync(path.dirname(transcriptFile), { recursive: true });
+    fs.mkdirSync(tasksDir, { recursive: true });
+    // Orphaned log with no transcript start step (startedAt: null) must never reconcile a call.
+    fs.writeFileSync(path.join(tasksDir, 'task-1.log'), 'orphan output\n');
+    const writeSteps = (rows) => {
+        fs.writeFileSync(transcriptFile, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    };
+    await session.prompt('run npm test first');
+    await until(() => assistantText(messages(events, 'assistant')).includes('Running background test.'));
+    const run1At = Date.now();
+    const sid = session.nativeSessionId;
+    // Earlier finished runs of the exact same command within 60s:
+    // - task-2 started 20s ago (outside tightened -5s/+15s start window)
+    // - task-3 started 4s ago but finished 2.5s ago (< tracked.startedAt - 2_000)
+    // - task-4 started 1s ago (completed with exit 7) alongside task-5 (currently running)
+    const t20 = new Date(run1At - 20_000).toISOString();
+    const t15 = new Date(run1At - 15_000).toISOString();
+    const t4 = new Date(run1At - 4_000).toISOString();
+    const t25 = new Date(run1At - 2_500).toISOString();
+    const t1 = new Date(run1At - 1_000).toISOString();
+    const t05 = new Date(run1At - 500).toISOString();
+    const tNow = new Date(run1At).toISOString();
+    const baseSteps = [
+        { step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: t20, tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('npm test'), WaitMsBeforeAsync: '5000' } }] },
+        { step_index: 2, type: 'GENERIC', status: 'RUNNING', created_at: t20, content: `Tool is running as a background task with task id: ${sid}/task-2` },
+        { step_index: 3, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: t15, content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${t15} sender=${sid}/task-2 priority=MESSAGE_PRIORITY_LOW content=Task id "${sid}/task-2" finished with result:\nCommand exited with code 0.\n</SYSTEM_MESSAGE>` },
+        { step_index: 4, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: t4, tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('npm test'), WaitMsBeforeAsync: '5000' } }] },
+        { step_index: 5, type: 'GENERIC', status: 'RUNNING', created_at: t4, content: `Tool is running as a background task with task id: ${sid}/task-3` },
+        { step_index: 6, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: t25, content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${t25} sender=${sid}/task-3 priority=MESSAGE_PRIORITY_LOW content=Task id "${sid}/task-3" finished with result:\nCommand exited with code 0.\n</SYSTEM_MESSAGE>` },
+    ];
+    writeSteps(baseSteps);
+    await (0, promises_1.setTimeout)(160);
+    assert.equal(session.hasActiveToolWork, true, 'older finished runs within 60s must not false-close the new call');
+    assert.equal(eventCount(events, 'tool_execution_end'), 0);
+    // Even with a completed candidate inside the window (task-4), an active running candidate (task-5) blocks closing.
+    const withRunningSteps = [
+        ...baseSteps,
+        { step_index: 7, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: t1, tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('npm test'), WaitMsBeforeAsync: '5000' } }] },
+        { step_index: 8, type: 'GENERIC', status: 'RUNNING', created_at: t1, content: `Tool is running as a background task with task id: ${sid}/task-4` },
+        { step_index: 9, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: t05, content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${t05} sender=${sid}/task-4 priority=MESSAGE_PRIORITY_LOW content=Task id "${sid}/task-4" finished with result:\nCommand exited with code 7.\n</SYSTEM_MESSAGE>` },
+        { step_index: 10, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: tNow, tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('npm test'), WaitMsBeforeAsync: '5000' } }] },
+        { step_index: 11, type: 'GENERIC', status: 'RUNNING', created_at: tNow, content: `Tool is running as a background task with task id: ${sid}/task-5` },
+    ];
+    writeSteps(withRunningSteps);
+    await (0, promises_1.setTimeout)(160);
+    assert.equal(session.hasActiveToolWork, true, 'running matching candidate must block closing');
+    assert.equal(eventCount(events, 'tool_execution_end'), 0);
+    // Complete task-5: newest candidate (task-5, exit 0) reconciles once and refreshes lastOutputAt / lastOutputWasProse = false.
+    const tDone = new Date().toISOString();
+    writeSteps([
+        ...withRunningSteps,
+        { step_index: 12, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: tDone, content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${tDone} sender=${sid}/task-5 priority=MESSAGE_PRIORITY_LOW content=Task id "${sid}/task-5" finished with result:\nCommand exited with code 0.\n</SYSTEM_MESSAGE>` },
+    ]);
+    await until(() => eventCount(events, 'tool_execution_end') === 1, 5000);
+    const reconciledAt = Date.now();
+    const firstEnd = asRecord(events.find(e => e.event === 'tool_execution_end').data);
+    assert.equal(firstEnd.isError, false, 'picked newest candidate task-5 (exit 0), not older task-4 (exit 7)');
+    assert.match(String(blockAt(asRecord(firstEnd.result).content).text ?? ''), /exited with code 0/);
+    assert.equal(session.hasActiveToolWork, false);
+    // Reconciliation refreshed lastOutputAt and reset lastOutputWasProse = false, so the turn
+    // stays alive past the 60ms short window until the 350ms unfinished-idle window expires.
+    await (0, promises_1.setTimeout)(140);
+    assert.equal(session.turnInProgress, true, 'reconciled tool resets prose state and waits unfinished-idle window');
+    assert.equal(eventCount(events, 'turn_end'), 0);
+    await until(() => eventCount(events, 'turn_end') === 1, 5000);
+    assert.ok(turnEndedAt(events, times) - reconciledAt >= 280, 'waited full unfinished-idle window after reconciliation');
+    // Re-running the exact same command immediately afterwards must NOT be closed by already-reconciled task-5.
+    writeSteps([
+        { step_index: 10, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: new Date().toISOString(), tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('npm test'), WaitMsBeforeAsync: '5000' } }] },
+        { step_index: 11, type: 'GENERIC', status: 'RUNNING', created_at: new Date().toISOString(), content: `Tool is running as a background task with task id: ${sid}/task-5` },
+        { step_index: 12, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: new Date().toISOString(), content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${new Date().toISOString()} sender=${sid}/task-5 priority=MESSAGE_PRIORITY_LOW content=Task id "${sid}/task-5" finished with result:\nCommand exited with code 0.\n</SYSTEM_MESSAGE>` },
+    ]);
+    await session.prompt('run npm test second');
+    await until(() => session.hasActiveToolWork);
+    await (0, promises_1.setTimeout)(160);
+    assert.equal(session.hasActiveToolWork, true, 'already-reconciled task id must not close a subsequent re-run');
+    assert.equal(eventCount(events, 'tool_execution_end'), 1);
+    await session.abort();
+    // Workflow reconciliation requires matching title/description when both are non-empty.
+    await session.prompt('run workflow audit');
+    await until(() => session.hasActiveToolWork);
+    const wfIso = new Date().toISOString();
+    writeSteps([
+        { step_index: 20, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: wfIso, tool_calls: [{ name: 'run_workflow', args: { Description: JSON.stringify('Other workflow') } }] },
+        { step_index: 21, type: 'GENERIC', status: 'DONE', created_at: wfIso, content: `Task id: ${sid}/task-21` },
+        { step_index: 22, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: wfIso, content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${wfIso} sender=${sid}/task-21 priority=MESSAGE_PRIORITY_LOW content=Task id "${sid}/task-21" finished with result:\nCommand exited with code 0.\n</SYSTEM_MESSAGE>` },
+    ]);
+    await (0, promises_1.setTimeout)(160);
+    assert.equal(session.hasActiveToolWork, true, 'mismatched workflow description must not close open run_workflow');
+    writeSteps([
+        { step_index: 23, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: wfIso, tool_calls: [{ name: 'run_workflow', args: { Description: JSON.stringify('Audit modules') } }] },
+        { step_index: 24, type: 'GENERIC', status: 'DONE', created_at: wfIso, content: `Task id: ${sid}/task-24` },
+        { step_index: 25, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: wfIso, content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${wfIso} sender=${sid}/task-24 priority=MESSAGE_PRIORITY_LOW content=Task id "${sid}/task-24" finished with result:\nCommand exited with code 0.\n</SYSTEM_MESSAGE>` },
+    ]);
+    await until(() => eventCount(events, 'tool_execution_end') === 2, 5000);
+    assert.equal(session.hasActiveToolWork, false, 'matching workflow description reconciles cleanly');
+    await session.abort();
+});
+test('respondExtensionUI refreshes lastOutputAt, resets prose state, and re-arms the autonomous idle timer', async (t) => {
+    withEnv(t, {
+        PI_DISH_AGY_AUTONOMOUS_IDLE_MS: '60',
+        PI_DISH_AGY_UNFINISHED_IDLE_MS: '350',
+        FAKE_AGY_FINAL_DELAY_MS: '180',
+    });
+    const session = await launch('autonomous-permission');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('build and deploy');
+    await until(() => events.some(e => e.event === 'extension_ui_request' && asRecord(e.data).method === 'select'), 5000);
+    const request = asRecord(events.find(e => e.event === 'extension_ui_request' && asRecord(e.data).method === 'select').data);
+    // Wait longer than the entire unfinished-idle window while the dialog is open so
+    // the pre-dialog lastOutputAt is stale and lastOutputWasProse is true.
+    await (0, promises_1.setTimeout)(400);
+    assert.equal(session.turnInProgress, true, 'open dialog holds the autonomous turn alive');
+    assert.equal(eventCount(events, 'turn_end'), 0);
+    await session.respondExtensionUI(String(request.id), { value: 'Allow' });
+    // Fake agent waits 180ms (> 60ms short idle window, < 350ms unfinished window) before replying.
+    await (0, promises_1.setTimeout)(110);
+    assert.equal(session.turnInProgress, true, 'respondExtensionUI gives the autonomous turn a fresh unfinished-idle grace period');
+    assert.equal(eventCount(events, 'turn_end'), 0);
+    await until(() => eventCount(events, 'turn_end') > 0, 5000);
+    assert.deepEqual(events.map(e => e.event).filter(name => name === 'turn_start' || name === 'turn_end'), ['turn_start', 'turn_end'], 'post-approval reply stays in the same turn');
+    assert.match(assistantText(messages(events, 'assistant')), /Approved:allow\./);
+});
+test('speculative foreign notifications during openSideSession isolate in memory without persisting to side-chats.json', async (t) => {
+    const session = await launch('side-speculative-open');
+    cleanup(t, session);
+    const events = capture(session);
+    const speculativeSid = '33333333-3333-4333-8333-333333333333';
+    const sideId = await session.openSideSession();
+    await (0, promises_1.setTimeout)(30);
+    assert.equal(eventCount(events, 'message_start'), 0, 'speculative foreign frame did not open a main assistant message');
+    assert.equal(eventCount(events, 'message_update'), 0, 'speculative foreign frame did not leak to main');
+    const rawMirror = fs.readFileSync(session.sessionFile, 'utf8');
+    assert.doesNotMatch(rawMirror, /SPECULATIVE FOREIGN CHUNK/);
+    const persistedIds = acp.readAgySideChatIds();
+    assert.equal(persistedIds.has(speculativeSid), false, 'speculative foreign sid must not be persisted to side-chats.json');
+    assert.equal(persistedIds.has(sideId), true, 'confirmed side-chat id from session/new is persisted');
+    await session.closeSideSession(sideId);
+});
+test('unknown live foreign session notifications and requests never leak into the adopted main session', async (t) => {
+    const session = await launch('foreign-live');
+    cleanup(t, session);
+    const events = capture(session);
+    const foreignSid = '44444444-4444-4444-8444-444444444444';
+    await session.prompt('check foreign isolation');
+    await until(() => eventCount(events, 'turn_end') === 1, 5000);
+    const text = assistantText(messages(events, 'assistant'));
+    assert.doesNotMatch(text, /FOREIGN LEAK CHUNK/);
+    assert.match(text, /empty-sid-ok/, 'updates with empty sessionId still route to main');
+    assert.notEqual(session.state.sessionName, 'Foreign Title', 'foreign session_info_update must not overwrite main title');
+    const uiDialogs = events.filter(e => e.event === 'extension_ui_request' && (asRecord(e.data).method === 'select' || asRecord(e.data).method === 'ask'));
+    assert.equal(uiDialogs.length, 0, 'foreign permission/elicitation requests must not open dialogs on main');
+    assert.equal(session.extUIState.dialogs.size, 0);
+    const match = /foreign-responses:(\{.*\})/.exec(text);
+    assert.ok(match, `expected recorded foreign responses in reply, got: ${text}`);
+    const recorded = asRecord(JSON.parse(match[1]));
+    assert.deepEqual(asRecord(recorded.perm).result, { outcome: { outcome: 'cancelled' } });
+    assert.deepEqual(asRecord(recorded.elicit).result, { action: 'cancel' });
+    assert.equal(asRecord(asRecord(recorded.unknown).error).code, -32601);
+    const rawMirror = fs.readFileSync(session.sessionFile, 'utf8');
+    assert.doesNotMatch(rawMirror, /FOREIGN LEAK CHUNK|Foreign Title/);
+    assert.equal(acp.readAgySideChatIds().has(foreignSid), false, 'unknown foreign sid is not persisted as a side chat');
 });
