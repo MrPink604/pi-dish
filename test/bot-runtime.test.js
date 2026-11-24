@@ -1513,6 +1513,9 @@ test('ignoring the 90% rescue turn force-closes after one turn with an unsaved-n
     const ignoredMarker = ignoringBot.mirrorLines().find(line => line.customType === 'bot-context-window');
     assert.match(textOf(ignoredMarker), /WARNING: Window 1 was closed at the context limit without saving your notebook in that window\./);
     assert.match(textOf(ignoredMarker), /history read or search on window 1/);
+    assert.match(textOf(ignoredMarker), /Latest request: Heavy work /);
+    assert.doesNotMatch(textOf(ignoredMarker), /Latest request: \[pi-dish: this context window is/);
+    assert.doesNotMatch(textOf(ignoredMarker), /limit: \[pi-dish: this context window is/);
     // Case 2: ~98% (>= HARD_FORCED_RATIO) unsaved -> skips rescue turn, force-closes immediately with WARNING.
     const hardBot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
     hardBot.respond(hardBot.faux.fauxAssistantMessage('Spiked past 97%.'));

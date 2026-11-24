@@ -105,6 +105,7 @@ export type BotNoticeKind =
   | 'ci'
   | 'nudge'
   | 'context-window'
+  | 'context-limit'
   | 'purpose'
   | 'forked'
   | 'restart';
@@ -317,6 +318,25 @@ export function parseInjectedBotMessage(customType: string | undefined, rawText:
       icon: '↻',
       label,
       meta: ev?.idleRollover ? (expiry ? `rolled over before cache expiry at ${expiry}` : 'rolled over while idle') : undefined,
+      body,
+      collapsible: !!body,
+      defaultOpen: false,
+    };
+  }
+
+  // 7b. Context-limit rescue warning before forced rollover
+  if (customType === 'bot-context-limit') {
+    const pctMatch = /(\d+)% full/.exec(text);
+    const pct = ev?.percent ?? (pctMatch ? Number(pctMatch[1]) : undefined);
+    const win = ev?.window;
+    const body = text.replace(/^\[pi-dish:\s*/, '').replace(/\]$/, '').trim();
+    return {
+      kind: 'context-limit',
+      icon: '⚠',
+      label: 'Context limit',
+      status: pct !== undefined ? `${pct}% full` : 'near limit',
+      statusTone: 'warn',
+      meta: win !== undefined ? `window ${win}` : undefined,
       body,
       collapsible: !!body,
       defaultOpen: false,

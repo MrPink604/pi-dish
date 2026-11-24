@@ -197,6 +197,8 @@ export interface HandoffInput {
 }
 /** An idle rollover's handoff quotes at most this much of the latest request; history has the rest. */
 export declare const IDLE_HANDOFF_REQUEST_CHARS = 1500;
+/** Any other rollover caps a giant latest request so the new window cannot overflow on turn 1; history has the rest. */
+export declare const MAX_HANDOFF_REQUEST_CHARS = 16000;
 /** At most `chars` code units of `text`, never ending between the two halves of a surrogate pair. */
 export declare function cutText(text: string, chars: number): string;
 /**

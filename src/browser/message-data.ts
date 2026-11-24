@@ -14,6 +14,8 @@ export interface BotEventDetails {
   readonly routineName?: string; readonly parentName?: string; readonly to?: string;
   /** An idle rollover's window marker: it opened before the prompt cache expired, at `expiresAt`. */
   readonly expiresAt?: number; readonly idleRollover?: boolean;
+  /** Context-limit rescue warning metadata before forced rollover. */
+  readonly window?: number; readonly percent?: number;
 }
 export interface MessageDetails { readonly notes?: readonly AdvisorNote[]; readonly jobs?: readonly { readonly label?: string; readonly jobId?: string; readonly type?: string; readonly status?: string; readonly agentId?: string; readonly durationMs?: number }[]; readonly from?: string; readonly message?: string; readonly botChange?: BotChange; readonly botEvent?: BotEventDetails }
 export interface RenderMessage {
@@ -70,6 +72,7 @@ function decodeBotEvent(details: Record<string, unknown>): BotEventDetails | und
     fromName: string(details.fromName), messageId: number(details.messageId), hop: number(details.hop),
     question: string(details.question), routineName: string(details.routineName), parentName: string(details.parentName), to: string(details.to),
     expiresAt: number(details.expiresAt), idleRollover: details.idleRollover === true ? true : undefined,
+    window: number(details.window), percent: number(details.percent),
   };
   return Object.values(event).some(v => v !== undefined) ? event : undefined;
 }

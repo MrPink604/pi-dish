@@ -538,6 +538,8 @@ export interface HandoffInput {
 
 /** An idle rollover's handoff quotes at most this much of the latest request; history has the rest. */
 export const IDLE_HANDOFF_REQUEST_CHARS = 1_500;
+/** Any other rollover caps a giant latest request so the new window cannot overflow on turn 1; history has the rest. */
+export const MAX_HANDOFF_REQUEST_CHARS = 16_000;
 
 /** At most `chars` code units of `text`, never ending between the two halves of a surrogate pair. */
 export function cutText(text: string, chars: number): string {
@@ -564,7 +566,8 @@ export function composeHandoff({ windowNumber, closed, tail, request, workers, f
     lines.push('', 'The end of the last window:');
     for (const message of tail) lines.push(`${message.role}: ${message.text}`);
   }
-  const excerpt = request !== null && idle && request.length > IDLE_HANDOFF_REQUEST_CHARS ? cutText(request, IDLE_HANDOFF_REQUEST_CHARS) : null;
+  const requestCap = idle ? IDLE_HANDOFF_REQUEST_CHARS : MAX_HANDOFF_REQUEST_CHARS;
+  const excerpt = request !== null && request.length > requestCap ? cutText(request, requestCap) : null;
   const quoted = excerpt !== null
     ? `${excerpt}… [the first ${excerpt.length} of ${request!.length} characters; history read ${windowNumber - 1} has all of it]`
     : request;
@@ -1042,12 +1045,13 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       ...(notebookUnsaved ? { notebookUnsaved: true } : {}),
       ...(close.idle ? { idle: true } : {}),
     });
-    const request = window.find(entry => Object.hasOwn(INPUT_KINDS, entry.kind));
+    const isHandoffInput = (kind: string) => Object.hasOwn(INPUT_KINDS, kind) && kind !== 'bot.limit';
+    const request = window.find(entry => isHandoffInput(entry.kind));
     const requestText = request ? messageTextNotingImages(entryMessage(request)) : null;
     // An idle handoff quotes the latest request once, as the latest request (its start, if long), not in the tail too.
     const quotedBelow = close.idle && requestText !== null;
     const tail = window
-      .filter(entry => Object.hasOwn(INPUT_KINDS, entry.kind) || entry.kind === 'pi.assistant')
+      .filter(entry => isHandoffInput(entry.kind) || entry.kind === 'pi.assistant')
       .map(entry => ({
         role: roleOf(entry.kind),
         text: quotedBelow && entry === request ? '(the latest request, quoted below)' : messageTextNotingImages(entryMessage(entry)).trim(),

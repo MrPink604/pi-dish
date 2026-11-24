@@ -143,6 +143,26 @@ test('parseInjectedBotMessage handles every injected bot kind (custom and user-r
 
   const restart = parseInjectedBotMessage('bot-restart', 'Restarted onto new pi-dish code.', { from: 'abc', botEvent: { to: 'def' } });
   assert.ok(restart && restart.kind === 'restart' && restart.quiet === true && restart.meta === 'build abc → def');
+
+  const limitMsg = decodeRenderMessage({
+    role: 'custom',
+    customType: 'bot-context-limit',
+    content: [{ type: 'text', text: '[pi-dish: this context window is 92% full and your notebook has not been saved in this window.]' }],
+    details: { window: 2, percent: 92 },
+  });
+  assert.equal(limitMsg.details?.botEvent?.window, 2);
+  assert.equal(limitMsg.details?.botEvent?.percent, 92);
+  const limit = parseInjectedBotMessage(
+    'bot-context-limit',
+    '[pi-dish: this context window is 92% full and your notebook has not been saved in this window.]',
+    limitMsg.details,
+  );
+  assert.ok(limit && limit.kind === 'context-limit');
+  assert.equal(limit.label, 'Context limit');
+  assert.equal(limit.status, '92% full');
+  assert.equal(limit.statusTone, 'warn');
+  assert.equal(limit.meta, 'window 2');
+  assert.equal(limit.defaultOpen, false);
 });
 
 test('codemode result parsing, output formatting, bot tool bodies and places change summaries', () => {
