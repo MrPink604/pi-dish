@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import net = require('net');
 import os = require('os');
 import path = require('path');
+import { StringDecoder } from 'string_decoder';
 import { BotMirror } from './bot-mirror';
 import type { BotRegistry, BotRow } from './bot-registry';
 import { getHarness } from './harnesses';
@@ -27,6 +28,7 @@ import { record as isRecord } from './helper-values';
 export function deliverToBot(botId: string, delivery: Record<string, unknown>, timeoutMs = 15_000): Promise<{ queued: boolean } | null> {
   return new Promise((resolve) => {
     const id = crypto.randomUUID();
+    const decoder = new StringDecoder('utf8');
     let buffer = '';
     let settled = false;
     const sock = net.connect(relaySocketPath(botId));
@@ -42,7 +44,7 @@ export function deliverToBot(botId: string, delivery: Record<string, unknown>, t
     sock.on('close', () => done(null));
     sock.on('connect', () => sock.write(JSON.stringify({ ...delivery, id, command: 'deliver' }) + '\n'));
     sock.on('data', (chunk) => {
-      buffer += chunk.toString('utf8');
+      buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
       for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);

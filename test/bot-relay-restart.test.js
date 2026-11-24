@@ -21,6 +21,7 @@ const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
 const test_types_js_1 = require("./test-types.js");
 const test_env_js_1 = require("./test-env.js");
+const relay_socket_1 = require("../lib/relay-socket");
 const SERVER = path.join(__dirname, '..', 'server.js');
 const MODELS = path.join(__dirname, 'fixtures', 'bot-scripted-models.js');
 const children = new Set();
@@ -370,5 +371,58 @@ test('prompt and steer to a busy bot report queued: false so the UI does not ent
     await until(() => said(home, fleet.id, 'echo 1: First turn.') === 1
         && said(home, fleet.id, 'echo 3: Urgent steer.') === 1, 'the held turn and queued messages are answered');
     assert.deepEqual(chat(home, fleet.id).filter(entry => entry.kind === 'user').map(entry => entry.text), ['First turn.', 'Second message.', 'Urgent steer.']);
+    await server.stop();
+});
+test('a bot relay decodes multi-byte UTF-8 frames split across chunks and recreates an externally deleted claim', { timeout: 180_000 }, async () => {
+    const home = makeHome();
+    const port = await freePort();
+    const server = await boot(home, port);
+    const fleet = await liveFleet(server, home);
+    // 1. Delete the registry claim externally while the bot is idle; the relay must restore it on its periodic tick.
+    const claimPath = path.join(home, '.pi', 'dish', 'sessions', `bot-${fleet.id}.json`);
+    assert.ok(fs.existsSync(claimPath));
+    fs.unlinkSync(claimPath);
+    await until(() => fs.existsSync(claimPath), 'relay recreates an externally deleted claim file', 15_000);
+    assert.equal((0, test_types_js_1.record)(JSON.parse(fs.readFileSync(claimPath, 'utf8'))).pid, fleet.pid);
+    // 2. Send a prompt containing 4-byte UTF-8 split across socket chunks directly over the relay Unix socket.
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+    const sockPath = (0, relay_socket_1.relaySocketPath)(fleet.id);
+    if (prevHome === undefined)
+        delete process.env.HOME;
+    else
+        process.env.HOME = prevHome;
+    const text = 'Split UTF-8 🚀 日本語 test';
+    const frame = Buffer.from(JSON.stringify({ id: 'utf8-1', command: 'prompt', message: text }) + '\n', 'utf8');
+    const emojiIdx = frame.indexOf(Buffer.from('🚀', 'utf8'));
+    assert.ok(emojiIdx > 0);
+    const response = await new Promise((resolve, reject) => {
+        const sock = net.connect(sockPath);
+        let raw = '';
+        const timer = setTimeout(() => { sock.destroy(); reject(new Error('timed out waiting for relay response')); }, 15_000);
+        sock.on('error', (err) => { clearTimeout(timer); reject(err); });
+        sock.on('connect', () => {
+            sock.write(frame.subarray(0, emojiIdx + 2));
+            setTimeout(() => sock.write(frame.subarray(emojiIdx + 2)), 20);
+        });
+        sock.on('data', (chunk) => {
+            raw += chunk.toString('utf8');
+            for (let nl = raw.indexOf('\n'); nl >= 0; nl = raw.indexOf('\n')) {
+                const line = raw.slice(0, nl).trim();
+                raw = raw.slice(nl + 1);
+                if (!line)
+                    continue;
+                const parsed = (0, test_types_js_1.record)(JSON.parse(line));
+                if (parsed.type === 'response' && parsed.id === 'utf8-1') {
+                    clearTimeout(timer);
+                    sock.destroy();
+                    resolve(parsed);
+                    return;
+                }
+            }
+        });
+    });
+    assert.equal(response.success, true, 'split UTF-8 JSON command succeeds');
+    await until(() => said(home, fleet.id, `echo 1: ${text}`) === 1, 'bot receives uncorrupted multi-byte UTF-8 text');
     await server.stop();
 });

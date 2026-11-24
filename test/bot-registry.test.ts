@@ -1,6 +1,7 @@
 import test = require('node:test');
 import assert = require('node:assert');
 import fs = require('node:fs');
+import net = require('node:net');
 import os = require('node:os');
 import path = require('node:path');
 import { spawn } from 'node:child_process';
@@ -9,7 +10,8 @@ import type { BotRegistry, BotRow } from '../lib/bot-registry';
 import type { RouteHandler } from '../lib/http-boundary';
 const { createBotHandlers }: typeof import('../lib/bot-handlers') = require('../lib/bot-handlers');
 const { openBotRegistry, validateBotPatch, DEFAULT_BOT_MODEL }: typeof import('../lib/bot-registry') = require('../lib/bot-registry');
-const { startBots, claimBotRelay, claimBotRelayWhenFree, deliverStartingBot, liveBotRelay }: typeof import('../lib/bot-supervisor') = require('../lib/bot-supervisor');
+const { startBots, claimBotRelay, claimBotRelayWhenFree, deliverStartingBot, deliverToBot, liveBotRelay }: typeof import('../lib/bot-supervisor') = require('../lib/bot-supervisor');
+const { relaySocketPath }: typeof import('../lib/relay-socket') = require('../lib/relay-socket');
 const { processIdentity }: typeof import('../lib/process-identity') = require('../lib/process-identity');
 const { encodeSessionKey }: typeof import('../lib/session-key') = require('../lib/session-key');
 
@@ -409,4 +411,41 @@ test('a bot sees itself, its ancestors and its descendants on the roster, with h
   assert.equal((shown.body.bot as BotRow).identity, 'You are Backups.');
   assert.deepEqual((shown.body.revisions as Record<string, unknown>[]).map(row => [row.revision, row.by, row.changes]),
     [[1, 'user', ['created']], [2, 'Fleet', ['name: "Backups" → "Archive"']]]);
+});
+
+test('deliverToBot decodes multi-byte UTF-8 responses split across socket chunks', async t => {
+  const sockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-sock-'));
+  const prevSockDir = process.env.PI_DISH_SOCKET_DIR;
+  process.env.PI_DISH_SOCKET_DIR = sockDir;
+  t.after(() => {
+    if (prevSockDir === undefined) delete process.env.PI_DISH_SOCKET_DIR;
+    else process.env.PI_DISH_SOCKET_DIR = prevSockDir;
+    fs.rmSync(sockDir, { recursive: true, force: true });
+  });
+
+  const botId = 'utf8-split-bot';
+  const sockPath = relaySocketPath(botId);
+  const server = net.createServer((conn) => {
+    let raw = '';
+    conn.on('data', (chunk) => {
+      raw += chunk.toString('utf8');
+      const nl = raw.indexOf('\n');
+      if (nl < 0) return;
+      const cmd = JSON.parse(raw.slice(0, nl)) as { id: string };
+      // Embed a 4-byte UTF-8 character (🚀) and split the buffer right in the middle of it.
+      const payload = Buffer.from(JSON.stringify({ type: 'response', id: cmd.id, command: 'deliver', success: true, data: { queued: true, note: '🚀日本語' } }) + '\n', 'utf8');
+      const emojiIdx = payload.indexOf(Buffer.from('🚀', 'utf8'));
+      assert.ok(emojiIdx > 0);
+      conn.write(payload.subarray(0, emojiIdx + 2));
+      setTimeout(() => conn.write(payload.subarray(emojiIdx + 2)), 15);
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(sockPath, () => resolve());
+  });
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+
+  const result = await deliverToBot(botId, { kind: 'routine', requestId: 'r1', text: 'hi', data: {} }, 5000);
+  assert.deepEqual(result, { queued: true });
 });

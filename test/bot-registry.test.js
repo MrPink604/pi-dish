@@ -4,13 +4,15 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
 const node_events_1 = require("node:events");
 const { createBotHandlers } = require('../lib/bot-handlers');
 const { openBotRegistry, validateBotPatch, DEFAULT_BOT_MODEL } = require('../lib/bot-registry');
-const { startBots, claimBotRelay, claimBotRelayWhenFree, deliverStartingBot, liveBotRelay } = require('../lib/bot-supervisor');
+const { startBots, claimBotRelay, claimBotRelayWhenFree, deliverStartingBot, deliverToBot, liveBotRelay } = require('../lib/bot-supervisor');
+const { relaySocketPath } = require('../lib/relay-socket');
 const { processIdentity } = require('../lib/process-identity');
 const { encodeSessionKey } = require('../lib/session-key');
 function tempRegistry(t) {
@@ -366,4 +368,41 @@ test('a bot sees itself, its ancestors and its descendants on the roster, with h
     const shown = await call(handlers.rosterShow, { id: fleet.id, bot: 'archive' });
     assert.equal(shown.body.bot.identity, 'You are Backups.');
     assert.deepEqual(shown.body.revisions.map(row => [row.revision, row.by, row.changes]), [[1, 'user', ['created']], [2, 'Fleet', ['name: "Backups" → "Archive"']]]);
+});
+test('deliverToBot decodes multi-byte UTF-8 responses split across socket chunks', async (t) => {
+    const sockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-sock-'));
+    const prevSockDir = process.env.PI_DISH_SOCKET_DIR;
+    process.env.PI_DISH_SOCKET_DIR = sockDir;
+    t.after(() => {
+        if (prevSockDir === undefined)
+            delete process.env.PI_DISH_SOCKET_DIR;
+        else
+            process.env.PI_DISH_SOCKET_DIR = prevSockDir;
+        fs.rmSync(sockDir, { recursive: true, force: true });
+    });
+    const botId = 'utf8-split-bot';
+    const sockPath = relaySocketPath(botId);
+    const server = net.createServer((conn) => {
+        let raw = '';
+        conn.on('data', (chunk) => {
+            raw += chunk.toString('utf8');
+            const nl = raw.indexOf('\n');
+            if (nl < 0)
+                return;
+            const cmd = JSON.parse(raw.slice(0, nl));
+            // Embed a 4-byte UTF-8 character (🚀) and split the buffer right in the middle of it.
+            const payload = Buffer.from(JSON.stringify({ type: 'response', id: cmd.id, command: 'deliver', success: true, data: { queued: true, note: '🚀日本語' } }) + '\n', 'utf8');
+            const emojiIdx = payload.indexOf(Buffer.from('🚀', 'utf8'));
+            assert.ok(emojiIdx > 0);
+            conn.write(payload.subarray(0, emojiIdx + 2));
+            setTimeout(() => conn.write(payload.subarray(emojiIdx + 2)), 15);
+        });
+    });
+    await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(sockPath, () => resolve());
+    });
+    t.after(() => new Promise(resolve => server.close(() => resolve())));
+    const result = await deliverToBot(botId, { kind: 'routine', requestId: 'r1', text: 'hi', data: {} }, 5000);
+    assert.deepEqual(result, { queued: true });
 });

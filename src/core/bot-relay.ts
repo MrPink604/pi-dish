@@ -18,6 +18,7 @@ import path = require('path');
 import crypto = require('crypto');
 import { execFile } from 'child_process';
 import { once } from 'events';
+import { StringDecoder } from 'string_decoder';
 import { openBotRegistry, type BotRow } from './bot-registry';
 import { BotMirror, readBotMirrorHeader } from './bot-mirror';
 import { botImages, openBotModels, openBotRuntime, type BotRuntime, type HubApi, type SessionsPort } from './bot-runtime';
@@ -196,13 +197,14 @@ async function main(): Promise<void> {
   function writeClaim(): void {
     if (!socketReady) return;
     try {
+      const file = path.join(REGISTRY_DIR, `bot-${bot.id}.json`);
       const next = claim();
       const body = JSON.stringify(next);
-      if (body === lastClaimBody) return;
+      if (body === lastClaimBody && fs.existsSync(file)) return;
       fs.mkdirSync(REGISTRY_DIR, { recursive: true });
       // Replace atomically so concurrent scanRegistry() reads never observe a
       // truncated claim file and cache the live bot as absent for 500ms.
-      replaceFile(path.join(REGISTRY_DIR, `bot-${bot.id}.json`),
+      replaceFile(file,
         JSON.stringify({ ...next, updatedAt: new Date().toISOString() }, null, 2));
       lastClaimBody = body;
     } catch (error) {
@@ -283,9 +285,10 @@ async function main(): Promise<void> {
     clients.add(sock);
     sock.on('close', () => clients.delete(sock));
     sock.on('error', () => {});
+    const decoder = new StringDecoder('utf8');
     let buffer = '';
     sock.on('data', (chunk) => {
-      buffer += chunk.toString('utf8');
+      buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
       let newline = buffer.indexOf('\n');
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim();
@@ -401,8 +404,9 @@ async function main(): Promise<void> {
       row = nextRow;
       runtime?.reconsiderIdle();
     }
-    if (current.name === mirror.name) return;
-    mirror.appendName(mirror.lastEntryId, current.name);
+    if (current.name !== mirror.name) {
+      mirror.appendName(mirror.lastEntryId, current.name);
+    }
     writeClaim();
   }, 3_000).unref();
 }
