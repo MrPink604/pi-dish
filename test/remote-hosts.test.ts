@@ -764,6 +764,288 @@ test('a deployed host is uploaded once, gated by its session token and ends with
   assert.equal(uploads.length, 1);
 });
 
+/**
+ * A PATH whose `ssh` listens on the requested `-L` unix socket, splices to the
+ * local test HTTP server and announces readiness like a deployed pi-dish host.
+ */
+function fakeDeployedSshPath(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-deploy-ssh-bin-'));
+  const helper = path.join(dir, 'fake-deploy-ssh.js');
+  fs.writeFileSync(helper, [
+    'const fs = require("node:fs");',
+    'const net = require("node:net");',
+    'const args = process.argv.slice(2);',
+    'const idx = args.indexOf("-L");',
+    'const spec = idx >= 0 ? args[idx + 1] : "";',
+    'const match = /^(.+):127\\.0\\.0\\.1:(\\d+)$/.exec(spec);',
+    'if (!match) process.exit(1);',
+    'const [, sock, port] = match;',
+    'const server = net.createServer((client) => {',
+    '  const upstream = net.connect(Number(port), "127.0.0.1");',
+    '  const drop = () => { client.destroy(); upstream.destroy(); };',
+    '  client.on("error", drop);',
+    '  upstream.on("error", drop);',
+    '  client.pipe(upstream);',
+    '  upstream.pipe(client);',
+    '});',
+    'server.listen(sock, () => {',
+    '  process.stdout.write(`pi-dish running at http://127.0.0.1:${port}\\n`);',
+    '});',
+    'process.stdin.resume();',
+    'const bye = () => { try { fs.unlinkSync(sock); } catch {} process.exit(0); };',
+    'process.on("SIGTERM", bye);',
+    'process.on("SIGINT", bye);',
+    'process.stdin.on("end", bye);',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'ssh'), `#!/bin/sh\nexec ${process.execPath} ${helper} "$@"\n`, { mode: 0o755 });
+  return `${dir}:${process.env.PATH}`;
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 5000): Promise<boolean> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+  }
+  return predicate();
+}
+
+interface DeployIdleFixture {
+  remoteName: string;
+  socketPath: string;
+  sessionsChecks(): number;
+  sseResponses: Set<http.ServerResponse>;
+  upgradeSockets: Set<net.Socket>;
+  gateNextSessionsCheck(): Promise<() => void>;
+}
+
+async function withDeployIdleFixture(
+  t: test.TestContext,
+  remoteName: string,
+  fn: (fixture: DeployIdleFixture) => Promise<void>,
+): Promise<void> {
+  const sseResponses = new Set<http.ServerResponse>();
+  const upgradeSockets = new Set<net.Socket>();
+  let sessionsChecks = 0;
+  let pendingSessionsGate: { arrived: () => void; release: Promise<void> } | null = null;
+
+  const server = http.createServer((req, res) => {
+    if (req.url === '/api/sessions') {
+      sessionsChecks++;
+      const reply = () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ active: [], previous: [] }));
+      };
+      if (pendingSessionsGate) {
+        const gate = pendingSessionsGate;
+        pendingSessionsGate = null;
+        gate.arrived();
+        void gate.release.then(reply);
+      } else {
+        reply();
+      }
+      return;
+    }
+    if (req.url === '/api/stream') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      res.write(': open\n\n');
+      sseResponses.add(res);
+      res.on('close', () => sseResponses.delete(res));
+      return;
+    }
+    if (req.url === '/api/drop-before-response') {
+      req.socket.destroy();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  server.on('upgrade', (_req, socket) => {
+    const netSocket = socket as net.Socket;
+    upgradeSockets.add(netSocket);
+    netSocket.on('close', () => upgradeSockets.delete(netSocket));
+    netSocket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+  });
+  const port = await listenHttp(server);
+
+  const home = makeHome();
+  writeSettings(home, { remotes: [{ name: remoteName, sshDest: remoteName, deploy: true, remotePort: port }] });
+  const previous = { HOME: process.env.HOME, PATH: process.env.PATH };
+  process.env.HOME = home;
+  process.env.PATH = fakeDeployedSshPath();
+  // Mock only setInterval + Date so real setTimeout polls and local socket I/O run immediately.
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.now() });
+
+  const fixture: DeployIdleFixture = {
+    remoteName,
+    socketPath: remoteHosts.socketPathFor(remoteName),
+    sessionsChecks: () => sessionsChecks,
+    sseResponses,
+    upgradeSockets,
+    gateNextSessionsCheck() {
+      let arrived!: () => void;
+      let release!: () => void;
+      const arrivedPromise = new Promise<void>(resolve => { arrived = resolve; });
+      const releasePromise = new Promise<void>(resolve => { release = resolve; });
+      pendingSessionsGate = { arrived, release: releasePromise };
+      return arrivedPromise.then(() => release);
+    },
+  };
+
+  try {
+    await fn(fixture);
+  } finally {
+    for (const res of sseResponses) { try { res.destroy(); } catch {} }
+    for (const sock of upgradeSockets) { try { sock.destroy(); } catch {} }
+    remoteHosts.shutdown();
+    t.mock.timers.reset();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    process.env.HOME = previous.HOME;
+    process.env.PATH = previous.PATH;
+  }
+}
+
+test('an open SSE stream keeps a deployed ssh forward alive past the idle timeout and cleans up once closed', async (t) => {
+  await withDeployIdleFixture(t, 'deploy-sse', async (fx) => {
+    const req = await remoteHosts.request(fx.remoteName, { method: 'GET', path: '/api/stream' });
+    const responsePromise = new Promise<http.IncomingMessage>((resolve, reject) => {
+      req.on('response', resolve);
+      req.on('error', reject);
+    });
+    req.end();
+    const res = await responsePromise;
+    assert.equal(res.statusCode, 200);
+    res.setEncoding('utf8');
+
+    let received = '';
+    res.on('data', (chunk: string) => { received += chunk; });
+    assert.equal(await waitUntil(() => received.includes(': open\n\n')), true, 'initial SSE comment arrives without losing paused chunks');
+    assert.equal(fs.existsSync(fx.socketPath), true);
+
+    // Advance well past DEPLOY_IDLE_MS with no new requests started.
+    t.mock.timers.tick(remoteHosts.DEPLOY_IDLE_MS + 5 * 60_000);
+    await new Promise<void>(resolve => setTimeout(resolve, 50));
+    assert.equal(fs.existsSync(fx.socketPath), true, 'open SSE stream keeps the deployed forward alive');
+    assert.equal(fx.sessionsChecks(), 0, 'idle timer skips hostBusy while a stream is open');
+
+    // Heartbeat traffic still flows over the live tunnel after 15 idle minutes.
+    for (const serverRes of fx.sseResponses) serverRes.write('data: still-alive\n\n');
+    assert.equal(await waitUntil(() => received.includes('data: still-alive\n\n')), true);
+
+    // Close the stream and verify lastUse refreshes on close (a full idle window follows).
+    const closed = new Promise<void>(resolve => res.once('close', resolve));
+    for (const serverRes of fx.sseResponses) serverRes.end();
+    await closed;
+
+    t.mock.timers.tick(remoteHosts.DEPLOY_IDLE_MS - 60_000);
+    await new Promise<void>(resolve => setTimeout(resolve, 50));
+    assert.equal(fs.existsSync(fx.socketPath), true, 'forward stays up until DEPLOY_IDLE_MS after the stream closes');
+
+    t.mock.timers.tick(2 * 60_000);
+    assert.equal(await waitUntil(() => !fs.existsSync(fx.socketPath)), true, 'forward closes once idle after the stream ends');
+    assert.ok(fx.sessionsChecks() >= 1, 'idle teardown checks hostBusy once connections reach zero');
+  });
+});
+
+test('an upgraded WebSocket keeps a deployed ssh forward alive past the idle timeout and cleans up once closed', async (t) => {
+  await withDeployIdleFixture(t, 'deploy-ws', async (fx) => {
+    const req = await remoteHosts.request(fx.remoteName, {
+      method: 'GET', path: '/api/terminal', headers: { upgrade: 'websocket' }, upgrade: true,
+    });
+    const upgraded = new Promise<net.Socket>((resolve, reject) => {
+      req.on('upgrade', (_res, socket) => resolve(socket as net.Socket));
+      req.on('error', reject);
+    });
+    const reqClosed = new Promise<void>(resolve => {
+      if (req.closed) resolve();
+      else req.once('close', resolve);
+    });
+    req.end();
+    const clientSocket = await upgraded;
+    // ClientRequest closes immediately after upgrade; the upgraded socket owns the connection count.
+    await reqClosed;
+
+    let received = '';
+    clientSocket.setEncoding('utf8');
+    clientSocket.on('data', (chunk: string) => { received += chunk; });
+
+    t.mock.timers.tick(remoteHosts.DEPLOY_IDLE_MS + 5 * 60_000);
+    await new Promise<void>(resolve => setTimeout(resolve, 50));
+    assert.equal(fs.existsSync(fx.socketPath), true, 'open upgraded socket keeps the deployed forward alive');
+    assert.equal(fx.sessionsChecks(), 0);
+
+    for (const serverSocket of fx.upgradeSockets) serverSocket.write('pong');
+    assert.equal(await waitUntil(() => received.includes('pong')), true);
+
+    const socketClosed = new Promise<void>(resolve => clientSocket.once('close', resolve));
+    clientSocket.destroy();
+    await socketClosed;
+
+    t.mock.timers.tick(remoteHosts.DEPLOY_IDLE_MS + 60_000);
+    assert.equal(await waitUntil(() => !fs.existsSync(fx.socketPath)), true, 'forward closes once idle after the upgraded socket closes');
+    assert.ok(fx.sessionsChecks() >= 1);
+  });
+});
+
+test('pre-response failures and in-flight hostBusy races neither leak connections nor kill active streams', async (t) => {
+  await withDeployIdleFixture(t, 'deploy-leak', async (fx) => {
+    // Normal completed request boots the forward and returns activeConnections to 0.
+    const okReq = await remoteHosts.request(fx.remoteName, { method: 'GET', path: '/api/ok' });
+    await new Promise<void>((resolve, reject) => {
+      okReq.on('error', reject);
+      okReq.on('response', (res) => {
+        res.resume();
+        res.once('end', resolve);
+      });
+      okReq.end();
+    });
+
+    // Server dropping the socket before sending headers must release activeConnections.
+    const droppedReq = await remoteHosts.request(fx.remoteName, { method: 'GET', path: '/api/drop-before-response' });
+    await new Promise<void>(resolve => {
+      droppedReq.on('error', () => {});
+      droppedReq.once('close', resolve);
+      droppedReq.end();
+    });
+
+    // Destroying a request before end() must release activeConnections.
+    const abortedReq = await remoteHosts.request(fx.remoteName, { method: 'GET', path: '/api/ok' });
+    await new Promise<void>(resolve => {
+      abortedReq.on('error', () => {});
+      abortedReq.once('close', resolve);
+      abortedReq.destroy();
+    });
+
+    // Race: idleTimer begins hostBusy(), and an SSE stream opens before hostBusy() finishes.
+    const releaseGatePromise = fx.gateNextSessionsCheck();
+    t.mock.timers.tick(remoteHosts.DEPLOY_IDLE_MS + 60_000);
+    const releaseSessionsCheck = await releaseGatePromise;
+
+    const sseReq = await remoteHosts.request(fx.remoteName, { method: 'GET', path: '/api/stream' });
+    const sseRes = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      sseReq.on('response', resolve);
+      sseReq.on('error', reject);
+      sseReq.end();
+    });
+    sseRes.resume();
+
+    // Let hostBusy() resolve false now that a new stream is open: forward must stay alive.
+    releaseSessionsCheck();
+    await new Promise<void>(resolve => setTimeout(resolve, 50));
+    assert.equal(fs.existsSync(fx.socketPath), true, 'hostBusy() resolving after a new connection opened must not close the forward');
+
+    // Close the stream and confirm activeConnections returns to 0 and idle teardown succeeds.
+    const sseClosed = new Promise<void>(resolve => sseRes.once('close', resolve));
+    sseRes.destroy();
+    await sseClosed;
+
+    t.mock.timers.tick(remoteHosts.DEPLOY_IDLE_MS + 60_000);
+    assert.equal(await waitUntil(() => !fs.existsSync(fx.socketPath)), true, 'forward cleans up cleanly with zero leaked connection count');
+  });
+});
+
 // --- hub-side auth over the proxy ----------------------------------------
 
 test('a hub token gates /hosts/* exactly like /api/*', async () => {
