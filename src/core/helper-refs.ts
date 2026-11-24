@@ -152,7 +152,7 @@ export function sessionRef(session: string | { id?: string } | null | undefined,
  *  resolvable prefix and keeps `#1` out. A leading boundary is required, which
  *  excludes headings and `word#x`; backticks are deliberately not boundaries so
  *  code-quoted refs stay inert. */
-export const SESSION_REF_TOKEN_RE = /(?:^|[\s(\[{<"'])#([A-Za-z0-9][A-Za-z0-9._:/-]{3,})/g;
+export const SESSION_REF_TOKEN_RE = /(?:^|[\s(\[{<"'])#([A-Za-z0-9~][A-Za-z0-9._:/~-]{3,})/g;
 
 /** Distinct `#ref` tokens, in order of first appearance. */
 export function parseSessionRefTokens(text: unknown) {

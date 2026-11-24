@@ -5,8 +5,8 @@ import type { createDiagrams } from './diagrams';
 import { escapeHtml } from '../core/helper-format';
 import { createMathExtensions } from '../core/helper-markdown';
 import { sanitizeMarkdownUrl, diagramKindForFence, looksLikeFilePath, findPathTokens, ARTIFACT_PATH_RE } from './helper-markdown';
-import type { SessionState, SessionEntry } from './session-state';
-import { SESSION_REF_TOKEN_RE } from '../core/helper-refs';
+import type { SessionState } from './session-state';
+import { findInlineAgentRefs, matchCodeAgentRef, renderAgentRefChip, type AgentRefSession } from './agent-ref';
 import type { StreamingBlockState, StreamingFrame } from './streaming-render';
 import { record } from '../core/helper-values';
 import { createTableControls } from './table-controls';
@@ -73,7 +73,10 @@ export function createRichText(options: { document: Document; marked: MarkedRunt
   assets: ReturnType<typeof createBrowserAssets>; diagrams: ReturnType<typeof createDiagrams>; sessionState: SessionState;
   assetUrl?: (host: string | null | undefined, path: string) => string;
   retainedRoots?: () => readonly ParentNode[];
-  matchRef: (ref: string) => Pick<SessionEntry, 'id' | 'host' | 'name'> | null | undefined;
+  matchRef: (ref: string) => AgentRefSession | null | undefined;
+  isKnownHost?: (hostPart: string) => boolean;
+  contextHost?: () => string | null;
+  hydrateRefs?: (root: ParentNode) => void;
   copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void;
 }) {
   const { document, sessionState } = options;
@@ -154,35 +157,56 @@ function formatMarkdown(text: string) {
 // Resolve while rendering, not on click: retained DOM keeps the destination's
 // host even after selection changes. Fences, existing links and math stay inert.
 function linkSessionRefs(html: string) {
-  if (!html.includes('#') && !html.includes('<code>')) return html;
+  if (!html.includes('#') && !html.includes('<code>') && !html.includes('~sk1_') && !html.includes('/')) return html;
   const template = document.createElement('template'); template.innerHTML = html;
   const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
-    acceptNode: node => node.parentElement?.closest('pre, a, button, .katex, .math-block, .math-pending')
+    acceptNode: node => node.parentElement?.closest('pre, a, button, .agent-ref, .katex, .math-block, .math-pending')
       ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
   });
   const nodes: Text[] = []; while (walker.nextNode()) nodes.push(walker.currentNode as Text);
-  function link(ref: string, label: string) {
-    const session = options.matchRef(ref); if (!session) return null;
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'session-ref-link';
-    button.dataset.sessionId = session.id; button.dataset.sessionHost = session.host || '';
-    button.title = `Open session: ${session.name || ref}`; button.textContent = label;
-    return button;
+  const contextHost = options.contextHost?.() ?? sessionState.currentSession?.host ?? null;
+  const refOpts = { matchRef: options.matchRef, isKnownHost: options.isKnownHost };
+
+  function chipNode(ref: string, session: AgentRefSession | null, label: string, preserveLabel: boolean): HTMLElement | null {
+    const htmlChunk = renderAgentRefChip({
+      ref,
+      session,
+      label: preserveLabel ? label : undefined,
+      preserveLabel,
+      extraClass: 'session-ref-link',
+      contextHost,
+      titlePrefix: preserveLabel ? 'Open session' : undefined,
+    });
+    if (!htmlChunk) return null;
+    const wrap = document.createElement('template');
+    wrap.innerHTML = htmlChunk;
+    return wrap.content.firstElementChild as HTMLElement | null;
   }
+
   for (const node of nodes) {
-    if (node.parentElement?.closest('code')) {
-      const text = node.data.trim();
-      if (!/^#?[A-Za-z0-9~][A-Za-z0-9._:/~-]{3,}$/.test(text)) continue;
-      const button = link(text.replace(/^#/, ''), text); if (!button) continue;
-      node.replaceWith(node.data.slice(0, node.data.indexOf(text)), button, node.data.slice(node.data.indexOf(text) + text.length));
+    const codeParent = node.parentElement?.closest('code');
+    if (codeParent) {
+      const matched = matchCodeAgentRef(node.data, refOpts);
+      if (!matched) continue;
+      const chip = chipNode(matched.ref, matched.session, matched.token, matched.preserveLabel);
+      if (!chip) continue;
+      if (matched.replaceCode && codeParent === node.parentElement && codeParent.childNodes.length === 1) {
+        codeParent.replaceWith(chip);
+      } else {
+        const start = node.data.indexOf(matched.token);
+        node.replaceWith(node.data.slice(0, start), chip, node.data.slice(start + matched.token.length));
+      }
       continue;
     }
-    if (!node.data.includes('#')) continue;
-    const fragment = document.createDocumentFragment(); let position = 0;
-    for (const match of node.data.matchAll(SESSION_REF_TOKEN_RE)) {
-      const ref = match[1].replace(/[.:/]+$/, ''); if (ref.length < 4) continue;
-      const token = '#' + ref, button = link(ref, token); if (!button) continue;
-      const start = match.index + match[0].indexOf('#');
-      fragment.append(node.data.slice(position, start), button); position = start + token.length;
+    const found = findInlineAgentRefs(node.data, refOpts);
+    if (!found.length) continue;
+    const fragment = document.createDocumentFragment();
+    let position = 0;
+    for (const match of found) {
+      const chip = chipNode(match.ref, match.session, match.token, match.preserveLabel);
+      if (!chip) continue;
+      fragment.append(node.data.slice(position, match.start), chip);
+      position = match.end;
     }
     if (position) { fragment.append(node.data.slice(position)); node.replaceWith(fragment); }
   }
@@ -237,6 +261,7 @@ function applyHighlight(el?: ParentNode | null, videoContext?: VideoEnhanceConte
   hydrateMath(root);
   options.diagrams.render(root);
   linkifyFilePaths(root);
+  options.hydrateRefs?.(root);
   videos.enhance(root, videoContext);
   tables.enhance(root);
 }
@@ -305,7 +330,7 @@ function linkifyFilePaths(root: ParentNode) {
       acceptNode(n) {
         // .diagram-render holds an SVG: a <span> spliced into an SVG <text>
         // renders nothing, so a linkified label would silently vanish.
-        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .session-ref-link, .katex, .math-block, .math-pending, .diagram-render, .video-player')
+        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .session-ref-link, .agent-ref, .katex, .math-block, .math-pending, .diagram-render, .video-player')
           ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });

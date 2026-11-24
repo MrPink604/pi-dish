@@ -45,5 +45,6 @@ export declare function createSessionBrowseHandlers(ports: SessionBrowsePorts): 
     list: RouteHandler;
     hostHealth: RouteHandler;
     resolve: RouteHandler;
+    resolveBatch: RouteHandler;
     search: RouteHandler;
 };

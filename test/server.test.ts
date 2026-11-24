@@ -5323,6 +5323,45 @@ test('GET /api/sessions/resolve rejects unknown and too-short refs', async () =>
   assert.ok(missing.body.error);
 });
 
+test('POST /api/sessions/resolve-batch resolves exact, encoded, prefix, ambiguous, and missing ids in one call', async () => {
+  writeResolveFixture(RESOLVE_UNIQUE, 'unique ref fixture');
+  writeResolveFixture(RESOLVE_AMBIGUOUS_A, 'ambiguous ref A');
+  writeResolveFixture(RESOLVE_AMBIGUOUS_B, 'ambiguous ref B');
+  const aliasFile = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project', `${ALIAS_NATIVE_ID}.jsonl`);
+  if (!fs.existsSync(aliasFile)) {
+    fs.writeFileSync(aliasFile, [
+      { type: 'session', cwd: ompCwd, timestamp: '2026-09-05T09:07:03.291Z' },
+      { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'alias ref fixture' }], timestamp: '2026-09-05T09:07:04.000Z' } },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  }
+  await waitForSessions([SESSION_ID, RESOLVE_UNIQUE, RESOLVE_AMBIGUOUS_A, RESOLVE_AMBIGUOUS_B, ALIAS_ROUTE_ID]);
+
+  const { status, body } = await post('/api/sessions/resolve-batch', {
+    ids: [SESSION_ID, ALIAS_ROUTE_ID, 'resolveuniq', 'resolvedup', 'nosuchsessionprefix', 'bad', SESSION_ID],
+  });
+  assert.equal(status, 200);
+  const results = record(body.results);
+  const exact = record(results[SESSION_ID]);
+  assert.equal(exact.status, 'ok');
+  assert.equal(record(exact.session).id, SESSION_ID);
+  assert.equal('sessionFile' in record(exact.session), false, 'projects through sessionForClient');
+
+  const encoded = record(results[ALIAS_ROUTE_ID]);
+  assert.equal(encoded.status, 'ok');
+  assert.equal(record(encoded.session).id, ALIAS_ROUTE_ID);
+
+  const prefix = record(results.resolveuniq);
+  assert.equal(prefix.status, 'ok');
+  assert.equal(record(prefix.session).id, RESOLVE_UNIQUE);
+
+  assert.equal(record(results.resolvedup).status, 'ambiguous');
+  assert.equal(record(results.nosuchsessionprefix).status, 'not_found');
+  assert.equal('bad' in results, false, 'too-short refs are skipped');
+
+  const invalid = await post('/api/sessions/resolve-batch', { ids: 'not-an-array' });
+  assert.equal(invalid.status, 400);
+});
+
 test('GET /api/agent-docs lists the shipped topics with titles and descriptions', async () => {
   const { status, body } = await get('/api/agent-docs');
   assert.equal(status, 200);

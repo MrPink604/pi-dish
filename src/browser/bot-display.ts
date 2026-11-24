@@ -1,15 +1,13 @@
 import { escapeHtml, truncate } from '../core/helper-format';
 import { decodeRouteSessionId, SESSION_UUID_TAIL_RE } from '../core/helper-refs';
 import { record } from '../core/helper-values';
+import { renderAgentRefCard, renderAgentRefChip, type AgentRefSession } from './agent-ref';
 import { formatTime } from './helper-format';
 import type { MessageDetails } from './message-data';
 
 const OUTPUT_LIMIT = 8000;
 
-export interface MatchRefResult {
-  readonly name?: string | null;
-  readonly isActive?: boolean;
-}
+export type MatchRefResult = AgentRefSession;
 
 export type MatchRefFn = (ref: string) => MatchRefResult | null | undefined;
 
@@ -28,18 +26,24 @@ export function shortDisplayRef(raw: string): string {
   return `${host}${native}`;
 }
 
-/** Render a clickable session-ref chip that delegates to app.ts's `.session-ref-chip` handler. */
-export function renderBotRefChip(ref: string, matchRef: MatchRefFn, opts: { label?: string; extraClass?: string } = {}): string {
+/** Render a clickable session-ref chip through the shared agent-ref component. */
+export function renderBotRefChip(
+  ref: string,
+  matchRef: MatchRefFn,
+  opts: { label?: string; extraClass?: string; contextHost?: string | null } = {},
+): string {
   const clean = ref.trim();
   if (!clean) return '';
   const session = matchRef(clean);
-  const short = shortDisplayRef(clean);
-  const label = opts.label || session?.name || short;
-  const live = session?.isActive ? ' live' : '';
-  const title = [session?.name || opts.label, clean].filter((v, i, arr) => v && arr.indexOf(v) === i).join(' · ');
-  const cls = `session-ref-chip${live}${opts.extraClass ? ` ${opts.extraClass}` : ''}`;
-  return `<button type="button" class="${cls}" data-session-ref="${escapeHtml(clean)}" title="${escapeHtml(title)}">` +
-    `<span class="session-ref-dot">●</span><span class="session-ref-label">${escapeHtml(label)}</span></button>`;
+  const extraClass = ['session-ref-chip', opts.extraClass].filter(Boolean).join(' ');
+  return renderAgentRefChip({
+    ref: clean,
+    session,
+    label: opts.label,
+    preserveLabel: !!opts.label,
+    extraClass,
+    contextHost: opts.contextHost,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -79,8 +83,12 @@ export function parseUserSourceEntries(text: string): UserSourceEntry[] | null {
   return entries.length ? entries : null;
 }
 
-export function renderUserSourceHeaderHtml(entry: UserSourceEntry, matchRef: MatchRefFn): string {
-  const chip = renderBotRefChip(entry.ref, matchRef, { label: entry.title || shortDisplayRef(entry.ref), extraClass: 'user-source-chip' });
+export function renderUserSourceHeaderHtml(entry: UserSourceEntry, matchRef: MatchRefFn, contextHost?: string | null): string {
+  const chip = renderBotRefChip(entry.ref, matchRef, {
+    label: entry.title || shortDisplayRef(entry.ref),
+    extraClass: 'user-source-chip',
+    contextHost,
+  });
   const time = formatTime(entry.sentAt);
   return `<div class="user-source-bar"><span class="user-source-from">from</span>${chip}${time ? `<span class="user-source-time">${escapeHtml(time)}</span>` : ''}</div>`;
 }
@@ -161,7 +169,6 @@ export function parseInjectedBotMessage(customType: string | undefined, rawText:
       return '';
     }).trim();
     const status = normalizeWorkerStatus(heading, ev?.state);
-    const short = !isLongBody(body, 4, 280);
     return {
       kind: 'worker-report',
       icon: '⚙',
@@ -173,7 +180,7 @@ export function parseInjectedBotMessage(customType: string | undefined, rawText:
       body,
       footer: footers.join(' ') || undefined,
       collapsible: !!body,
-      defaultOpen: !!body && short,
+      defaultOpen: false,
     };
   }
 
@@ -370,7 +377,30 @@ export function renderBotNoticeHtml(notice: ParsedBotNotice, opts: {
   actionsHtml: string;
   markdown: (text: string) => string;
   matchRef: MatchRefFn;
+  contextHost?: string | null;
 }): string {
+  if (notice.kind === 'worker-report') {
+    const session = notice.ref ? opts.matchRef(notice.ref) : null;
+    const bodyHtml = notice.body ? `<div class="markdown-body">${opts.markdown(notice.body)}</div>` : '';
+    const preview = notice.collapsible ? bodyPreview(notice.body) : '';
+    return `<div${opts.attrs} class="message custom-message bot-card bot-worker-report agent-ref-message" data-timestamp="${escapeHtml(opts.timestamp)}">` +
+      renderAgentRefCard({
+        ref: notice.ref,
+        session,
+        fallbackName: notice.sender,
+        contextHost: opts.contextHost,
+        hint: { reportStatus: notice.status, reportTone: notice.statusTone },
+        time: opts.time,
+        actionsHtml: opts.actionsHtml,
+        bodyHtml,
+        bodyLabel: 'Report',
+        bodyPreview: preview,
+        bodyFooter: notice.footer,
+        bodyDefaultOpen: notice.defaultOpen,
+      }) +
+      `</div>`;
+  }
+
   if (notice.quiet) {
     return `<div${opts.attrs} class="message custom-message bot-notice bot-${notice.kind}" data-timestamp="${escapeHtml(opts.timestamp)}">` +
       `<span class="custom-message-icon">${notice.icon}</span>` +
@@ -588,6 +618,7 @@ export function botToolCallBodyHtml(
   args: Readonly<Record<string, unknown>>,
   matchRef?: MatchRefFn,
   markdown?: (text: string) => string,
+  contextHost?: string | null,
 ): string | null {
   if (!name || !BOT_TOOLS[name]) return null;
   const entries = Object.entries(args).filter(([, v]) => v !== undefined && v !== null && v !== '');
@@ -606,7 +637,7 @@ export function botToolCallBodyHtml(
     }
     if (key === 'ref' && typeof value === 'string') {
       const chip = matchRef
-        ? renderBotRefChip(value, matchRef, { label: shortDisplayRef(value) })
+        ? renderBotRefChip(value, matchRef, { contextHost })
         : `<code>${escapeHtml(shortDisplayRef(value))}</code>`;
       kvRows.push(`<div class="tool-kv-row"><span class="tool-kv-key">ref</span><span class="tool-kv-val">${chip}</span></div>`);
       continue;

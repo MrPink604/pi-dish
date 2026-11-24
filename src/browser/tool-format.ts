@@ -119,7 +119,7 @@ export function evalCodeHtml(code: string, language: string | undefined) {
 export function toolCallBodyHtml(
   name: string | undefined,
   args: Readonly<Record<string, unknown>>,
-  opts?: { matchRef?: MatchRefFn; markdown?: (text: string) => string },
+  opts?: { matchRef?: MatchRefFn; markdown?: (text: string) => string; contextHost?: string | null },
 ) {
   if ((name === 'bash' || name === 'Bash') && typeof args.command === 'string') {
     const meta: string[] = [];
@@ -146,7 +146,7 @@ export function toolCallBodyHtml(
   if (name === 'wait' && Object.keys(args).every(key => key === 'i')) {
     return typeof args.i === 'string' && args.i ? `<div class="tool-call-intent">${escapeHtml(args.i)}</div>` : '';
   }
-  const botBody = botToolCallBodyHtml(name, args, opts?.matchRef, opts?.markdown);
+  const botBody = botToolCallBodyHtml(name, args, opts?.matchRef, opts?.markdown, opts?.contextHost);
   if (botBody !== null) return botBody;
   return `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
 }

@@ -322,6 +322,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions', browseHandlers.list);
   app.get('/api/host/health', browseHandlers.hostHealth);
   app.get('/api/sessions/resolve', browseHandlers.resolve);
+  app.post('/api/sessions/resolve-batch', browseHandlers.resolveBatch);
   app.get('/api/sessions/:id/related', relationHandlers.related);
   app.get('/api/sessions/:id/lineage', relationHandlers.lineage);
   app.get('/api/sessions/:id/tasks', agySessionHandlers.tasks);

@@ -96,6 +96,11 @@ export { createComposerImages, decodeComposerImages } from './composer-images';
 export { createComposerDrafts, mergeComposerText } from './composer-drafts';
 
 export { createSessionReferences } from './session-references';
+export {
+  createAgentRefResolver, parseAgentRef, shortAgentDisplayId, isPlausibleShortSessionId,
+  matchCodeAgentRef, findInlineAgentRefs, parseSpawnWorkerResult, deriveAgentState,
+  renderAgentRefChip, renderAgentRefCard,
+} from './agent-ref';
 export { createComposerAutocomplete } from './composer-autocomplete';
 export { decodeSlashCommands, decodeFileCompletions } from './composer-autocomplete';
 

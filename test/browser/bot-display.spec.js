@@ -125,16 +125,17 @@ const fixtureBotMessages = () => {
     const changeCard = page.locator('#messages .message.bot-change');
     await (0, fixtures_js_1.expect)(changeCard).toContainText('+ bot display worktree (/home/user/pi-dish-bot-display)');
     await (0, fixtures_js_1.expect)(changeCard.locator('.bot-change-undo')).toBeVisible();
-    // 3. Injected cards: worker report (collapsed by default, expandable, clickable ref), room, answer, routine, nudge, restart.
+    // 3. Injected cards: worker report (shared agent-ref card with report collapsed under it, Open button), room, answer, routine, nudge, restart.
     const reportCard = page.locator('#messages .message.bot-worker-report');
-    await (0, fixtures_js_1.expect)(reportCard.locator('.bot-card-label')).toHaveText('Worker');
-    await (0, fixtures_js_1.expect)(reportCard.locator('.bot-card-sender')).toHaveText('audit-fleet');
-    await (0, fixtures_js_1.expect)(reportCard.locator('.bot-card-status')).toHaveText('finished');
-    await (0, fixtures_js_1.expect)(reportCard.locator('details.bot-card-details')).not.toHaveAttribute('open', '');
-    await reportCard.locator('.bot-card-header').click();
-    await (0, fixtures_js_1.expect)(reportCard.locator('details.bot-card-details')).toHaveAttribute('open', '');
-    await (0, fixtures_js_1.expect)(reportCard.locator('.bot-card-body h1')).toHaveText('Audit findings');
-    await (0, fixtures_js_1.expect)(reportCard.locator('.bot-card-footer')).toContainText('no longer watched');
+    await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-card')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-name')).toHaveText('self child transcript');
+    await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-state')).toHaveText('finished');
+    await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-open')).toBeVisible();
+    await (0, fixtures_js_1.expect)(reportCard.locator('details.agent-ref-details')).not.toHaveAttribute('open', '');
+    await reportCard.locator('.agent-ref-toggle').click();
+    await (0, fixtures_js_1.expect)(reportCard.locator('details.agent-ref-details')).toHaveAttribute('open', '');
+    await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-body h1')).toHaveText('Audit findings');
+    await (0, fixtures_js_1.expect)(reportCard.locator('.agent-ref-footer')).toContainText('no longer watched');
     const roomCard = page.locator('#messages .message.bot-room');
     await (0, fixtures_js_1.expect)(roomCard.locator('.bot-card-sender')).toContainText('Fleet');
     await (0, fixtures_js_1.expect)(roomCard.locator('.bot-card-meta')).toHaveText('#2 · hop 1/4');
@@ -205,9 +206,9 @@ const fixtureBotMessages = () => {
     });
     (0, fixtures_js_1.expect)(phoneOverflow).not.toBeNull();
     (0, fixtures_js_1.expect)(phoneOverflow.scrollWidth).toBeLessThanOrEqual(phoneOverflow.clientWidth);
-    // 7. Clicking the worker report's ref chip navigates to the referenced session.
+    // 7. Clicking the worker report's Open button navigates to the referenced session.
     await page.setViewportSize({ width: 1280, height: 900 });
-    await reportCard.locator('.bot-card-ref').click();
+    await reportCard.locator('.agent-ref-open').click();
     await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self child transcript');
     await (0, fixtures_js_1.expect)(fleet.row(fleet.self, fixtures_js_1.CHILD)).toHaveClass(/\bactive\b/);
 });

@@ -1,0 +1,221 @@
+import { test, expect, ROOT, CHILD } from './fixtures.js';
+
+const AGY_LOCAL = '~sk1_' + Buffer.from(JSON.stringify(['agy', 'd46c28bc-43d2-45e2-b941-b9f3c6099ad2'])).toString('base64url');
+const OMP_PEER = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-11-23T19-59-55-396Z_01a209fe-6004-728d-a054-3eb58c976ccb'])).toString('base64url');
+const GONE_REF = '~sk1_' + Buffer.from(JSON.stringify(['agy', '99999999-aaaa-4bbb-8ccc-111111111111'])).toString('base64url');
+
+test('bot chat renders spawn_worker and worker-report cards, batches metadata, and opens ~sk1_ and short refs across hosts at phone width', async ({ page, fleet }) => {
+  // Start on the Active tab (default real-world state: closed/inactive workers are NOT in sessionState.sessions!).
+  await page.locator('#tabActive').click();
+
+  let selfBatchCalls = 0;
+  let peerBatchCalls = 0;
+  let peerSingleResolveCalls = 0;
+
+  // Serve closed worker sessions via resolve-batch (self) and single-resolve fallback (peer simulates older server skew!).
+  await page.route(`${fleet.self.base}/api/sessions/resolve-batch`, async route => {
+    selfBatchCalls++;
+    const body = route.request().postDataJSON() as { ids?: string[] };
+    const results: Record<string, unknown> = {};
+    for (const id of body?.ids || []) {
+      if (id === AGY_LOCAL) {
+        results[id] = {
+          status: 'ok',
+          session: {
+            id: AGY_LOCAL,
+            name: 'Pi-Dish Inline Review UX',
+            harnessId: 'agy',
+            model: 'google-antigravity/gemini-4-carbon',
+            isActive: true,
+            turnInProgress: true,
+          },
+        };
+      } else if (id === CHILD) {
+        results[id] = {
+          status: 'ok',
+          session: { id: CHILD, name: 'self child session', harnessId: 'pi', model: 'claude-sonnet-4-6', isActive: false },
+        };
+      } else {
+        results[id] = { status: 'not_found' };
+      }
+    }
+    await route.fulfill({ json: { results } });
+  });
+
+  await page.route(`${fleet.self.base}/api/sessions/resolve?*`, async route => {
+    const id = new URL(route.request().url()).searchParams.get('id') || '';
+    if (id === AGY_LOCAL) {
+      return route.fulfill({
+        json: {
+          session: {
+            id: AGY_LOCAL,
+            name: 'Pi-Dish Inline Review UX',
+            harnessId: 'agy',
+            model: 'google-antigravity/gemini-4-carbon',
+            isActive: true,
+            turnInProgress: true,
+          },
+        },
+      });
+    }
+    return route.fulfill({ status: 404, json: { error: 'Session not found' } });
+  });
+
+  await page.route(`${fleet.self.base}/api/sessions/${encodeURIComponent(AGY_LOCAL)}/messages?*`, route => route.fulfill({
+    json: { messages: [{ index: 0, role: 'assistant', content: 'Local AGY worker transcript opened!' }], session: { name: 'Pi-Dish Inline Review UX' } },
+  }));
+
+  // Peer simulates version skew: POST /api/sessions/resolve-batch returns 404, GET /api/sessions/resolve works!
+  await page.route(`${fleet.peer.base}/api/sessions/resolve-batch`, async route => {
+    peerBatchCalls++;
+    await route.fulfill({ status: 404, json: { error: 'Not found' } });
+  });
+  await page.route(`${fleet.peer.base}/api/sessions/resolve?*`, async route => {
+    peerSingleResolveCalls++;
+    const id = new URL(route.request().url()).searchParams.get('id') || '';
+    if (id === OMP_PEER || id === '01a209fe' || id === '01a1fc7c') {
+      return route.fulfill({
+        json: {
+          session: {
+            id: OMP_PEER,
+            name: 'kit wave1: scout_rifle',
+            harnessId: 'omp',
+            model: 'anthropic/claude-opus-5-5',
+            isActive: false,
+          },
+        },
+      });
+    }
+    return route.fulfill({ status: 404, json: { error: 'Session not found' } });
+  });
+  await page.route(`${fleet.peer.base}/api/sessions/${encodeURIComponent(OMP_PEER)}/messages?*`, route => route.fulfill({
+    json: { messages: [{ index: 0, role: 'assistant', content: 'Peer OMP worker transcript opened!' }], session: { name: 'kit wave1: scout_rifle' } },
+  }));
+
+  const botMessages = [
+    {
+      index: 0, role: 'user', timestamp: '2026-11-24T04:40:00.000Z',
+      content: 'Spin up the review UX worker and check the peer build.',
+    },
+    {
+      index: 1, role: 'assistant', timestamp: '2026-11-24T04:40:05.000Z',
+      content: [
+        { type: 'toolCall', id: 'tc-1', name: 'spawn_worker', arguments: { name: 'carbon-review-ux', harness: 'agy', brief: 'Design review UX.' } },
+      ],
+    },
+    {
+      index: 2, role: 'toolResult', toolCallId: 'tc-1', toolName: 'spawn_worker', timestamp: '2026-11-24T04:40:06.000Z',
+      content: [{ type: 'text', text: `Started worker "carbon-review-ux" (agy). Ref: ${AGY_LOCAL}. Each answer it gives arrives as a "[worker report]" message.` }],
+    },
+    {
+      index: 3, role: 'assistant', timestamp: '2026-11-24T04:40:10.000Z',
+      content: [{
+        type: 'text',
+        text: [
+          `Started \`${AGY_LOCAL}\` locally and checking peer/${OMP_PEER} (short ref \`peer/01a1fc7c\`, and #${CHILD}).`,
+          '',
+          `Also checked missing ref \`${GONE_REF}\`. Commit \`0eea720\` and hash deadbeef stay plain text.`,
+        ].join('\n'),
+      }],
+    },
+    {
+      index: 4, role: 'custom', customType: 'bot-worker-report', display: true, timestamp: '2026-11-24T04:45:00.000Z',
+      content: [{
+        type: 'text',
+        text: `[worker report] "kit wave1" (peer/${OMP_PEER}) finished.\n\n### Findings\n\nAll **42 tests** passed.\n\nThe session is closed; it is no longer watched.`,
+      }],
+      details: { ref: `peer/${OMP_PEER}`, name: 'kit wave1', state: 'finished', report: 1 },
+    },
+    {
+      index: 5, role: 'assistant', timestamp: '2026-11-24T04:45:10.000Z',
+      content: [{ type: 'text', text: 'Done — both workers reported back cleanly.' }],
+    },
+  ];
+
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({
+    json: { messages: botMessages, session: { name: 'pi-dish' } },
+  }));
+
+  // Select the bot session directly on the Active tab (without clicking All!).
+  await fleet.select(fleet.self, ROOT);
+
+  // 1. spawn_worker renders as an explicit card between turns (NOT buried in details.tool-group).
+  const spawnCard = page.locator('#messages > .message.agent-ref-spawn .agent-ref-card');
+  await expect(spawnCard).toHaveCount(1);
+  await expect(spawnCard.locator('.agent-ref-name')).toHaveText('Pi-Dish Inline Review UX');
+  await expect(spawnCard.locator('.agent-ref-state')).toHaveText('working');
+  await expect(spawnCard.locator('.agent-ref-harness')).toHaveText('AGY');
+  await expect(spawnCard.locator('.agent-ref-model')).toHaveText('gemini-4-carbon');
+  await expect(spawnCard.locator('.agent-ref-open')).toBeVisible();
+
+  // 2. [worker report] renders as the same shared card with report collapsed under it, hydrated via peer fallback!
+  const reportCard = page.locator('#messages > .message.bot-worker-report .agent-ref-card');
+  await expect(reportCard).toHaveCount(1);
+  await expect(reportCard.locator('.agent-ref-name')).toHaveText('kit wave1: scout_rifle');
+  await expect(reportCard.locator('.agent-ref-state')).toHaveText('finished');
+  await expect(reportCard.locator('.agent-ref-harness')).toHaveText('OMP');
+  await expect(reportCard.locator('.agent-ref-model')).toHaveText('claude-opus-5-5');
+  await expect(reportCard.locator('.agent-ref-host')).toHaveText('peer');
+  await expect(reportCard.locator('details.agent-ref-details')).not.toHaveAttribute('open', '');
+
+  // Expand the report underneath the card.
+  await reportCard.locator('.agent-ref-toggle').click();
+  await expect(reportCard.locator('details.agent-ref-details')).toHaveAttribute('open', '');
+  await expect(reportCard.locator('.agent-ref-body h3')).toHaveText('Findings');
+  await expect(reportCard.locator('.agent-ref-footer')).toContainText('no longer watched');
+
+  // 3. Inline refs in prose: ~sk1_, peer/~sk1_, peer/01a1fc7c, and #CHILD are chips; random hex is NOT linkified; peer/01a1fc7c is NOT a file-link!
+  const proseMsg = page.locator('#messages .message.assistant').filter({ hasText: 'Started' });
+  await expect(proseMsg.locator('.agent-ref-chip')).toHaveCount(5); // AGY_LOCAL, peer/OMP_PEER, peer/01a1fc7c, #CHILD, GONE_REF
+  await expect(proseMsg.locator('.file-link')).toHaveCount(0);
+  const deadbeefButtons = proseMsg.locator('button', { hasText: /0eea720|deadbeef/ });
+  await expect(deadbeefButtons).toHaveCount(0);
+
+  // Degraded chip for gone ref still renders decoded harness + short id + stays clickable without breaking the view.
+  const goneChip = proseMsg.locator(`.agent-ref-chip[data-agent-ref="${GONE_REF}"]`);
+  await expect(goneChip).toHaveAttribute('data-agent-state', 'unavailable');
+  await expect(goneChip).toContainText('99999999');
+
+  // 4. Batching & version-skew verification: self resolved multiple refs in ONE batch; peer fell back after one 404.
+  expect(selfBatchCalls).toBe(1);
+  expect(peerBatchCalls).toBe(1);
+  expect(peerSingleResolveCalls).toBeGreaterThanOrEqual(1);
+
+  // 5. Phone width (390px and 330px): zero horizontal overflow, cards remain visible in focus mode!
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(100);
+  const overflow390 = await page.evaluate(() => {
+    const m = document.getElementById('messages');
+    return m ? { scrollWidth: m.scrollWidth, clientWidth: m.clientWidth } : null;
+  });
+  expect(overflow390!.scrollWidth).toBeLessThanOrEqual(overflow390!.clientWidth);
+
+  await page.setViewportSize({ width: 330, height: 740 });
+  await page.waitForTimeout(100);
+  const overflow330 = await page.evaluate(() => {
+    const m = document.getElementById('messages');
+    return m ? { scrollWidth: m.scrollWidth, clientWidth: m.clientWidth } : null;
+  });
+  expect(overflow330!.scrollWidth).toBeLessThanOrEqual(overflow330!.clientWidth);
+
+  // 6. Clicking the gone ref shows a clear error status without losing the bot chat.
+  await goneChip.click();
+  await expect(page.locator('#status')).toContainText('Session not found');
+  await expect(reportCard).toBeVisible();
+
+  // 7. Clicking the worker report's Open button opens the CLOSED peer ~sk1_ session (routed through peer)!
+  await reportCard.locator('.agent-ref-open').click();
+  await expect(page.locator('#messages')).toContainText('Peer OMP worker transcript opened!');
+
+  // 8. Return to bot chat and open the local ~sk1_ worker via the spawn_worker card's Open button!
+  await fleet.select(fleet.self, ROOT);
+  await page.locator('#messages > .message.agent-ref-spawn .agent-ref-open').click();
+  await expect(page.locator('#messages')).toContainText('Local AGY worker transcript opened!');
+
+  // 9. Return to bot chat and verify short ref regression (`peer/01a1fc7c`) opens the peer session cleanly!
+  await fleet.select(fleet.self, ROOT);
+  await page.locator('#messages .agent-ref-chip[data-agent-ref="peer/01a1fc7c"]').click();
+  await expect(page.locator('#messages')).toContainText('Peer OMP worker transcript opened!');
+});
+
+export {};

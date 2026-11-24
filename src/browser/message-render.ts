@@ -11,6 +11,9 @@ import {
   parseUserSourceEntries, renderUserSourceHeaderHtml, parseInjectedBotMessage, renderBotNoticeHtml,
   formatBotChangeLineHtml, parseCodemodeResult, formatCodemodeOutput, formatJsonToolOutput,
 } from './bot-display';
+import {
+  parseSpawnWorkerResult, renderAgentRefCard, renderAgentRefChip, type AgentRefSession,
+} from './agent-ref';
 import { extractImageBlocks, extractVideoBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { mediaFileName } from '../core/helper-media';
 import { splitSessionRefContext } from '../core/helper-refs';
@@ -22,7 +25,8 @@ export function createMessageRenderer(options: {
   peek?: () => { id: string; host: string | null; model: string | null } | null;
   markdown: (text: string) => string; assetUrl: (host: string | null | undefined, path: string) => string;
   video: RenderVideoPreview;
-  matchRef: (ref: string) => { name?: string | null; isActive?: boolean } | null | undefined;
+  matchRef: (ref: string) => AgentRefSession | null | undefined;
+  hydrateRefs?: (root: ParentNode) => void;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void;
 }) {
   const { document } = options; let disposed = false;
@@ -115,13 +119,19 @@ function messageActionsHtml(msg: RenderMessage, role: 'user' | 'assistant' | nul
 // Optimistic bubbles carry the entries on `msg.sessionRefs` (the echo is suppressed).
 function sessionRefChipsHtml(refs?: readonly RefContextEntry[]) {
   if (!refs || !refs.length) return '';
+  const contextHost = renderHost() ?? null;
   const chips = refs.map((entry) => {
     const session = options.matchRef(entry.ref);
     const label = entry.name || session?.name || entry.ref;
-    const live = (session ? session.isActive : entry.isActive) ? ' live' : '';
-    const title = [entry.ref, entry.host, entry.cwd].filter(Boolean).join(' · ');
-    return `<button type="button" class="session-ref-chip${live}" data-session-ref="${escapeHtml(entry.ref)}" title="${escapeHtml(title)}">
-      <span class="session-ref-dot">●</span>${escapeHtml(label)}</button>`;
+    return renderAgentRefChip({
+      ref: entry.ref,
+      session: session || (entry.isActive != null ? { isActive: entry.isActive, name: entry.name || undefined, hostLabel: entry.host || undefined } : null),
+      label,
+      preserveLabel: !!entry.name,
+      extraClass: 'session-ref-chip',
+      contextHost,
+      hostLabel: entry.host || undefined,
+    });
   }).join('');
   return `<div class="session-ref-chips">${chips}</div>`;
 }
@@ -243,7 +253,7 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   if (botNotice) {
     return renderBotNoticeHtml(botNotice, {
       attrs, timestamp: String(msg.timestamp || Date.now()), time, actionsHtml: messageActionsHtml(msg, null),
-      markdown: options.markdown, matchRef: options.matchRef,
+      markdown: options.markdown, matchRef: options.matchRef, contextHost: renderHost() ?? null,
     });
   }
   const { text, refs } = splitSessionRefContext(rawText);
@@ -253,7 +263,7 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   const sourceEntries = parseUserSourceEntries(text);
   const bodyHtml = sourceEntries
     ? sourceEntries.map(entry =>
-      `<div class="user-source-entry">${renderUserSourceHeaderHtml(entry, options.matchRef)}${entry.body ? `<div class="markdown-body">${displayModelMentions(options.markdown(entry.body))}</div>` : ''}</div>`).join('')
+      `<div class="user-source-entry">${renderUserSourceHeaderHtml(entry, options.matchRef, renderHost() ?? null)}${entry.body ? `<div class="markdown-body">${displayModelMentions(options.markdown(entry.body))}</div>` : ''}</div>`).join('')
     : (text ? `<div class="markdown-body">${displayModelMentions(options.markdown(text))}</div>` : '');
   return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageActionsHtml(msg, 'user')}</div>
@@ -319,7 +329,7 @@ function renderThinkingBlock(thinking: string) {
 function renderToolCall(block: MessageBlock) {
   const args = block.arguments || {};
   const summary = getToolSummary(block.name || '', args);
-  const bodyHtml = toolCallBodyHtml(block.name, args, { matchRef: options.matchRef, markdown: options.markdown });
+  const bodyHtml = toolCallBodyHtml(block.name, args, { matchRef: options.matchRef, markdown: options.markdown, contextHost: renderHost() ?? null });
   const codeLines = block.name === 'codemode' && typeof args.code === 'string' ? args.code.split('\n').length : 0;
 
   return `<details class="tool-call">
@@ -336,6 +346,26 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   let content = extractTextContent(msg.content);
   const isError = msg.isError;
   const timestamp = msg.timestamp || Date.now();
+  // Successful spawn_worker results render as an explicit agent-reference card
+  // between turns (outside tool-group folding and visible in focus mode).
+  if (msg.toolName === 'spawn_worker' && !isError) {
+    const spawned = parseSpawnWorkerResult(content);
+    if (spawned) {
+      const time = msg.timestamp ? formatTime(msg.timestamp) : '';
+      return `<div${attrs} class="message agent-ref-message agent-ref-spawn" data-timestamp="${escapeHtml(String(timestamp))}">` +
+        renderAgentRefCard({
+          ref: spawned.ref,
+          session: options.matchRef(spawned.ref),
+          fallbackName: spawned.name,
+          fallbackHarness: spawned.harness,
+          fallbackHost: spawned.host,
+          contextHost: renderHost() ?? null,
+          hint: { spawnHint: true },
+          time,
+        }) +
+        `</div>`;
+    }
+  }
   // Prime's ipython results are a BashResult repr; show the wrapped command
   // output (and a nonzero-exit chip) instead of the Python repr.
   const parsed = parseIpythonResult(content);
@@ -559,7 +589,7 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
   if (botNotice) {
     return renderBotNoticeHtml(botNotice, {
       attrs, timestamp: String(timestamp), time, actionsHtml: messageActionsHtml(msg, null),
-      markdown: options.markdown, matchRef: options.matchRef,
+      markdown: options.markdown, matchRef: options.matchRef, contextHost: renderHost() ?? null,
     });
   }
   const label = customType.replace(/[-_]+/g, ' ');
@@ -588,6 +618,7 @@ function upsertLiveCustomMessage(message: RenderMessage, { streaming = false } =
   if (!el) return;
   if (existing) existing.replaceWith(el);
   else container.appendChild(el);
+  options.hydrateRefs?.(el);
   if (wasPinned || options.follow()) options.scroll(container); else options.jump(container);
 }
 

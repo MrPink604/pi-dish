@@ -13,6 +13,7 @@ import { createSessionState } from './session-state';
 import { createResponseDetails } from './response-details';
 import { createAppChrome } from './app-chrome';
 import { createSessionReferences } from './session-references';
+import { createAgentRefResolver } from './agent-ref';
 import { createComposerAutocomplete } from './composer-autocomplete';
 import { createSidebarActivity } from './sidebar-activity';
 import { createSidebarQuery } from './sidebar-query';
@@ -270,6 +271,7 @@ function hostsChanged() {
   composerSpeech.updateButton();
   void bots.sync();
   renderSessions();
+  agentRefs.hydrate();
   startDiscoveredHosts?.();
 }
 
@@ -297,7 +299,7 @@ const hostPresentation: ReturnType<typeof createHostPresentation> = createHostPr
 const sessionState: ReturnType<typeof createSessionState> = createSessionState({
   getSelfHostId: () => hostDirectory.self.hostId,
   getHostLabel: hostLabelFor,
-  onListsChanged: () => { renderSessions(); vaultApprovals.render(); },
+  onListsChanged: () => { renderSessions(); vaultApprovals.render(); agentRefs.syncFromState(); },
   onCurrentChanged: () => { sessionHeader.update(); vaultApprovals.render(); },
 });
 
@@ -467,16 +469,24 @@ async function startApp(): Promise<void> {
   bots.mount();
   appChrome.mount();
 
-  // Inline refs carry the identity resolved at render time; chips use the
-  // same host-aware resolver. Delegation also covers refs in peek transcripts.
+  // Inline refs, chips, and worker-card Open buttons share one host-aware
+  // resolver that handles active, closed, and cross-host sessions (including
+  // peek transcripts and retained nodes).
   document.addEventListener('click', (e) => {
-    const link = e.target instanceof Element ? e.target.closest<HTMLElement>('.session-ref-link, .session-ref-chip') : null;
+    const link = e.target instanceof Element
+      ? e.target.closest<HTMLElement>('.agent-ref-open, .agent-ref-chip, .session-ref-link, .session-ref-chip')
+      : null;
     if (!link) return;
     e.preventDefault();
-    if (link.dataset.sessionId) { sessionView.select(link.dataset.sessionId, { host: link.dataset.sessionHost || null }); return; }
-    const ref = link.getAttribute('data-session-ref') || '', session = sessionReferences.match(ref);
-    if (!session) { setStatus(`No session here matches ${ref}`, 'error'); return; }
-    sessionView.select(session.id, { host: session.host || null });
+    e.stopPropagation();
+    const card = link.closest<HTMLElement>('[data-agent-ref]');
+    const ref = link.getAttribute('data-session-ref') || link.dataset.agentRef || card?.dataset.agentRef || '';
+    const contextHostId = link.dataset.agentContextHost || card?.dataset.agentContextHost || null;
+    void agentRefs.open(ref, {
+      contextHostId,
+      sessionId: link.dataset.sessionId || null,
+      sessionHostId: link.dataset.sessionHost || null,
+    });
   });
 
   appChrome.setFocus(localStorage.getItem('pi-dish-focus') === '1');
@@ -575,6 +585,14 @@ function runApp(): void {
 
 const sessionReferences: ReturnType<typeof createSessionReferences> = createSessionReferences({
   sessionState, selfId: () => hostDirectory.self.hostId, host: hostEntryFor, hostLabel: hostLabelFor, config: () => appConfig,
+});
+const agentRefs: ReturnType<typeof createAgentRefResolver> = createAgentRefResolver({
+  document, sessionState, request: readHostApi, hosts: effectiveHosts, selfId: () => hostDirectory.self.hostId,
+  hostLabel: hostLabelFor, matchRef: (ref, localHostId) => sessionReferences.match(ref, localHostId),
+  retainedRoots: () => transcriptController.retainedRoots(),
+  selectSession: (id, opts) => sessionView.select(id, opts),
+  loadHostPrevious: hostId => sidebarLists.loadHost(hostId, true),
+  status: setStatus,
 });
 const composerAutocomplete: ReturnType<typeof createComposerAutocomplete> = createComposerAutocomplete({
   document, sessionState, composerKey: () => composerDrafts.key, provisional: () => !!sessionView.spawnId,
@@ -884,7 +902,8 @@ const transcriptController: ReturnType<typeof createTranscript> = createTranscri
 const messageRenderer: ReturnType<typeof createMessageRenderer> = createMessageRenderer({
   document, sessionState, details: responseDetailsController, markdown: text => richText.format(text),
   video: (player, context) => richText.video(player, context),
-  assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), ...chromeScroll, follow: () => appChrome.following,
+  assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), hydrateRefs: root => agentRefs.hydrate(root),
+  ...chromeScroll, follow: () => appChrome.following,
 });
 
 const subagentsController: ReturnType<typeof createSubagentsView> = createSubagentsView({
@@ -1076,6 +1095,9 @@ const richText: ReturnType<typeof createRichText> = createRichText({
   assets: browserAssets, diagrams: diagramRenderer, sessionState, assetUrl: hostAssetUrl, copy: copyTextToClipboard, status: setStatus,
   retainedRoots: () => transcriptController.retainedRoots(),
   matchRef: ref => sessionReferences.match(ref),
+  isKnownHost: host => agentRefs.isKnownHost(host),
+  contextHost: () => sessionState.currentSession?.host || hostDirectory.self.hostId,
+  hydrateRefs: root => agentRefs.hydrate(root),
 });
 
 const transcriptTree: ReturnType<typeof createTranscriptTree> = createTranscriptTree({

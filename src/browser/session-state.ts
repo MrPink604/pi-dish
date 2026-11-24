@@ -114,6 +114,22 @@ export function createSessionState(options: SessionStateOptions) {
     return currentSession;
   }
 
+  /**
+   * Ensure a single on-demand resolved session (e.g. a closed worker opened from
+   * an agent-ref card while on the Active tab) exists in the session lists before
+   * selecting it, without fetching the full historical catalog.
+   */
+  function ensureSession(session: SessionEntry, hostId = options.getSelfHostId()): SessionEntry {
+    const targetHost = hostId || session.host || options.getSelfHostId();
+    const existing = findSession(session.id, targetHost);
+    if (existing) return existing;
+    const row = publishSession(session, targetHost);
+    if (row.isActive) sessions.active.push(row);
+    else sessions.previous.push(row);
+    options.onListsChanged();
+    return row;
+  }
+
   function applyPatch(id: string, patch: SessionMutationPatch | SessionActivityPatch, host: string | null) {
     const matches = (session: SessionEntry | null) => session !== null && session.id === id && (session.host || null) === (host || null);
     for (const list of [sessions.active, sessions.previous]) {
@@ -162,7 +178,7 @@ export function createSessionState(options: SessionStateOptions) {
     get sessions(): SessionLists { return sessions; },
     get currentSession(): SessionEntry | null { return currentSession; },
     get selectionGeneration() { return generation; },
-    findSession, sessionHostId, setSessionLists, setCurrentSession,
+    findSession, sessionHostId, setSessionLists, setCurrentSession, ensureSession,
     patchSession, patchSessionActivity, mergeCurrentSession, advanceSelection,
     captureSelection, ownsSelection,
   };

@@ -128,7 +128,11 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
 
     const catalog = runtime.buildSessionCatalog({ includePrivate: ports.privateUnlocked(req) });
     const { session, matches } = runtime.resolveRefInCatalog(catalog, ref);
-    if (session) return res.json({ session, ref: stableSessionRef(session.id, catalog.list.map((entry) => entry.id)) });
+    if (session) {
+      const hibernation = ports.hibernated().get(session.id);
+      const resolved = hibernation ? { ...session, hibernation } : session;
+      return res.json({ session: resolved, ref: stableSessionRef(session.id, catalog.list.map((entry) => entry.id)) });
+    }
     if (matches.length > 1) {
       return res.status(409).json({
         error: 'ambiguous session id prefix',
@@ -142,6 +146,44 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
       });
     }
     res.status(404).json({ error: 'Session not found' });
+  };
+
+  /**
+   * Resolve up to 50 refs against one catalog build, for agent-ref hydration
+   * without N catalog scans or N HTTP round-trips.
+   */
+  const resolveBatch: RouteHandler = (req, res) => {
+    const raw = req.body && typeof req.body === 'object' && Array.isArray((req.body as { ids?: unknown }).ids)
+      ? (req.body as { ids: unknown[] }).ids : null;
+    if (!raw) return res.status(400).json({ error: 'ids array is required' });
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const item of raw) {
+      if (typeof item !== 'string') continue;
+      const trimmed = item.trim();
+      if (trimmed.length < 4 || trimmed.length > 260 || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      ids.push(trimmed);
+      if (ids.length >= 50) break;
+    }
+    if (!ids.length) return res.json({ results: {} });
+    const catalog = runtime.buildSessionCatalog({ includePrivate: ports.privateUnlocked(req) });
+    const peerIds = catalog.list.map((entry) => entry.id);
+    const hibernated = ports.hibernated();
+    const results: Record<string, unknown> = Object.create(null);
+    for (const id of ids) {
+      const { session, matches } = runtime.resolveRefInCatalog(catalog, id);
+      if (session) {
+        const hibernation = hibernated.get(session.id);
+        const projected = sessionForClient(hibernation ? { ...session, hibernation } : session);
+        results[id] = { status: 'ok', session: projected, ref: stableSessionRef(session.id, peerIds) };
+      } else if (matches.length > 1) {
+        results[id] = { status: 'ambiguous', count: matches.length };
+      } else {
+        results[id] = { status: 'not_found' };
+      }
+    }
+    res.json({ results });
   };
 
   // One flat ranked, capped list with snippets and a per-match occurrence count.
@@ -198,5 +240,5 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     });
   };
 
-  return { list, hostHealth: health, resolve, search };
+  return { list, hostHealth: health, resolve, resolveBatch, search };
 }

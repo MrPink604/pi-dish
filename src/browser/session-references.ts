@@ -28,8 +28,13 @@ export function createSessionReferences(options: {
     const onHost = all().filter(session => {
       const host = hostId(session); if (!parts.hostPart) return host === localHostId;
       if (parts.hostIdForm) return host === parts.hostPart;
-      if (parts.hostPart.toLowerCase() === 'self') return host === localHostId;
-      const entry = options.host(host); return !!entry && String(entry.name || '').toLowerCase() === parts.hostPart.toLowerCase();
+      const target = parts.hostPart.toLowerCase();
+      if (target === 'self') return host === localHostId;
+      const entry = options.host(host);
+      if (!entry) return false;
+      const name = typeof entry.name === 'string' ? entry.name.toLowerCase() : '';
+      const label = typeof entry.label === 'string' ? entry.label.toLowerCase() : '';
+      return name === target || label === target;
     });
     return resolveSessionRefAmong(onHost, parts.id, { exactOnly: parts.hostIdForm }).session;
   }

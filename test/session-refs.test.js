@@ -119,3 +119,14 @@ test('every resolvable ref in one prompt lands in a single block', () => {
     assert.deepEqual(refsIn(out).map(r => r.ref), ['local-session-aaaa1111', 'tycho/8f3ab2c1']);
     assert.equal(splitSessionRefContext(out).text, 'diff #local-session-aaaa1111 against #tycho/8f3ab2c1, ignore #nosuchref');
 });
+test('encoded ~sk1_ and host/~sk1_ tokens parse and expand through #ref', () => {
+    const encoded = '~sk1_' + Buffer.from(JSON.stringify(['agy', 'd46c28bc-43d2-45e2-b941-b9f3c6099ad2'])).toString('base64url');
+    const d = deps({
+        resolveLocal: (id) => (id === encoded ? { name: 'carbon-review-ux', cwd: '/w/pi-dish', isActive: true } : null),
+    });
+    const out = expandSessionRefs(`Check #${encoded} and #tycho/${encoded}.`, null, d);
+    assert.deepEqual(refsIn(out), [
+        { ref: encoded, name: 'carbon-review-ux', host: '', cwd: '/w/pi-dish', isActive: true },
+        { ref: `tycho/${encoded}`, name: '', host: 'tycho', cwd: '', isActive: false },
+    ]);
+});

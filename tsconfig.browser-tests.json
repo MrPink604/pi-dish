@@ -110,9 +110,11 @@
     "test/browser/session-view.spec.ts",
     "test/fixtures/browser-app.ts",
     "test/browser-fleet-view.test.ts",
+    "test/browser-agent-ref.test.ts",
     "test/browser/fleet-view.spec.ts",
     "test/browser/agy-tasks-swarm.spec.ts",
     "test/browser/bot-display.spec.ts",
-    "test/browser/bots.spec.ts"
+    "test/browser/bots.spec.ts",
+    "test/browser/agent-ref.spec.ts"
   ]
 }
