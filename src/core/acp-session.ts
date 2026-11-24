@@ -389,6 +389,8 @@ export class AcpSession extends TransportSession {
   declare private openingSideSessions: number;
   /** Session id currently being loaded by `_replayInto()`, never treated as a side session. */
   declare private replayingSessionId: string | null;
+  /** Image roots (`cwd` + brain dir) for the conversation currently being replayed. */
+  declare private replayingAllowedRoots: string[];
   declare private sideListeners: Map<string, (update: ProtocolRecord) => void>;
 
   constructor(proc: ChildProcessWithoutNullStreams, cwd: string) {
@@ -397,6 +399,8 @@ export class AcpSession extends TransportSession {
     this.proc = proc;
     this.cwd = cwd;
     this.replaying = false;
+    this.replayingSessionId = null;
+    this.replayingAllowedRoots = [];
     this.initialized = false;
     this.id = crypto.randomUUID() as NativeSessionId;
     this.nativeSessionId = this.id;
@@ -702,7 +706,7 @@ export class AcpSession extends TransportSession {
     const update = isRecord(raw) ? raw : {};
     const kind = text(update.sessionUpdate);
     if (this.replaying) {
-      this.transcript?.applyReplayUpdate(update);
+      this.transcript?.applyReplayUpdate(update, { allowedRoots: this.replayingAllowedRoots });
       return;
     }
     if (Object.hasOwn(ACTIVITY_UPDATES, kind) && !this._isPassiveToolCompletion(kind, update)) {
@@ -802,12 +806,16 @@ export class AcpSession extends TransportSession {
     this._refreshStateFromConfig();
   }
 
-  private _allowedImageRoots(): string[] {
+  private _allowedImageRootsFor(cwd: string, sessionId: string): string[] {
     const roots: string[] = [];
-    if (this.cwd) roots.push(this.cwd);
-    const brain = agyBrainDir(this.nativeSessionId);
+    if (cwd) roots.push(cwd);
+    const brain = agyBrainDir(sessionId);
     if (brain) roots.push(brain);
     return roots;
+  }
+
+  private _allowedImageRoots(): string[] {
+    return this._allowedImageRootsFor(this.cwd, this.nativeSessionId);
   }
 
   private _pushImage(img: AcpImageBlock): void {
@@ -1499,6 +1507,7 @@ export class AcpSession extends TransportSession {
       this.earlyFrames = [];
       this.replaying = true;
       this.replayingSessionId = sessionId;
+      this.replayingAllowedRoots = this._allowedImageRootsFor(cwd, sessionId);
       let result: ProtocolRecord;
       try {
         result = asRecord(await this._request('session/load',
@@ -1506,6 +1515,7 @@ export class AcpSession extends TransportSession {
       } finally {
         this.replaying = false;
         this.replayingSessionId = null;
+        this.replayingAllowedRoots = [];
       }
       transcript.flushReplay();
       if (!text(result.title) && options.title) result.title = options.title;

@@ -280,6 +280,25 @@ function replayHistory() {
             }],
     });
     sessionUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Fixed add().' } });
+    if (SCRIPT === 'replay-images') {
+        const chart = `${cwd}/chart.png`;
+        sessionUpdate({
+            sessionUpdate: 'tool_call', toolCallId: 'call-load-read-img', name: 'read_file',
+            args: { Path: chart }, status: 'completed', kind: 'read', title: 'File chart.png',
+            locations: [{ path: chart }], rawInput: { Path: chart },
+        });
+        sessionUpdate({
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'resource_link', uri: `file://${chart}`, mimeType: 'image/png' },
+        });
+        const outside = process.env.FAKE_AGY_OUTSIDE_IMAGE;
+        if (outside) {
+            sessionUpdate({
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'resource_link', uri: `file://${outside}`, mimeType: 'image/png' },
+            });
+        }
+    }
     usageUpdate(2400);
 }
 function requestElicitation(id, toolCallId) {

@@ -1253,3 +1253,58 @@ test('unknown live foreign session notifications and requests never leak into th
   assert.doesNotMatch(rawMirror, /FOREIGN LEAK CHUNK|Foreign Title/);
   assert.equal(acp.readAgySideChatIds().has(foreignSid), false, 'unknown foreign sid is not persisted as a side chat');
 });
+
+test('session/load replay passes allowedRoots so contained local images survive import while outside paths stay blocked', async (t) => {
+  const sessionFiles: typeof import('../lib/session-files.js') = require('../lib/session-files.js');
+  const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const cwd1 = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-replay-cwd1-'));
+  const cwd2 = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-replay-cwd2-'));
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-replay-out-'));
+  t.after(() => {
+    fs.rmSync(cwd1, { recursive: true, force: true });
+    fs.rmSync(cwd2, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(cwd1, 'chart.png'), Buffer.from(pngB64, 'base64'));
+  fs.writeFileSync(path.join(cwd2, 'chart.png'), Buffer.from(pngB64, 'base64'));
+  const outsidePng = path.join(outsideDir, 'secret.png');
+  fs.writeFileSync(outsidePng, Buffer.from(pngB64, 'base64'));
+
+  const conv1 = { sessionId: '33333333-3333-4333-8333-333333333333', cwd: cwd1, title: 'Img 1', updatedAt: '2026-11-23T10:00:00Z' };
+  const conv2 = { sessionId: '44444444-4444-4444-8444-444444444444', cwd: cwd2, title: 'Img 2', updatedAt: '2026-11-23T10:05:00Z' };
+  const agent = await acp.createAcpImportAgent({
+    cwd: workDir,
+    command: process.execPath,
+    args: [FIXTURE],
+    env: {
+      ...process.env,
+      FAKE_AGY_SCRIPT: 'replay-images',
+      FAKE_AGY_OUTSIDE_IMAGE: outsidePng,
+      FAKE_AGY_LIST: JSON.stringify([conv1, conv2]),
+    },
+  });
+  cleanup(t, agent);
+
+  const listed = await agent.listConversations();
+  const file1 = path.join(tmp, 'replay-img-1.jsonl');
+  const file2 = path.join(tmp, 'replay-img-2.jsonl');
+  await agent.importConversation(listed[0], file1);
+  await agent.importConversation(listed[1], file2);
+
+  for (const file of [file1, file2]) {
+    const msgs = sessionFiles.readSessionMessages(file);
+    const readImgResult = msgs.find(m => m.role === 'toolResult' && m.toolCallId === 'call-load-read-img');
+    assert.ok(readImgResult, 'read_file toolResult replayed');
+    const toolImages = Array.isArray(readImgResult.content)
+      ? readImgResult.content.filter((b): b is { type: string; data?: string; mimeType?: string } => asRecord(b).type === 'image')
+      : [];
+    assert.equal(toolImages.length, 1, 'contained read_file image preserved during replay');
+    assert.equal(toolImages[0]?.data, pngB64);
+
+    const assistantImages = msgs
+      .filter(m => m.role === 'assistant')
+      .flatMap(m => Array.isArray(m.content) ? m.content : [])
+      .filter(b => asRecord(b).type === 'image');
+    assert.equal(assistantImages.length, 1, 'contained resource_link image preserved while outside image is dropped');
+  }
+});

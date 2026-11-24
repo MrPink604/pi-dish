@@ -167,7 +167,9 @@ export declare class AcpTranscript {
      * closes the previous message; a completed/failed call is start plus end; the
      * load response flushes whatever is still open (`flushReplay`).
      */
-    applyReplayUpdate(raw: unknown): void;
+    applyReplayUpdate(raw: unknown, options?: {
+        allowedRoots?: readonly string[];
+    }): void;
     /** The `session/load` response ends the replay; write the open message. */
     flushReplay(): void;
     private ensureReplayAssistant;

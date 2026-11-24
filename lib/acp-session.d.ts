@@ -111,6 +111,8 @@ export declare class AcpSession extends TransportSession {
     private openingSideSessions;
     /** Session id currently being loaded by `_replayInto()`, never treated as a side session. */
     private replayingSessionId;
+    /** Image roots (`cwd` + brain dir) for the conversation currently being replayed. */
+    private replayingAllowedRoots;
     private sideListeners;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
@@ -139,6 +141,7 @@ export declare class AcpSession extends TransportSession {
     private _emitUI;
     private _applyTitle;
     private _applyConfigUpdate;
+    private _allowedImageRootsFor;
     private _allowedImageRoots;
     private _pushImage;
     private _pushChunk;

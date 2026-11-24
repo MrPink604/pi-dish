@@ -916,7 +916,7 @@ export class AcpTranscript {
    * closes the previous message; a completed/failed call is start plus end; the
    * load response flushes whatever is still open (`flushReplay`).
    */
-  applyReplayUpdate(raw: unknown): void {
+  applyReplayUpdate(raw: unknown, options?: { allowedRoots?: readonly string[] }): void {
     const update = isRecord(raw) ? raw : {};
     const kind = text(update.sessionUpdate);
     if (kind === 'user_message_chunk') {
@@ -929,7 +929,7 @@ export class AcpTranscript {
     if (kind === 'agent_message_chunk' || kind === 'agent_thought_chunk') {
       const content = asRecord(update.content);
       if (kind === 'agent_message_chunk' && content.type !== 'text') {
-        const img = extractAcpImageBlock(content);
+        const img = extractAcpImageBlock(content, options?.allowedRoots);
         if (!img) return;
         this.flushReplayUser();
         this.ensureReplayAssistant();
@@ -964,7 +964,7 @@ export class AcpTranscript {
     });
     this.flushReplayAssistant('toolUse');
     if (status !== 'completed' && status !== 'failed') return;
-    const result = acpToolResult(update, call);
+    const result = acpToolResult(update, call, options);
     this.appendToolResult({
       toolCallId,
       toolName: call.toolName,
