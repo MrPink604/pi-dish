@@ -184,6 +184,12 @@ declare function parseRef(raw: unknown): ParsedRef;
  * whether its URL lands on its own host. Without a host id the id stays bare.
  */
 declare function fleetCallerId(sessionId: unknown): string;
+/**
+ * Resolve a ref's host part against this server's fleet: remote name first,
+ * then host uuid (exact or an unambiguous ≥8-char prefix), then label. `self`
+ * and any match on this host's own entry mean local (no proxy prefix).
+ */
+declare function resolveHostPart(base: string, hostPart: string | null): Promise<ResolvedHost>;
 /** The fleet entry a `--host NAME` flag names, when the fleet is readable. */
 declare function entryForHostName(base: string, host: unknown): Promise<FleetHost | null>;
 /**
@@ -210,4 +216,4 @@ declare function mergeSearchResults(hostResults: readonly SearchBucket[] | null 
  * `session`) and `options`.
  */
 declare function renderTranscript(input: unknown, options?: TranscriptOptions): string;
-export { makeFail, print, parseCommandLine, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit, fleetHosts, hostSupports, parseRef, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, turnEnd, };
+export { makeFail, print, parseCommandLine, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit, fleetHosts, hostSupports, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, turnEnd, };

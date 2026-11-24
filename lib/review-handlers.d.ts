@@ -1,8 +1,10 @@
 // Generated from src/core/review-handlers.ts; edit that source and run npm run build:core.
-import type { RouteHandler } from './http-boundary';
+import type { ApplicationRequest, RouteHandler } from './http-boundary';
 import * as reviews from './reviews';
 export interface ReviewHandlerPorts {
     sessionKnown(sessionId: string): boolean;
+    /** Whether a request without a private-session unlock token must not see this session. */
+    privateRefused?(req: ApplicationRequest, sessionId: string): boolean;
     sessionCwd(sessionId: string): string | null;
     /** An absolute path as the session's file viewer reaches it, or null. */
     resolveSessionFile(sessionId: string, absPath: string): Promise<string | null>;
@@ -19,6 +21,7 @@ export interface ReviewHandlers {
     create: RouteHandler;
     list: RouteHandler;
     get: RouteHandler;
+    lookup: RouteHandler;
     wait: RouteHandler;
     submit: RouteHandler;
     cancel: RouteHandler;

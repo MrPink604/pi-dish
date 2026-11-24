@@ -568,6 +568,23 @@ export function readAllReviews(log: (line: string) => void): ReviewRecord[] {
   return out;
 }
 
+/** Look up one deck by its review id across stored sessions; unreadable files are reported and skipped. */
+export function findReviewById(reviewId: string, log: (line: string) => void): ReviewRecord | null {
+  if (!REVIEW_ID_RE.test(reviewId)) return null;
+  let names: string[];
+  try { names = fs.readdirSync(storeDir()); } catch { return null; }
+  for (const name of names) {
+    if (!/^[0-9a-f]{32}\.json$/.test(name)) continue;
+    try {
+      const match = readFile(path.join(storeDir(), name))?.reviews.find(item => item.id === reviewId);
+      if (match) return match;
+    } catch (error) {
+      log(`[reviews] ${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return null;
+}
+
 // ---- the browser's view -------------------------------------------------------------
 
 /** A shot as the browser loads it: `asset` is a slot under the review's media route; otherwise `url`. */

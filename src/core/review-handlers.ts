@@ -22,6 +22,8 @@ import type { MediaSource, ReviewAsset, ReviewRecord, ReviewSpec } from './revie
 
 export interface ReviewHandlerPorts {
   sessionKnown(sessionId: string): boolean;
+  /** Whether a request without a private-session unlock token must not see this session. */
+  privateRefused?(req: ApplicationRequest, sessionId: string): boolean;
   sessionCwd(sessionId: string): string | null;
   /** An absolute path as the session's file viewer reaches it, or null. */
   resolveSessionFile(sessionId: string, absPath: string): Promise<string | null>;
@@ -39,6 +41,7 @@ export interface ReviewHandlers {
   create: RouteHandler;
   list: RouteHandler;
   get: RouteHandler;
+  lookup: RouteHandler;
   wait: RouteHandler;
   submit: RouteHandler;
   cancel: RouteHandler;
@@ -347,6 +350,18 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     res.json({ review: reviews.clientReview(found.review), result: reviews.reviewResult(found.review) });
   });
 
+  // Lookup by review id across stored sessions; enforces the same sessionKnown and private-PIN gates as session routes.
+  const lookup = guarded((req, res) => {
+    const reviewId = req.params.reviewId;
+    if (!reviews.REVIEW_ID_RE.test(reviewId)) return res.status(404).json({ error: 'no such review' });
+    const review = reviews.findReviewById(reviewId, ports.log);
+    if (!review || !ports.sessionKnown(review.sessionId) || ports.privateRefused?.(req, review.sessionId)) {
+      return res.status(404).json({ error: 'no such review' });
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ review: reviews.clientReview(review), result: reviews.reviewResult(review) });
+  });
+
   // Long-poll for the agent's CLI: answers with the review once it is answered or
   // cancelled, or still open after `timeout` seconds. Headers go out at once so a
   // proxy's first-byte timer never cuts the poll.
@@ -502,5 +517,5 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     timers.clear();
   }
 
-  return { create, list, get, wait, submit, cancel, media, subscribe, removeSession, start, stop };
+  return { create, list, get, lookup, wait, submit, cancel, media, subscribe, removeSession, start, stop };
 }

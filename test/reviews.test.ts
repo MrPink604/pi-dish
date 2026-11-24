@@ -502,13 +502,21 @@ test('unknown or deleted sessions (including private) return 404; DELETE purges 
   const privCreated = await post(privBase, { ...DECK, title: 'Private deck', wait: false }, unlockHeader);
   assert.equal(privCreated.status, 201);
   const privReviewId = String(record((await json(privCreated)).review).id);
-  // Locked request is refused while the private transcript exists.
+  // Locked request is refused while the private transcript exists (session route and lookup route).
   assert.equal((await fetch(privBase)).status, 404);
   assert.equal((await fetch(`${privBase}/${privReviewId}/media/0`)).status, 404);
+  assert.equal((await fetch(`${owner}/api/reviews/${privReviewId}`)).status, 404);
+  assert.equal((await fetch(`${hub}/hosts/owner/api/reviews/${privReviewId}`)).status, 404);
+  // Unlocked request can look up the private review by id.
+  const privLookup = await fetch(`${owner}/api/reviews/${privReviewId}`, { headers: unlockHeader });
+  assert.equal(privLookup.status, 200);
+  assert.equal(record((await json(privLookup)).review).sessionId, privId);
   // Even if the private file is removed on disk outside DELETE, every route still answers 404.
   fs.unlinkSync(privFile);
   assert.equal((await fetch(privBase)).status, 404);
   assert.equal((await fetch(`${privBase}/${privReviewId}`)).status, 404);
+  assert.equal((await fetch(`${owner}/api/reviews/${privReviewId}`)).status, 404);
+  assert.equal((await fetch(`${owner}/api/reviews/${privReviewId}`, { headers: unlockHeader })).status, 404);
   assert.equal((await fetch(`${privBase}/${privReviewId}/media/0`)).status, 404);
   assert.equal((await post(`${privBase}/${privReviewId}/submit`, { submissionId: 'sub-priv-01', answers: DEFAULTS })).status, 404);
   assert.equal((await post(`${privBase}/${privReviewId}/cancel`, {})).status, 404);
@@ -544,6 +552,203 @@ test('unknown or deleted sessions (including private) return 404; DELETE purges 
   assert.ok(fs.existsSync(storePath(survivorRoute)), 'surviving session reviews untouched');
   const survivorList = await json(await fetch(`${owner}/api/sessions/${encodeURIComponent(survivorRoute)}/reviews`));
   assert.equal((survivorList.reviews as Record<string, unknown>[]).some(item => item.id === survivorReviewId), true);
+  // Lookup by review id works directly and through /hosts/<peer>, and 404s for deleted/unknown/invalid ids.
+  for (const url of [`${owner}/api/reviews/${survivorReviewId}`, `${hub}/hosts/owner/api/reviews/${survivorReviewId}`]) {
+    const looked = await fetch(url);
+    assert.equal(looked.status, 200, url);
+    const body = await json(looked);
+    assert.equal(record(body.review).id, survivorReviewId);
+    assert.equal(record(body.review).sessionId, survivorRoute);
+    assert.equal(record(body.result).reviewId, survivorReviewId);
+  }
+  assert.equal((await fetch(`${owner}/api/reviews/rv_0000000000000000`)).status, 404);
+  assert.equal((await fetch(`${owner}/api/reviews/not-a-review-id`)).status, 404);
+});
+
+test('CLI on a non-hub worker host resolves reviews whose session lives on another host', async t => {
+  // Reproduces the OSBG bot bug: bot session lives on a token-gated hub ("beelink"),
+  // while the worker runs on another host ("framework") whose CLI only talks to its local server.
+  const hubHome = createTestTempDir('pi-dish-reviews-beelink-');
+  const workerHome = createTestTempDir('pi-dish-reviews-framework-');
+  const HUB_TOKEN = 'beelink-review-token-0123456789';
+  const HUB_HOST_ID = '11111111-2222-4333-8444-555555555555';
+  const BOT_NATIVE_ID = 'osbg-bot-01';
+  assert.ok(sessionKey.validSessionId(BOT_NATIVE_ID));
+  const BOT_ROUTE_ID = sessionKey.encodeSessionKey('bot', BOT_NATIVE_ID);
+  const WORKER_SESSION_ID = '2026-11-23T10-00-00-worker01';
+
+  // Seed a bot session on beelink (mirror file under ~/.pi/dish/bots/sessions + token + host-id).
+  fs.mkdirSync(path.join(hubHome, '.pi', 'dish', 'bots', 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(hubHome, '.pi', 'dish', 'token'), `${HUB_TOKEN}\n`);
+  fs.writeFileSync(path.join(hubHome, '.pi', 'dish', 'host-id'), `${HUB_HOST_ID}\n`);
+  fs.writeFileSync(path.join(hubHome, '.pi', 'dish', 'settings.json'), JSON.stringify({ hostLabel: 'beelink' }));
+  fs.writeFileSync(
+    path.join(hubHome, '.pi', 'dish', 'bots', 'sessions', `${BOT_NATIVE_ID}.jsonl`),
+    JSON.stringify({ type: 'session', version: 3, id: BOT_NATIVE_ID, cwd: hubHome, timestamp: '2026-11-23T10:00:00.000Z' }) + '\n',
+  );
+  const beelink = await boot(hubHome, await freePort(), { PI_DISH_REVIEW_GRACE_MS: String(GRACE_MS) });
+  t.after(() => { try { beelink.child.kill('SIGKILL'); } catch {} });
+
+  // Seed a worker session on framework with beelink + an unreachable peer configured in remotes.
+  const workerSessions = path.join(workerHome, '.pi', 'agent', 'sessions', 'worker');
+  fs.mkdirSync(workerSessions, { recursive: true });
+  fs.writeFileSync(
+    path.join(workerSessions, `${WORKER_SESSION_ID}.jsonl`),
+    JSON.stringify({ type: 'session', cwd: workerHome, timestamp: '2026-11-23T10:05:00.000Z' }) + '\n',
+  );
+  const downPort = await freePort();
+  fs.mkdirSync(path.join(workerHome, '.pi', 'dish'), { recursive: true });
+  fs.writeFileSync(path.join(workerHome, '.pi', 'dish', 'settings.json'), JSON.stringify({
+    hostLabel: 'framework',
+    remotes: [
+      { name: 'beelink', url: beelink.base, token: HUB_TOKEN },
+      { name: 'down', url: `http://127.0.0.1:${downPort}` },
+    ],
+  }));
+  const framework = await boot(workerHome, await freePort(), { PI_DISH_REVIEW_GRACE_MS: String(GRACE_MS) });
+  t.after(() => { try { framework.child.kill('SIGKILL'); } catch {} });
+
+  const hubHeaders = { Authorization: `Bearer ${HUB_TOKEN}` };
+  const botReviewsUrl = `${beelink.base}/api/sessions/${encodeURIComponent(BOT_ROUTE_ID)}/reviews`;
+  const noMediaDeck = { ...DECK, cards: DECK.cards.map(item => ({ ...item, media: [] })) };
+
+  // Post and answer one review on the bot's session on beelink.
+  const createdRes = await post(botReviewsUrl, { ...noMediaDeck, title: 'OSBG review', wait: false }, hubHeaders);
+  assert.equal(createdRes.status, 201, await createdRes.clone().text());
+  const reviewId = String(record((await json(createdRes)).review).id);
+  const submitRes = await post(`${botReviewsUrl}/${reviewId}/submit`, {
+    submissionId: 'sub-osbg-0001',
+    answers: { ...DEFAULTS, quick_mag: { value: 'vial', note: 'beelink pick' } },
+  }, hubHeaders);
+  assert.equal(submitRes.status, 202);
+
+  // Helper that runs pi-dish-review from the worker on framework (NO beelink URL, NO beelink token).
+  const workerCli = (args: string[], extraEnv: NodeJS.ProcessEnv = {}) =>
+    cli(args, undefined, { HOME: workerHome, PI_DISH_URL: framework.base, PI_DISH_SESSION_ID: WORKER_SESSION_ID, ...extraEnv });
+
+  // 1. Bare `answers <reviewId>` (the exact failing command reported by OSBG) finds it via peer relay.
+  const bare = workerCli(['answers', reviewId]);
+  assert.equal(await bare.exited, 0, bare.stderr());
+  const bareParsed = record(JSON.parse(bare.stdout()));
+  assert.equal(bareParsed.reviewId, reviewId);
+  assert.equal(bareParsed.status, 'submitted');
+  assert.deepEqual(record(bareParsed.answers).quick_mag, { value: 'vial', default: false, note: 'beelink pick' });
+
+  // 2. `answers <reviewId> --session <botRouteId>` (the second failing command) and short native ref both resolve across peers.
+  for (const sessionArg of [BOT_ROUTE_ID, BOT_NATIVE_ID, `beelink/${BOT_NATIVE_ID}`, `${HUB_HOST_ID}:${BOT_ROUTE_ID}`]) {
+    const withSess = workerCli(['answers', reviewId, '--session', sessionArg]);
+    assert.equal(await withSess.exited, 0, `--session ${sessionArg}: ${withSess.stderr()}`);
+    assert.equal(record(JSON.parse(withSess.stdout())).reviewId, reviewId);
+  }
+
+  // 3. Explicit host addressing (`beelink/<id>` and `--host beelink`) and running outside any local session.
+  for (const argv of [[`answers`, `beelink/${reviewId}`], ['answers', reviewId, '--host', 'beelink']]) {
+    const explicit = workerCli(argv);
+    assert.equal(await explicit.exited, 0, `${argv.join(' ')}: ${explicit.stderr()}`);
+    assert.equal(record(JSON.parse(explicit.stdout())).reviewId, reviewId);
+  }
+  const emptyHome = createTestTempDir('pi-dish-reviews-nosess-');
+  const noSession = workerCli(['answers', reviewId], { HOME: emptyHome, PI_DISH_SESSION_ID: '' });
+  assert.equal(await noSession.exited, 0, noSession.stderr());
+  assert.equal(record(JSON.parse(noSession.stdout())).reviewId, reviewId);
+
+  // 4. `wait` and `cancel` also work across hosts on bare review ids.
+  const openWaitRes = await post(botReviewsUrl, { ...noMediaDeck, title: 'OSBG remote wait', wait: true }, hubHeaders);
+  assert.equal(openWaitRes.status, 201);
+  const waitId = String(record((await json(openWaitRes)).review).id);
+  const waiting = workerCli(['wait', waitId, '--timeout', '15']);
+  await pause(250);
+  assert.equal((await post(`${botReviewsUrl}/${waitId}/submit`, { submissionId: 'sub-osbg-wait1', answers: DEFAULTS }, hubHeaders)).status, 202);
+  assert.equal(await waiting.exited, 0, waiting.stderr());
+  assert.equal(record(JSON.parse(waiting.stdout())).status, 'submitted');
+
+  const openCancelRes = await post(botReviewsUrl, { ...noMediaDeck, title: 'OSBG remote cancel', wait: false }, hubHeaders);
+  assert.equal(openCancelRes.status, 201);
+  const cancelId = String(record((await json(openCancelRes)).review).id);
+  const cancelling = workerCli(['cancel', cancelId]);
+  assert.equal(await cancelling.exited, 0, cancelling.stderr());
+  assert.match(cancelling.stdout(), new RegExp(`review ${cancelId} withdrawn`));
+  assert.equal(record((await json(await fetch(`${botReviewsUrl}/${cancelId}`, { headers: hubHeaders }))).review).status, 'cancelled');
+
+  // 5. Error messages name the server URL and every host asked (plus unreachable peers).
+  const missingReview = workerCli(['answers', 'rv_ffffffffffffffff']);
+  assert.equal(await missingReview.exited, 1);
+  assert.match(missingReview.stderr(), new RegExp(framework.base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(missingReview.stderr(), /framework \(self\)/);
+  assert.match(missingReview.stderr(), /beelink/);
+  assert.match(missingReview.stderr(), /unreachable: down/);
+
+  const missingSession = workerCli(['answers', reviewId, '--session', 'no-such-session-9999']);
+  assert.equal(await missingSession.exited, 1);
+  assert.match(missingSession.stderr(), /Session not found: no-such-session-9999/);
+  assert.match(missingSession.stderr(), new RegExp(framework.base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(missingSession.stderr(), /framework \(self\), beelink/);
+
+  const unknownHost = workerCli(['answers', `nope/${reviewId}`]);
+  assert.equal(await unknownHost.exited, 1);
+  assert.match(unknownHost.stderr(), /unknown host "nope"/);
+  assert.match(unknownHost.stderr(), new RegExp(framework.base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+  const conflict = workerCli(['answers', `beelink/${reviewId}`, '--host', 'down']);
+  assert.equal(await conflict.exited, 1);
+  assert.match(conflict.stderr(), /conflicting hosts/);
+  assert.match(conflict.stderr(), new RegExp(framework.base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
+test('mixed-version peer without /api/reviews/:id falls back through launch provenance', async t => {
+  const reviewId = 'rv_abcdef0123456789';
+  const HUB_HOST_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const LEGACY_BOT_ID = 'legacy-bot';
+  assert.ok(sessionKey.validSessionId(LEGACY_BOT_ID));
+  const BOT_ROUTE = sessionKey.encodeSessionKey('bot', LEGACY_BOT_ID);
+  const WORKER_ID = '2026-11-23T11-00-00-worker02';
+  const fake = http.createServer((req, res) => {
+    const url = req.url ?? '';
+    res.setHeader('Content-Type', 'application/json');
+    if (url === '/api/hosts') {
+      return res.end(JSON.stringify({
+        hosts: [
+          { self: true, name: null, hostId: '22222222-3333-4444-8555-666666666666', label: 'framework', reachable: true, capabilities: { reviewsV1: true } },
+          { name: 'beelink', hostId: HUB_HOST_ID, label: 'beelink', reachable: true, capabilities: { reviewsV1: true } },
+        ],
+      }));
+    }
+    if (url === '/api/sessions?active=1') {
+      return res.end(JSON.stringify({
+        active: [{ id: WORKER_ID, parentId: `${HUB_HOST_ID}:${BOT_ROUTE}`, isActive: true }],
+        children: [],
+        previous: [],
+      }));
+    }
+    if (url === `/api/sessions/${WORKER_ID}/reviews/${reviewId}`) {
+      res.statusCode = 404;
+      return res.end(JSON.stringify({ error: 'no such review' }));
+    }
+    // Both local and peer simulate older servers lacking GET /api/reviews/:reviewId (bodiless 404).
+    if (url === `/api/reviews/${reviewId}` || url === `/hosts/beelink/api/reviews/${reviewId}`) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'text/plain');
+      return res.end('Not found');
+    }
+    if (url === `/hosts/beelink/api/sessions/${encodeURIComponent(BOT_ROUTE)}/reviews/${reviewId}`) {
+      return res.end(JSON.stringify({
+        review: { id: reviewId, sessionId: BOT_ROUTE, status: 'submitted' },
+        result: { reviewId, status: 'submitted', answers: { quick_mag: { value: 'tab', default: true } } },
+      }));
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>(resolve => fake.close(() => resolve())));
+  const address = fake.address();
+  assert.ok(address && typeof address !== 'string');
+  const fakeBase = `http://127.0.0.1:${address.port}`;
+
+  const run = cli(['answers', reviewId], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: WORKER_ID });
+  assert.equal(await run.exited, 0, run.stderr());
+  assert.equal(record(JSON.parse(run.stdout())).reviewId, reviewId);
+  assert.deepEqual(record(record(JSON.parse(run.stdout())).answers).quick_mag, { value: 'tab', default: true });
 });
 
 test('CLI wait retries dropped or malformed responses and exits non-zero when retries run out', async () => {

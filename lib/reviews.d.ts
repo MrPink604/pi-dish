@@ -166,6 +166,8 @@ export declare function updateReview(sessionId: string, reviewId: string, change
 export declare function deleteReviews(sessionId: string): void;
 /** Every stored session's decks; an unreadable file is reported and skipped. */
 export declare function readAllReviews(log: (line: string) => void): ReviewRecord[];
+/** Look up one deck by its review id across stored sessions; unreadable files are reported and skipped. */
+export declare function findReviewById(reviewId: string, log: (line: string) => void): ReviewRecord | null;
 /** A shot as the browser loads it: `asset` is a slot under the review's media route; otherwise `url`. */
 export interface ClientMedia {
     label: string | null;

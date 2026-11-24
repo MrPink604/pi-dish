@@ -1654,7 +1654,10 @@ Store: one `0600` file per canonical session under `~/.pi/dish/reviews/`,
 named by a hash, replaced durably; read fails closed (a corrupt file is a
 500, never empty, so a delivered answer is never replayed). Every review route
 requires the owning session to exist (`sessionKnown`, else 404, so deleting a
-private transcript never bypasses the PIN gate), and `DELETE /api/sessions/:id`
+private transcript never bypasses the PIN gate); `GET /api/reviews/:reviewId`
+also looks up a deck by id across stored sessions and enforces both
+`sessionKnown` and `privateRefused` (404 when locked or absent), enabling
+cross-host `pi-dish-review` lookup through `/hosts/<peer>`. `DELETE /api/sessions/:id`
 purges the reviews for the exact deleted route id (any orphaned child review
 files 404 via `sessionKnown`; startup GC is a follow-up).
 `create`, `submit`, `cancel` and `wait` require `X-Pi-Dish-Client: 1` (403

@@ -426,6 +426,7 @@ export function startServer(rootDirectory: string): Server {
   // Review decks: an agent's staged questions, answered inline in its transcript.
   const reviewHandlers = createReviewHandlers({
     sessionKnown,
+    privateRefused: privateSessions.refused,
     sessionCwd: id => { const cwd = resolveSessionCwd(id); return typeof cwd === 'string' && cwd ? cwd : null; },
     resolveSessionFile: fileHandlers.resolveSessionFile,
     pageExists: token => !!pages.getPage(token) || fleetArtifacts.get(token)?.kind === 'page',
@@ -439,6 +440,7 @@ export function startServer(rootDirectory: string): Server {
     // A test seam, like PI_DISH_MEMINFO_FILE: suites wait out a short grace period instead of the default.
     graceMs: Number(process.env.PI_DISH_REVIEW_GRACE_MS) || undefined,
   });
+  app.get('/api/reviews/:reviewId', reviewHandlers.lookup);
   app.post('/api/sessions/:id/reviews', reviewHandlers.create);
   app.get('/api/sessions/:id/reviews', reviewHandlers.list);
   app.get('/api/sessions/:id/reviews/:reviewId', reviewHandlers.get);

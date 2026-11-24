@@ -804,7 +804,7 @@ export {
   registryEntries, registryRouteId, sessionHarnessId, nativeSessionId,
   discoverSession, discoverSessionQuietly, fleetCallerId,
   TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit,
-  fleetHosts, hostSupports, parseRef, entryForHostName, resolveSessionRef,
+  fleetHosts, hostSupports, parseRef, resolveHostPart, entryForHostName, resolveSessionRef,
   resolveSessionClientSide, stableSessionRef,
   mergeSearchResults, renderTranscript, turnEnd,
 };

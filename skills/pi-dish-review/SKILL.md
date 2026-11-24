@@ -15,7 +15,9 @@ node ~/.pi/agent/skills/pi-dish-review/scripts/pi-dish-review.js ask review.json
 `--no-wait` posts and returns: end your turn; the answers arrive later in this
 session as a `[review response: …]` message (also what happens if your wait is
 cut off). Bots call the `request_review` tool instead. `--help` shows the
-format; `answers <id>` prints a deck's answers as JSON.
+format; `answers <id>` prints a deck's answers as JSON (and looks across fleet
+peers when the deck lives on another host; `--host <name>` or `<host>/<id>`
+targets a host directly).
 
 ```json
 { "title": "Halden part looks", "companionPage": "/page/<token>",
