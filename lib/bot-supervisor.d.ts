@@ -13,10 +13,11 @@ export declare function deliverToBot(botId: string, delivery: Record<string, unk
  * arrives while its relay restarts: when no relay takes it, the bot is started and the delivery tried again until a
  * relay takes it or `waitMs` passes. A start that fails (refused while a restart is under way) is tried again.
  */
-export declare function deliverStartingBot(botId: string, delivery: Record<string, unknown>, start: () => Promise<boolean | void>, { waitMs, everyMs, deliver }?: {
+export declare function deliverStartingBot(botId: string, delivery: Record<string, unknown>, start: () => Promise<boolean | void>, { waitMs, everyMs, deliver, isActive }?: {
     waitMs?: number;
     everyMs?: number;
     deliver?: typeof deliverToBot;
+    isActive?: () => boolean;
 }): Promise<{
     queued: boolean;
 }>;

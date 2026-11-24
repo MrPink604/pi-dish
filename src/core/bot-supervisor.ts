@@ -64,15 +64,19 @@ export function deliverToBot(botId: string, delivery: Record<string, unknown>, t
  */
 export async function deliverStartingBot(
   botId: string, delivery: Record<string, unknown>, start: () => Promise<boolean | void>,
-  { waitMs = 60_000, everyMs = 1000, deliver = deliverToBot }: { waitMs?: number; everyMs?: number; deliver?: typeof deliverToBot } = {},
+  { waitMs = 60_000, everyMs = 1000, deliver = deliverToBot, isActive }: {
+    waitMs?: number; everyMs?: number; deliver?: typeof deliverToBot; isActive?: () => boolean;
+  } = {},
 ): Promise<{ queued: boolean }> {
   const deadline = Date.now() + waitMs;
   let started = false;
   let failure = '';
   for (;;) {
+    if (isActive && !isActive()) throw new Error('the bot is no longer active');
     const taken = await deliver(botId, delivery);
     if (taken) return taken;
     if (!started) {
+      if (isActive && !isActive()) throw new Error('the bot is no longer active');
       try {
         const launched = await start();
         if (launched !== false) started = true;

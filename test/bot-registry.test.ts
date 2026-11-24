@@ -462,3 +462,51 @@ test('deliverToBot decodes multi-byte UTF-8 responses split across socket chunks
   const result = await deliverToBot(botId, { kind: 'routine', requestId: 'r1', text: 'hi', data: {} }, 5000);
   assert.deepEqual(result, { queued: true });
 });
+
+test('deliverStartingBot stops retrying immediately when isActive turns false while waiting on an old lock', async () => {
+  const { deliverStartingBot }: typeof import('../lib/bot-supervisor.js') = require('../lib/bot-supervisor.js');
+  let active = true;
+  let startCalls = 0;
+  await assert.rejects(
+    deliverStartingBot(
+      'retired-bot',
+      { kind: 'room', requestId: 'req-1', text: 'hi', data: {} },
+      async () => {
+        startCalls++;
+        // First start returns false (old lock still held); bot retires before the next retry.
+        active = false;
+        return false;
+      },
+      { waitMs: 5000, everyMs: 20, deliver: async () => null, isActive: () => active },
+    ),
+    /no longer active/,
+  );
+  assert.equal(startCalls, 1, 'retired bot must not be launched on subsequent retries');
+});
+
+test('waitBounceActionUnlock wakes parked callers immediately on endBounceAction before any outer bounce settles', async () => {
+  const { createSessionOperations }: typeof import('../lib/session-operations.js') = require('../lib/session-operations.js');
+  const ops = createSessionOperations({
+    ownership: {} as never,
+    launch: {} as never,
+    getActiveSessions: () => [],
+    readSessionCwd: () => null,
+    recordLaunchProvenance: () => null,
+  });
+  const route = 'self:bot:0b0c5a1e-0000-4000-8000-000000000001';
+  const live = { bounceExecuting: false } as never;
+  ops.beginBounceAction(route, live);
+  assert.equal(ops.admitHttpAction(route, 'POST')?.status, 409);
+
+  const order: string[] = [];
+  const parkedSteer = ops.waitBounceActionUnlock(route).then(() => {
+    assert.equal(ops.admitHttpAction(route, 'POST'), null, 'admission is open immediately on lock release');
+    order.push('parked-steer');
+  });
+
+  // Releasing the execution lock wakes the parked steer before any later prompt or outer bounce completion runs.
+  ops.endBounceAction(route, live);
+  await parkedSteer;
+  order.push('later-prompt');
+  assert.deepEqual(order, ['parked-steer', 'later-prompt']);
+});

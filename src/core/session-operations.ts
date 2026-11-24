@@ -146,6 +146,7 @@ export interface SessionOperations {
   /** Execution exclusion is intentionally not resume/close/restart admission. */
   beginBounceAction(canonicalRoute: string, live: BounceLiveSession): void;
   endBounceAction(canonicalRoute: string, live: BounceLiveSession): void;
+  waitBounceActionUnlock(requestedId: string): Promise<void>;
   admitHttpAction(requestedId: string, method: string): SessionOperationResponse | null;
 }
 
@@ -729,6 +730,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
     } finally { restartFlights.delete(sessionId); }
   }
 
+  const bounceUnlockWaiters = new Map<string, Set<() => void>>();
   function beginBounceAction(canonicalRoute: string, live: BounceLiveSession): void {
     bounceActionLocks.add(canonicalRoute);
     live.bounceExecuting = true;
@@ -736,6 +738,24 @@ export function createSessionOperations(observations: SessionOperationObservatio
   function endBounceAction(canonicalRoute: string, live: BounceLiveSession): void {
     bounceActionLocks.delete(canonicalRoute);
     live.bounceExecuting = false;
+    const waiters = bounceUnlockWaiters.get(canonicalRoute);
+    if (waiters) {
+      bounceUnlockWaiters.delete(canonicalRoute);
+      for (const wake of waiters) wake();
+    }
+  }
+  function waitBounceActionUnlock(requestedId: string): Promise<void> {
+    let id: string;
+    try { id = canonicalSessionId(requestedId); } catch { return Promise.resolve(); }
+    if (!bounceActionLocks.has(id)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let waiters = bounceUnlockWaiters.get(id);
+      if (!waiters) {
+        waiters = new Set();
+        bounceUnlockWaiters.set(id, waiters);
+      }
+      waiters.add(resolve);
+    });
   }
   function admitHttpAction(requestedId: string, method: string): SessionOperationResponse | null {
     let id: string;
@@ -751,6 +771,6 @@ export function createSessionOperations(observations: SessionOperationObservatio
     resumeSessionById, probeRecoveryLive, closeSession, restartSession, hibernateSession,
     closeSessionById: async sessionId => sessionOperationResponse(await closeSession(sessionId)),
     restartSessionById: async (sessionId, options) => sessionOperationResponse(await restartSession(sessionId, options)),
-    beginBounceAction, endBounceAction, admitHttpAction,
+    beginBounceAction, endBounceAction, waitBounceActionUnlock, admitHttpAction,
   };
 }

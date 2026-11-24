@@ -129,6 +129,7 @@ export interface SessionOperations {
     /** Execution exclusion is intentionally not resume/close/restart admission. */
     beginBounceAction(canonicalRoute: string, live: BounceLiveSession): void;
     endBounceAction(canonicalRoute: string, live: BounceLiveSession): void;
+    waitBounceActionUnlock(requestedId: string): Promise<void>;
     admitHttpAction(requestedId: string, method: string): SessionOperationResponse | null;
 }
 export declare function createSessionOperations(observations: SessionOperationObservations): SessionOperations;

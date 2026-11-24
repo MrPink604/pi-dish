@@ -473,14 +473,20 @@ test('a stale bot restart does not emit session_ended on SSE or reject concurren
   })().catch(() => {});
   await until(() => sseText.includes('event: init'), 'SSE stream connected to old relay');
 
-  // Release the hold so the stale restart executes; once it starts executing, send a prompt concurrently!
+  // Release the hold so the stale restart executes; once it starts executing, send a steer concurrently!
   fs.rmSync(path.join(home, 'hold'));
   await untilAsync(async () => (await bounces(server.base)).some(target => target.status === 'executing'), 'stale restart entered executing state');
 
-  // Both a prompt and a reconnecting SSE stream during the restart window must succeed cleanly.
+  // A prompt/steer arriving during the restart lock must wait for lock release instead of 409.
   const promptPromise = post(server.base, before.route, { message: 'Sent during stale restart.' });
+
+  // Wait for the old SSE stream to reach EOF without emitting session_ended, then reconnect to the replacement relay.
+  await streamDone;
+  assert.ok(!sseText.includes('event: session_ended'), `old SSE stream must not emit session_ended during stale restart (got: ${sseText})`);
+
   const reconnectCtrl = new AbortController();
   const reconnectRes = await fetch(`${server.base}/api/sessions/${encodeURIComponent(before.route)}/stream`, { signal: reconnectCtrl.signal });
+  assert.equal(reconnectRes.status, 200);
   let reconnectText = '';
   const reconnectReader = (async () => {
     const reader = reconnectRes.body!.getReader();
@@ -489,16 +495,16 @@ test('a stale bot restart does not emit session_ended on SSE or reject concurren
       const { value, done } = await reader.read();
       if (done) break;
       reconnectText += decoder.decode(value, { stream: true });
-      if (reconnectText.includes('event: init')) reconnectCtrl.abort();
+      if (reconnectText.includes('echo 2: Sent during stale restart.')) reconnectCtrl.abort();
     }
   })().catch(() => {});
 
   const promptRes = await promptPromise;
   assert.equal(promptRes.status, 200, `prompt during stale restart must not 409: ${await promptRes.text()}`);
-  await streamDone;
-  assert.ok(!sseText.includes('event: session_ended'), `old SSE stream must not emit session_ended during stale restart (got: ${sseText})`);
 
-  await until(() => reconnectText.includes('event: init'), 'reconnecting SSE attaches to restarted relay');
+  await until(() => reconnectText.includes('event: init'), 'reconnecting SSE attaches to replacement relay');
+  await until(() => reconnectText.includes('echo 2: Sent during stale restart.') || said(home, before.id, 'echo 2: Sent during stale restart.') === 1,
+    'replacement relay answers prompt sent during restart');
   assert.ok(!reconnectText.includes('event: stream_error'), `reconnecting SSE must not emit stream_error (got: ${reconnectText})`);
   reconnectCtrl.abort();
   await reconnectReader;
@@ -506,4 +512,71 @@ test('a stale bot restart does not emit session_ended on SSE or reject concurren
   await until(() => said(home, before.id, 'echo 2: Sent during stale restart.') === 1, 'restarted relay answers prompt sent during restart');
   assert.notEqual(relayLock(home, before.id)?.pid, before.pid);
   await server.stop();
+});
+
+test('a bot retired while its old relay lock drains is not relaunched by wakeBot or delivery retries', { timeout: 120_000 }, async () => {
+  const { processIdentity }: typeof import('../lib/process-identity.js') = require('../lib/process-identity.js');
+  const home = makeHome();
+  const port = await freePort();
+  const server = await boot(home, port);
+  const fleet = await liveFleet(server, home);
+
+  // Create a sibling child bot so Fleet can post a room message to it via botControl.deliver -> deliverStartingBot.
+  const createdRes = await fetch(`${server.base}/api/bots`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parentId: fleet.id, name: 'Helper', identity: 'You are Helper.' }),
+  });
+  assert.equal(createdRes.status, 201, `create Helper: ${await createdRes.clone().text()}`);
+  const helper = record(record(await createdRes.json()).bot);
+  const helperId = String(helper.id);
+  const listed = records((await get(server.base, '/api/bots')).bots);
+  const helperRoute = String(listed.find(row => row.id === helperId)?.sessionId ?? '');
+  assert.ok(helperRoute, 'Helper has a session route');
+  await until(() => !!relayLock(home, helperId)?.pid, 'Helper relay started');
+  const helperPid = relayLock(home, helperId)!.pid;
+
+  // Stop Helper's relay cleanly, then hold its lock with a live dummy process simulating a dying relay draining.
+  const closeRes = await fetch(`${server.base}/api/sessions/${encodeURIComponent(helperRoute)}/close`, { method: 'POST' });
+  assert.equal(closeRes.status, 200);
+  await until(() => !alive(helperPid), 'Helper relay exited');
+
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+  const lockFile = path.join(botsDir(home), helperId, 'relay.lock');
+  try {
+    const identity = processIdentity(holder.pid!);
+    fs.writeFileSync(lockFile, JSON.stringify({ ...identity, build: 'old-build' }) + '\n');
+
+    // Start both a prompt (wakeBot retry loop) and a room delivery (deliverStartingBot retry loop) while the lock is held.
+    const wakePromise = post(server.base, helperRoute, { message: 'Should not relaunch after retire.' });
+    const roomPromise = fetch(`${server.base}/api/bots/${encodeURIComponent(fleet.id)}/room`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chain: `${fleet.id}/1`, hop: 1, to: ['Helper'], text: 'Room ping before retire' }),
+    });
+    await new Promise(resolve => setTimeout(resolve, 400));
+
+    // Retire Helper BEFORE the old lock drains (control.stop may return 502 since no bridge is live, while status becomes retired).
+    const retireRes = await fetch(`${server.base}/api/bots/${encodeURIComponent(helperId)}/retire`, { method: 'POST' });
+    const retireBody = record(await retireRes.json());
+    assert.equal(record(retireBody.bot).status, 'retired', `Helper must be retired: ${JSON.stringify(retireBody)}`);
+
+    // Release the old lock and verify neither retry loop launches a replacement relay for the retired bot.
+    holder.kill('SIGKILL');
+    await new Promise<void>(resolve => holder.once('close', () => resolve()));
+    try { fs.unlinkSync(lockFile); } catch {}
+
+    const wakeRes = await wakePromise;
+    assert.notEqual(wakeRes.status, 200, 'retired bot must not accept wake prompt');
+    const roomRes = await roomPromise;
+    const roomBody = record(await roomRes.json());
+    assert.ok(Array.isArray(roomBody.notRunning) && roomBody.notRunning.includes('Helper'),
+      `room delivery must abort instead of launching retired Helper: ${JSON.stringify(roomBody)}`);
+    await new Promise(resolve => setTimeout(resolve, 1200));
+
+    assert.equal(relayLock(home, helperId), null, 'retired bot must not be relaunched after old lock drains');
+  } finally {
+    if (holder.exitCode === null && holder.signalCode === null) holder.kill('SIGKILL');
+    await server.stop();
+  }
 });
