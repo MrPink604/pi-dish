@@ -265,7 +265,7 @@ export function isCanonicalAttachmentToken(value: string): boolean {
   const match = FILE_TOKEN_RE.exec(value);
   if (!match) return false;
   const name = match[1]!;
-  return name === name.trim() && !/\s{2,}/.test(name) && Array.from(name).length <= FILE_REF_NAME_MAX;
+  return name === sanitizeAttachmentRefName(name);
 }
 
 /** Decodes `pi-dish-draft-refs-<owner>` from localStorage, rejecting non-canonical entries. */

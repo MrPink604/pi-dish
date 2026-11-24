@@ -118,8 +118,10 @@ test('decodeDraftRefs validates canonical tokens and rejects arbitrary prose str
     assert.equal(isCanonicalAttachmentToken('[Image #1] extra'), false);
     assert.equal(isCanonicalAttachmentToken('[File #1: ]'), false);
     assert.equal(isCanonicalAttachmentToken('[File #1: bad[name]]'), false);
+    assert.equal(isCanonicalAttachmentToken('[File #1: dir/file]'), false);
+    assert.equal(isCanonicalAttachmentToken('[File #1: dir\\file]'), false);
     assert.equal(isCanonicalAttachmentToken(`[File #1: ${'x'.repeat(FILE_REF_NAME_MAX + 1)}]`), false);
-    assert.deepEqual(plain(decodeDraftRefs(JSON.stringify(['hello', '[Image #1]', '[Image #1]', '[Image #0]', 42, '', '[File #1: a.txt]', '[File #2: ]']))), ['[Image #1]', '[File #1: a.txt]']);
+    assert.deepEqual(plain(decodeDraftRefs(JSON.stringify(['hello', '[File #1: dir/file]', '[Image #1]', '[Image #1]', '[Image #0]', 42, '', '[File #1: a.txt]', '[File #2: ]']))), ['[Image #1]', '[File #1: a.txt]']);
     assert.deepEqual(plain(decodeDraftRefs(JSON.stringify(['hello']))), []);
     assert.deepEqual(plain(decodeDraftRefs('not json')), []);
     assert.deepEqual(plain(decodeDraftRefs('{"a":1}')), []);

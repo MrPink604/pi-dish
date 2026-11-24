@@ -442,4 +442,54 @@ test('bare-key migration preserves pi-dish-draft-refs- prefix, non-canonical ref
   expect(sentPrompts(fleet.self)).toHaveLength(0);
 });
 
+test('upload history preserves an earlier identical prompt, rolls back on upload failure, and empty Enter preserves error feedback', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const input = page.locator('#promptInput');
+
+  // 1. Send plain "review", then send "review" with a file chip (label removed) -> both entries remain in history.
+  await input.fill('review');
+  await input.press('Enter');
+  await expect.poll(() => sentPrompts(fleet.self).length).toBe(1);
+  await page.locator('#attachFileInput').setInputFiles([notesFile]);
+  await input.fill('review');
+  await input.press('Enter');
+  await expect.poll(() => sentPrompts(fleet.self).length).toBe(2);
+  const historyAfterFile = await page.evaluate(() => fixtureApp.features.composerDrafts.prompts());
+  expect(historyAfterFile).toHaveLength(2);
+  expect(historyAfterFile[0]).toBe('review');
+  expect(historyAfterFile[1]).toMatch(/^review\n\n\[Attached file: \/.*\/notes\.txt \(text\/plain, 11 B\)\]$/);
+
+  // 2. Failed upload rolls back its provisional history entry.
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/uploads`, route => route.fulfill({ json: { maxBytes: 4 } }));
+  await page.locator('#attachFileInput').setInputFiles([notesFile]);
+  await input.fill('should roll back');
+  await input.press('Enter');
+  await expect(page.locator('#status')).toContainText('Upload failed:');
+  expect(await page.evaluate(() => fixtureApp.features.composerDrafts.prompts())).toEqual(historyAfterFile);
+  await page.unroute(`${fleet.self.base}/api/sessions/${ROOT}/uploads`);
+  await page.locator('#attachmentStrip .attachment-remove').click();
+
+  // 3. Pressing Enter / Ctrl+Enter on an empty composer does not swallow an in-flight request's feedback.
+  const failingPrompt = heldRoute();
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/prompt`, failingPrompt.hold);
+  await input.fill('first failing request');
+  await input.press('Enter');
+  const promptRoute = await failingPrompt.received;
+  await expect(input).toHaveValue('');
+  await input.press('Enter'); // empty no-op must not bump feedbackSequence
+  await promptRoute.fulfill({ status: 503, json: { error: 'upstream down' } });
+  await expect.poll(() => page.evaluate(() => fixtureApp.features.sessionActivity.turn)).toBe(false);
+  await page.unroute(`${fleet.self.base}/api/sessions/${ROOT}/prompt`);
+
+  const failingSteer = heldRoute();
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/steer`, failingSteer.hold);
+  await input.fill('failing steer request');
+  await input.press('Control+Enter');
+  const steerRoute = await failingSteer.received;
+  await expect(input).toHaveValue('');
+  await input.press('Control+Enter'); // empty no-op must not suppress steer error feedback
+  await steerRoute.fulfill({ status: 503, json: { error: 'steer upstream down' } });
+  await expect(page.locator('#status')).toContainText('Steer failed: steer upstream down');
+});
+
 export {};

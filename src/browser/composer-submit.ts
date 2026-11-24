@@ -142,12 +142,12 @@ async function sendPrompt() {
   if (!sessionState.currentSession) return;
   const owner = sessionState.captureSelection();
   if (!owner || disposed) return;
-  const endpoint = Object.freeze({ ...options.endpoint(owner.host) }), sequence = ++feedbackSequence;
-  const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
   const { id: sessionId } = owner;
   const ownerKey = sessionRefKey(owner);
   const preparing = composerDrafts.images.isPreparing(composerDrafts.ownerKey(ownerKey));
   if (!message && !composerDrafts.images.current().length && !preparing) return;
+  const endpoint = Object.freeze({ ...options.endpoint(owner.host) }), sequence = ++feedbackSequence;
+  const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
   if (sessionActivity.isAborting(ownerKey)) {
     options.status('Wait for the current turn to finish stopping', 'working');
     return;
@@ -220,9 +220,10 @@ async function sendPrompt() {
   const attachments = composerDrafts.images.take();
   const resolved = resolveSubmission(message, attachments);
   // Record prose before clearing the draft / starting uploads so a reload
-  // mid-upload can still recover it from ↑ history; upgrade in place on finish.
+  // mid-upload can still recover it from ↑ history; upgrade or roll back only
+  // the provisional entry this send inserted.
   const preUploadHistory = formatPromptForHistory(resolved.message, resolved.imageTokens);
-  if (preUploadHistory) composerDrafts.record(preUploadHistory, ownerKey);
+  const provisionalHistory = !!preUploadHistory && composerDrafts.record(preUploadHistory, ownerKey);
   composerDrafts.clearDraft(ownerKey);
   const images = resolved.images;
   const refs = options.refs(resolved.message);
@@ -231,10 +232,13 @@ async function sendPrompt() {
   const text = resolved.files.length
     ? await withUploads(endpoint, sessionId, ownerKey, owns, message, resolved.message, resolved.hasFileTokens, resolved.files, attachments)
     : resolved.message;
-  if (text === null) return;
+  if (text === null) {
+    if (provisionalHistory) composerDrafts.unrecord(preUploadHistory, ownerKey);
+    return;
+  }
   if (resolved.files.length) {
     const historyText = formatPromptForHistory(text, resolved.imageTokens);
-    if (historyText) composerDrafts.record(historyText, ownerKey, { replaceLast: preUploadHistory || undefined });
+    if (historyText) composerDrafts.record(historyText, ownerKey, provisionalHistory ? { replaceLast: preUploadHistory } : undefined);
   }
   // Uploads can outlast the selection; the prompt still goes to its owner, unseen.
   const visible = owns();
@@ -307,12 +311,12 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
   if (!sessionState.currentSession || !sessionState.currentSession.isActive) return;
   const owner = sessionState.captureSelection();
   if (!owner || disposed) return;
-  const endpoint = Object.freeze({ ...options.endpoint(owner.host) }), sequence = ++feedbackSequence;
-  const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
   const { id: sessionId } = owner;
   const ownerKey = sessionRefKey(owner);
   const preparing = composerDrafts.images.isPreparing(composerDrafts.ownerKey(ownerKey));
   if (!message && !composerDrafts.images.current().length && !preparing) return;
+  const endpoint = Object.freeze({ ...options.endpoint(owner.host) }), sequence = ++feedbackSequence;
+  const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
   if (sessionActivity.isAborting(ownerKey)) {
     options.status('Wait for the current turn to finish stopping', 'working');
     return;
@@ -342,16 +346,19 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
   const attachments = composerDrafts.images.take();
   const resolved = resolveSubmission(message, attachments);
   const preUploadHistory = formatPromptForHistory(resolved.message, resolved.imageTokens);
-  if (preUploadHistory) composerDrafts.record(preUploadHistory, ownerKey);
+  const provisionalHistory = !!preUploadHistory && composerDrafts.record(preUploadHistory, ownerKey);
   composerDrafts.clearDraft(ownerKey);
   const images = resolved.images;
   const text = resolved.files.length
     ? await withUploads(endpoint, sessionId, ownerKey, owns, message, resolved.message, resolved.hasFileTokens, resolved.files, attachments)
     : resolved.message;
-  if (text === null) return;
+  if (text === null) {
+    if (provisionalHistory) composerDrafts.unrecord(preUploadHistory, ownerKey);
+    return;
+  }
   if (resolved.files.length) {
     const historyText = formatPromptForHistory(text, resolved.imageTokens);
-    if (historyText) composerDrafts.record(historyText, ownerKey, { replaceLast: preUploadHistory || undefined });
+    if (historyText) composerDrafts.record(historyText, ownerKey, provisionalHistory ? { replaceLast: preUploadHistory } : undefined);
   }
   if (owns()) options.status(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
 

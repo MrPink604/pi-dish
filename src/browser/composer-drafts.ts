@@ -165,15 +165,27 @@ export function createComposerDrafts(options: {
     }
     input().value = draft; images.render(); syncSendDisabled(); options.autosize(input()); historyIndex = -1; historyStash = ''; history = readHistory(owner); changed();
   }
-  function record(message: string, id: string | null = key, opts?: { replaceLast?: string }) {
-    if (disposed || !id) return; const owner = ownerKey(id);
+  function record(message: string, id: string | null = key, opts?: { replaceLast?: string }): boolean {
+    if (disposed || !id) return false; const owner = ownerKey(id);
     const currentHistory = key === owner ? history : readHistory(owner);
     const base = opts?.replaceLast && currentHistory.at(-1) === opts.replaceLast
       ? currentHistory.slice(0, -1)
       : currentHistory;
+    const trimmed = message.trim();
+    const inserted = !!trimmed && base.at(-1) !== trimmed;
     const next = pushPromptHistory(base, message, HISTORY_LIMIT);
     if (key === owner) { history = next; historyIndex = -1; }
     try { storage.setItem(historyKey(owner), JSON.stringify(next)); } catch {}
+    changed();
+    return inserted;
+  }
+  function unrecord(expectedLast: string, id: string | null = key) {
+    if (disposed || !id || !expectedLast) return; const owner = ownerKey(id);
+    const currentHistory = key === owner ? history : readHistory(owner);
+    if (currentHistory.at(-1) !== expectedLast) return;
+    const next = currentHistory.slice(0, -1);
+    if (key === owner) { history = next; historyIndex = -1; }
+    try { if (next.length) storage.setItem(historyKey(owner), JSON.stringify(next)); else storage.removeItem(historyKey(owner)); } catch {}
     changed();
   }
   /** Sent prompts of one owner, oldest first; the visible owner reads its live list. */
@@ -216,7 +228,7 @@ export function createComposerDrafts(options: {
     else { historyIndex++; if (historyIndex >= history.length) historyIndex = -1; }
     const value = historyIndex === -1 ? historyStash : history[historyIndex]!; target.value = value; target.setSelectionRange(value.length, value.length); options.autosize(target); return true;
   }
-  return { images, ownerKey, draftKey, draftRefsKey, historyKey, write, stash, clear, waiting, saveSoon, clearDraft, restore, record, prompts, clearHistory, migrate, restorePayload, navigate,
+  return { images, ownerKey, draftKey, draftRefsKey, historyKey, write, stash, clear, waiting, saveSoon, clearDraft, restore, record, unrecord, prompts, clearHistory, migrate, restorePayload, navigate,
     exitHistory() { historyIndex = -1; }, get key() { return key; }, get historyIndex() { return historyIndex; },
     dispose() { stash(); disposed = true; images.dispose(); },
   };
