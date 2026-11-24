@@ -392,29 +392,36 @@ test('a launch whose agent is not running and registered is never reported resto
   assert.match(String(s.row().reason), /not running with a registered bridge/);
 });
 
-test('a tmux server loss restores hung-up agents without prompting, respects continuationSafety and skips pending routine closes', async t => {
+test('a tmux server loss marks hung-up agents lost without auto-relaunching, respects continuationSafety and skips pending routine closes', async t => {
   const s = scenario(t, { mode: 'restore', record: { shutdown: true, activity: 'uncertain' } });
   await s.runner.start();
   assert.equal(s.row().status, 'needs-review', 'at startup a generic shutdown is still ambiguous');
   assert.deepEqual(s.launches, []);
 
-  await s.runner.recoverLost(['session']);
-  assert.equal(s.row().status, 'restored');
-  assert.deepEqual(s.launches, ['session']);
+  await s.runner.markLost(['session']);
+  assert.equal(s.row().status, 'pending', 'tmux loss marks non-running sessions pending for manual retry');
+  assert.deepEqual(s.launches, [], 'agent sessions are never auto-relaunched on tmux loss');
   assert.deepEqual(s.prompts, []);
 
-  // Even in continue mode for a running turn, tmux-lost restores idle without
-  // starting a new paid turn and surfaces continuationSafety findings.
+  const retried = await s.runner.retryAll();
+  assert.deepEqual(retried.map(outcome => outcome.status), ['restored']);
+  assert.deepEqual(s.launches, ['session']);
+  assert.deepEqual(s.prompts, []);
+  assert.deepEqual(await s.runner.retryAll(), [], 'a running session leaves the retry-all set');
+
+  // An interrupted running turn is flagged needs-review with continuationSafety findings
+  // and stays one-by-one (not launched automatically or by retry-all).
   const interrupted = scenario(t, { mode: 'continue', record: { shutdown: false, activity: 'running', runId: 'run-1' } });
   fs.appendFileSync(interrupted.file, JSON.stringify({
     type: 'message',
     message: { role: 'assistant', stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'tc-1', name: 'bash' }] },
   }) + '\n');
-  await interrupted.runner.recoverLost(['session']);
-  assert.deepEqual(interrupted.launches, ['session']);
+  await interrupted.runner.markLost(['session']);
+  assert.deepEqual(interrupted.launches, [], 'interrupted sessions are not auto-relaunched');
   assert.deepEqual(interrupted.prompts, [], 'tmux server loss must never send an automatic prompt');
   assert.equal(interrupted.row().status, 'needs-review');
   assert.match(String(interrupted.row().reason), /Tool calls have no recorded result/);
+  assert.deepEqual(await interrupted.runner.retryAll(), [], 'needs-review interrupted rows stay one-by-one');
 
   // A completed one-shot routine waiting on its close grace timer is never resurrected.
   const closing = scenario(t, {
@@ -422,20 +429,10 @@ test('a tmux server loss restores hung-up agents without prompting, respects con
     record: { shutdown: true, activity: 'uncertain' },
     deps: { isPendingClose: id => id === 'session' },
   });
-  await closing.runner.recoverLost(['session']);
+  await closing.runner.markLost(['session']);
   assert.deepEqual(closing.launches, []);
   assert.equal(closing.row().status, 'closed');
-});
-
-test('a tmux server loss with recovery off reports pending and waits for retry-all', async t => {
-  const s = scenario(t, { mode: 'off', record: { shutdown: true, activity: 'uncertain' } });
-  await s.runner.recoverLost(['session']);
-  assert.equal(s.row().status, 'pending');
-  assert.deepEqual(s.launches, []);
-  const outcomes = await s.runner.retryAll();
-  assert.deepEqual(outcomes.map(outcome => outcome.status), ['restored']);
-  assert.deepEqual(s.launches, ['session']);
-  assert.deepEqual(await s.runner.retryAll(), [], 'a running session leaves the retry-all set');
+  assert.deepEqual(await closing.runner.retryAll(), []);
 });
 
 test('retry-all retries failed rows, leaves needs-review/ambiguous one-by-one, and honors the private PIN gate', async t => {
@@ -449,7 +446,7 @@ test('retry-all retries failed rows, leaves needs-review/ambiguous one-by-one, a
     mode: 'off',
     control: { attempt: { observationId: 'observation', status: 'needs-review', delivery: 'uncertain' } },
   });
-  await ambiguous.runner.recoverLost(['session']);
+  await ambiguous.runner.markLost(['session']);
   assert.deepEqual(await ambiguous.runner.retryAll(), []);
   assert.deepEqual(ambiguous.launches, []);
 
@@ -523,45 +520,6 @@ test('persisted tmux loss limiter enforces exponential backoff, rolling cap, res
   const corrupt = open().check();
   assert.equal(corrupt.allowed, false);
   assert.match(corrupt.reason, /corrupt/i);
-  assert.match(String(open().suppressedBotReason('fleet')), /corrupt/i, 'corrupt state fails closed for bot startup suppression');
-  assert.match(String(open().suppressedAgentReason('session')), /corrupt/i, 'corrupt state fails closed for agent startup suppression');
-});
-
-test('persisted suppression holds across restarts until backoff clears or explicit clear', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-recovery-runner-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const stateFile = path.join(dir, 'tmux-recovery-state.json');
-  let clock = 1_000_000;
-  const open = () => createTmuxLossLimiter({
-    file: () => stateFile,
-    now: () => clock,
-    baseBackoffMs: 30_000,
-    maxBackoffMs: 120_000,
-    windowMs: 600_000,
-    maxAttempts: 3,
-  });
-
-  open().record();
-  open().suppress({ botIds: ['fleet', 'helper'], agentIds: ['sess-a'] });
-
-  // After a simulated restart during backoff, suppressed bots/agents are held back while others are not.
-  clock += 5_000;
-  const restarted = open();
-  assert.match(String(restarted.suppressedBotReason('fleet')), /backoff/i);
-  assert.match(String(restarted.suppressedBotReason('helper')), /backoff/i);
-  assert.equal(restarted.suppressedBotReason('other-bot'), null);
-  assert.match(String(restarted.suppressedAgentReason('sess-a')), /backoff/i);
-  assert.equal(restarted.suppressedAgentReason('sess-b'), null);
-
-  // Clearing one id leaves the remaining suppressed entries intact.
-  restarted.clearSuppressed({ botIds: ['fleet'] });
-  assert.equal(open().suppressedBotReason('fleet'), null);
-  assert.match(String(open().suppressedBotReason('helper')), /backoff/i);
-
-  // Once backoff expires, suppression no longer blocks startup.
-  clock += 30_000;
-  assert.equal(open().suppressedBotReason('helper'), null);
-  assert.equal(open().suppressedAgentReason('sess-a'), null);
 });
 
 test('startup recovery honours persisted backoff suppression while leaving live sessions alone', async t => {
@@ -590,7 +548,7 @@ test('startup recovery honours persisted backoff suppression while leaving live 
   assert.equal(live.row().status, 'live');
 });
 
-test('overlapping start() and recoverLost() never sends a paid continuation prompt', async t => {
+test('overlapping start() and markLost() never sends a paid continuation prompt', async t => {
   // Case 1: loss arrives while start() is awaiting restore().
   let releaseRestore!: () => void;
   let restoreEntered!: () => void;
@@ -599,22 +557,21 @@ test('overlapping start() and recoverLost() never sends a paid continuation prom
 
   const s1 = scenario(t, { mode: 'continue', record: { activity: 'running', runId: 'run-1' } });
   const baseRestore = s1.deps.restore;
-  s1.deps.restore = async (record, options) => {
+  s1.deps.restore = async record => {
     restoreEntered();
     await restoreWait;
-    return baseRestore(record, options);
+    return baseRestore(record);
   };
   const runner1 = createRecoveryRunner(s1.deps);
   const startFlight = runner1.start();
   await enteredRestore;
-  const lostFlight = runner1.recoverLost(['session']);
+  const lostFlight = runner1.markLost(['session']);
   releaseRestore();
   await startFlight;
-  const lostOutcomes = await lostFlight;
+  await lostFlight;
 
-  assert.deepEqual(s1.launches, ['session'], 'overlapping flights share one launch');
-  assert.deepEqual(s1.prompts, [], 'overlapping start() and recoverLost() must never send a paid prompt');
-  assert.equal(lostOutcomes[0]?.status, 'needs-review');
+  assert.deepEqual(s1.launches, ['session'], 'no second launch is triggered by markLost');
+  assert.deepEqual(s1.prompts, [], 'overlapping start() and markLost() must never send a paid prompt');
   assert.notEqual(runner1.report().sessions[0]?.status, 'continued');
 
   // Case 2: loss is detected right before delivery (during the post-restore live handshake).
@@ -644,57 +601,6 @@ test('overlapping start() and recoverLost() never sends a paid continuation prom
   assert.deepEqual(s2.launches, ['session']);
   assert.deepEqual(s2.prompts, [], 'marking restore-only right before delivery blocks continuation');
   assert.equal(runner2.report().sessions[0]?.status, 'needs-review');
-});
-
-test('recoverLost stops mid-batch on server loss and reconciles already-restored rows', async t => {
-  const s = scenario(t, { mode: 'restore' });
-  const records: RecoveryRecord[] = ['sess-1', 'sess-2', 'sess-3'].map((nativeSessionId, idx) => ({
-    ...s.record, nativeSessionId, updatedAt: new Date(1000 - idx).toISOString(),
-  }));
-  const controls = new Map<string, RecoveryControl>();
-  const liveSet = new Set<string>();
-  const getCtrl = (id: string): RecoveryControl => controls.get(id) ?? { excluded: false, closed: false, attempt: null };
-  let serverAlive = true;
-
-  const runner = createRecoveryRunner({
-    ...s.deps,
-    store: {
-      listRecords: () => [...records],
-      readRecord: (_h, id) => records.find(r => r.nativeSessionId === id) ?? null,
-      getControl: (_h, id) => getCtrl(id),
-      patchControl: (_h, id, patch) => {
-        const next = { ...getCtrl(id), ...patch };
-        controls.set(id, next);
-        return next;
-      },
-      checkpointMatches: () => true,
-    },
-    probeLive: async record => {
-      if (!liveSet.has(record.nativeSessionId)) return null;
-      assert.ok(validSessionId(record.nativeSessionId));
-      return new BridgeSession({ sessionId: record.nativeSessionId, socketPath: '/unused.sock', harnessId: 'pi', sessionFile: record.sessionFile, cwd: record.cwd });
-    },
-    restore: async record => {
-      s.launches.push(record.nativeSessionId);
-      liveSet.add(record.nativeSessionId);
-      // Simulate the replacement tmux server dying immediately after the first launch.
-      serverAlive = false;
-      liveSet.clear();
-      return { success: true, id: record.nativeSessionId };
-    },
-  });
-
-  const outcomes = await runner.recoverLost(['sess-1', 'sess-2', 'sess-3'], {
-    checkServer: async () => serverAlive,
-  });
-  assert.deepEqual(s.launches, ['sess-1'], 'remaining sessions in batch are not launched after server identity loss');
-  assert.equal(outcomes.length, 3);
-  for (const id of ['sess-1', 'sess-2', 'sess-3']) {
-    const row = runner.report().sessions.find(entry => entry.id === id);
-    assert.ok(row, `${id} present in report`);
-    assert.notEqual(row.status, 'restored', `${id} must not falsely report restored after replacement server died`);
-    assert.equal(row.status, 'failed');
-  }
 });
 
 test('retry rejects invalid routes and enforces private authorization on the matched record', async t => {

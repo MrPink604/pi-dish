@@ -158,8 +158,6 @@ export interface BotStartPorts {
   restartStale?(bot: BotRow, holder: BotRelayHolder): void;
   /** Return a reason string to defer starting an offline bot (e.g. persisted tmux-loss backoff); healthy relays are untouched. */
   shouldSkipStart?(bot: BotRow): string | null;
-  /** Called after an active bot is observed live or started cleanly. */
-  onRunning?(bot: BotRow): void;
 }
 
 /** The live relay holding a bot's lock, or null. */
@@ -184,7 +182,6 @@ export async function startBots(ports: BotStartPorts): Promise<void> {
     try {
       const holder = liveBotRelay(path.join(botsDir, bot.id));
       if (holder) {
-        ports.onRunning?.(bot);
         if (ports.build && ports.restartStale && holder.build !== ports.build) {
           ports.restartStale(bot, holder);
           continue;
@@ -198,7 +195,6 @@ export async function startBots(ports: BotStartPorts): Promise<void> {
         continue;
       }
       await startBot(bot, ports);
-      ports.onRunning?.(bot);
     } catch (error) {
       ports.log(`bot ${bot.name} did not start: ${errorMessage(error)}`);
     }

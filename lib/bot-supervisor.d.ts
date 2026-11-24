@@ -64,8 +64,6 @@ export interface BotStartPorts {
     restartStale?(bot: BotRow, holder: BotRelayHolder): void;
     /** Return a reason string to defer starting an offline bot (e.g. persisted tmux-loss backoff); healthy relays are untouched. */
     shouldSkipStart?(bot: BotRow): string | null;
-    /** Called after an active bot is observed live or started cleanly. */
-    onRunning?(bot: BotRow): void;
 }
 /** The live relay holding a bot's lock, or null. */
 export declare function liveBotRelay(botDir: string): BotRelayHolder | null;

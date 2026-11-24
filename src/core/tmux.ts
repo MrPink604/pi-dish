@@ -395,7 +395,6 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
     const paneId = out.trim();
     const after = await serverIdentity(socket);
     if (!sameServerIdentity(after, expectedServer)) {
-      if (after && paneId) await killPane(socket, paneId).catch(() => {});
       if (!after) notifyHeadlessNoServer(socket);
       throw new TmuxServerLostError(`expected tmux server pid ${expectedServer.pid} was lost during launch`, false);
     }

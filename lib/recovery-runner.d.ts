@@ -41,17 +41,6 @@ export interface RecoveryRetryAllOptions {
     /** Include PIN-protected private sessions; defaults false (fail closed). */
     includePrivate?: boolean;
 }
-export interface RecoverLostOptions {
-    /** Bind headless tmux launches to one exact replacement server (-N, no server creation). */
-    expectedTmuxServer?: ProcessIdentity | null;
-    /** Checked around each launch; returning false aborts the batch and reconciles its rows. */
-    checkServer?: () => Promise<boolean>;
-}
-export interface ReconcileLostResult {
-    live: RecoveryOutcome[];
-    deadIds: string[];
-    outcomes: RecoveryOutcome[];
-}
 export interface RecoveryRunner {
     start(): Promise<void>;
     retry(id: string, options?: RecoveryRetryOptions): Promise<RecoveryOutcome>;
@@ -59,14 +48,8 @@ export interface RecoveryRunner {
     retryAll(options?: RecoveryRetryAllOptions): Promise<RecoveryOutcome[]>;
     /** Marks routes affected by confirmed tmux server loss as restore-only immediately on detection. */
     markLostRestoreOnly(ids: readonly string[]): void;
-    /** Automatic restore-only recovery of sessions that were live in a lost tmux server. */
-    recoverLost(ids: readonly string[], options?: RecoverLostOptions): Promise<RecoveryOutcome[]>;
-    /** Reconciles rows in a lost/aborted batch against live sessions so reports stay accurate. */
-    reconcileLost(ids: readonly string[], reason: string, options?: {
-        status?: 'failed' | 'needs-review';
-    }): Promise<ReconcileLostResult>;
-    /** Records a persisted needs-review outcome when automatic server-loss recovery is rate-limited. */
-    markLostRateLimited(ids: readonly string[], reason: string): RecoveryOutcome[];
+    /** Marks sessions lost when pi-dish's tmux server died without auto-relaunching them. */
+    markLost(ids: readonly string[], reason?: string): Promise<RecoveryOutcome[]>;
     /** True while a recovery launch/check flight is currently active for `id`. */
     isRecovering(id: string): boolean;
     report(options?: RecoveryReportOptions): RecoveryReport;
@@ -95,9 +78,7 @@ export interface RecoveryRunnerOptions extends RecoveryPresentationOptions {
     routeId: typeof recoveryRouteId;
     probeLive: SessionOperations['probeRecoveryLive'];
     validateRecord: typeof validateRecoveryRecord;
-    restore(record: RecoveryRecord, options?: {
-        expectedTmuxServer?: ProcessIdentity | null;
-    }): Promise<ResumeSessionResult>;
+    restore(record: RecoveryRecord): Promise<ResumeSessionResult>;
     continueSession(record: RecoveryRecord, session: LiveSession, message: string): Promise<void>;
 }
 export interface RecoveryRuntimeOptions extends RecoveryPresentationOptions {
@@ -124,21 +105,9 @@ export type TmuxLossVerdict = {
     retryAt: number | null;
     reason: string;
 };
-export interface TmuxLossSuppression {
-    agentIds?: readonly string[];
-    botIds?: readonly string[];
-}
 export interface TmuxLossLimiter {
     check(at?: number): TmuxLossVerdict;
     record(at?: number): void;
-    /** Persists agents/bots suppressed by a rate-limited or failed server-loss recovery across restarts. */
-    suppress(targets: TmuxLossSuppression): void;
-    /** Clears agents/bots from persisted suppression once running or explicitly resumed. */
-    clearSuppressed(targets: TmuxLossSuppression): void;
-    /** Returns a refusal reason if startup launch for `botId` is currently suppressed by backoff/cap or corrupt state. */
-    suppressedBotReason(botId: string, at?: number): string | null;
-    /** Returns a refusal reason if startup recovery for `agentId` is currently suppressed by backoff/cap or corrupt state. */
-    suppressedAgentReason(agentId: string, at?: number): string | null;
 }
 /**
  * Durable exponential-backoff and rolling-window limiter for automatic tmux

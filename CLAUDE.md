@@ -785,19 +785,28 @@ finished one-shot session.
 `watchTmuxServer` watches pi-dish's own headless `pi-dish` socket (periodic
 `inspectServer` poll via `PI_DISH_TMUX_WATCH_MS`, default 10 s, plus on-demand
 `onHeadlessNoServer`/`onHeadlessSpawn` hooks). The headless server sets
-`exit-empty off` (both at cold start and on already-running servers via `-N`),
-so a single session exiting keeps the same server PID and never triggers server
-loss. Each live agent/bot snapshot requires a non-dead pane matching the spawn
-placement's `paneProcess` birth identity and process ancestry; empty/dead panes
-and exited sessions are excluded. When the watched server process dies or is
-replaced by a different server identity, the watcher waits for hung-up pane
-processes to exit, checks the durable exponential-backoff/window limiter in
+`exit-empty off` (at cold start, and via `-N` on already-running servers only
+after verifying at least one live pi-dish placement, retrying if the write
+fails), so a single session exiting keeps the same server PID and never triggers
+server loss. Each live agent/bot snapshot requires a non-dead pane matching the
+spawn placement's `paneProcess` birth identity and process ancestry; empty/dead
+panes and exited sessions are excluded. When the watched server process dies or
+is replaced by a different server identity, `onLossDetected` immediately marks
+every affected agent route restore-only (blocking any overlapping `start()`
+continuation prompt), and after waiting for hung-up pane processes to exit,
+`handleTmuxServerLoss` marks affected agent sessions lost (`markLost`: `pending`
+for idle sessions, `needs-review` via `continuationSafety()` for interrupted
+running turns or ambiguous deliveries — never auto-relaunching agent sessions).
+For active, non-closed bot relays that were running in the lost server (never
+retired bots), it checks the durable exponential-backoff/window limiter in
 `~/.pi/dish/tmux-recovery-state.json` (fail-closed on corruption, persisted
-before launching), recreates the server through `ensureHeadlessServer` (`-f /dev/null`,
-`-N` when running, systemd scope), runs restore-only `recoverLost` (never sends
-a continuation prompt on server loss; interrupted running turns stay flagged
-`needs-review` using `continuationSafety()`), requires `probeLive` after any
-launch, and restarts active non-closed bot relays (never retired bots).
+before launching), recreates the server through `ensureHeadlessServer`
+(`-f /dev/null`, `-N` when running, systemd scope), and restarts those relays
+bound to the replacement server's `ProcessIdentity` (`-N`, no server creation,
+no cross-server pane kills). While persisted backoff is active, automatic starts
+of offline bot relays (startup `startBots`, wake/delivery, and loss recovery)
+and offline startup recovery are skipped, while healthy running relays/sessions
+are left untouched.
 
 The Fleet view exposes host-scoped controls and a separate `.main.recovery-open`
 report takeover. `src/browser/recovery.ts` owns preference/report requests, selected endpoint

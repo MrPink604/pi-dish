@@ -766,16 +766,26 @@ otherwise; OMP and Prime require tmux. Original workspace and transcript must
 still exist; automatic recovery never silently switches to HOME.
 
 While running, pi-dish also watches its own `pi-dish` tmux server (every 10
-seconds, and immediately when a tmux command fails with no server). When that
-server dies or is replaced, pi-dish recreates it (`-f /dev/null`, same server
-options), restores the agent sessions that were verified live inside its panes
-(resuming their conversations idle — never starting a new paid turn on its own),
-and restarts active bot relays that were running (never retired bots). Single
-sessions exiting on their own keep the server alive (`exit-empty off`) and are
-not treated as server loss. Automatic server-loss recovery enforces a persisted
-exponential backoff and rolling cap (`~/.pi/dish/tmux-recovery-state.json`) so
-a crash loop cannot respawn forever; rate-limited sessions stay `needs-review`.
-A session is reported **restored** only once its agent is running and registered.
+seconds, and immediately when a tmux command fails with no server). Single
+sessions exiting on their own keep the server alive (`exit-empty off`, applied
+only after verifying a live pi-dish placement) and are not treated as server
+loss. When that server dies or is replaced:
+
+- **Bot relays (automatic):** if active, non-retired bot relays were running in
+  the lost server, pi-dish enforces a persisted exponential backoff and rolling
+  cap (`~/.pi/dish/tmux-recovery-state.json`), recreates the headless server
+  (`-f /dev/null`, same server options), and restarts those relays bound to the
+  replacement server (`-N`). While persisted backoff is active, automatic starts
+  of offline bot relays (startup, wake/delivery, and loss recovery) are skipped
+  while healthy running relays are left alone.
+- **Agent sessions (manual retry):** affected agent sessions are not
+  automatically relaunched on tmux server loss. They are marked lost (`pending`
+  for idle sessions, `needs-review` for interrupted running turns or ambiguous
+  deliveries) and locked restore-only so no overlapping startup recovery can
+  send a paid continuation prompt. Restore them idle through the PIN-gated
+  recovery API (`POST /api/recovery/retry` with `{"id": "<session id>"}` or
+  `{"all": true}`). A session is reported **restored** only once its agent is
+  running and registered.
 
 **Recovery report** opens a full-pane view of restored, continued, failed and
 needs-review outcomes. Exclude individual sessions there, or use **Restore

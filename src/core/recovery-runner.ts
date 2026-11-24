@@ -16,7 +16,6 @@ import type { LiveSession, SessionOwnership } from './session-ownership';
 import { validSessionId } from './session-key';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryAttempt, RecoveryRecord } from './session-recovery';
-import { TmuxServerLostError } from './tmux';
 import type { LiveTmuxPane, TmuxServerSnapshot } from './tmux';
 import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
@@ -63,19 +62,6 @@ export interface RecoveryRetryAllOptions {
   includePrivate?: boolean;
 }
 
-export interface RecoverLostOptions {
-  /** Bind headless tmux launches to one exact replacement server (-N, no server creation). */
-  expectedTmuxServer?: ProcessIdentity | null;
-  /** Checked around each launch; returning false aborts the batch and reconciles its rows. */
-  checkServer?: () => Promise<boolean>;
-}
-
-export interface ReconcileLostResult {
-  live: RecoveryOutcome[];
-  deadIds: string[];
-  outcomes: RecoveryOutcome[];
-}
-
 export interface RecoveryRunner {
   start(): Promise<void>;
   retry(id: string, options?: RecoveryRetryOptions): Promise<RecoveryOutcome>;
@@ -83,12 +69,8 @@ export interface RecoveryRunner {
   retryAll(options?: RecoveryRetryAllOptions): Promise<RecoveryOutcome[]>;
   /** Marks routes affected by confirmed tmux server loss as restore-only immediately on detection. */
   markLostRestoreOnly(ids: readonly string[]): void;
-  /** Automatic restore-only recovery of sessions that were live in a lost tmux server. */
-  recoverLost(ids: readonly string[], options?: RecoverLostOptions): Promise<RecoveryOutcome[]>;
-  /** Reconciles rows in a lost/aborted batch against live sessions so reports stay accurate. */
-  reconcileLost(ids: readonly string[], reason: string, options?: { status?: 'failed' | 'needs-review' }): Promise<ReconcileLostResult>;
-  /** Records a persisted needs-review outcome when automatic server-loss recovery is rate-limited. */
-  markLostRateLimited(ids: readonly string[], reason: string): RecoveryOutcome[];
+  /** Marks sessions lost when pi-dish's tmux server died without auto-relaunching them. */
+  markLost(ids: readonly string[], reason?: string): Promise<RecoveryOutcome[]>;
   /** True while a recovery launch/check flight is currently active for `id`. */
   isRecovering(id: string): boolean;
   report(options?: RecoveryReportOptions): RecoveryReport;
@@ -119,7 +101,7 @@ export interface RecoveryRunnerOptions extends RecoveryPresentationOptions {
   routeId: typeof recoveryRouteId;
   probeLive: SessionOperations['probeRecoveryLive'];
   validateRecord: typeof validateRecoveryRecord;
-  restore(record: RecoveryRecord, options?: { expectedTmuxServer?: ProcessIdentity | null }): Promise<ResumeSessionResult>;
+  restore(record: RecoveryRecord): Promise<ResumeSessionResult>;
   continueSession(record: RecoveryRecord, session: LiveSession, message: string): Promise<void>;
 }
 
@@ -132,8 +114,8 @@ const MAX_SESSIONS = 5000;
 export const RECOVERY_PROMPT = 'pi-dish recovery: this session was interrupted while work was in progress. Before continuing, inspect the transcript, working files, and any external state affected by prior tools. A tool or external action may have completed without its result being recorded. Do not blindly repeat commands, writes, deployments, purchases, or other side effects. Reconcile what actually happened, explain any uncertainty, and ask for confirmation where safe continuation cannot be established. Continue the existing task only after this inspection; this message is not an instruction to replay the last prompt or retry a tool.';
 const HIBERNATED_REASON = 'Hibernated under memory pressure; a message resumes it.';
 const RUNNING_STATUSES: Record<string, true> = { live: true, restored: true, continued: true };
-/** startup: pi-dish started; explicit: an API retry; tmux-lost: the tmux server holding the live agent died or was replaced. */
-type RecoveryTrigger = 'startup' | 'explicit' | 'tmux-lost';
+/** startup: pi-dish started; explicit: an API retry. */
+type RecoveryTrigger = 'startup' | 'explicit';
 /** Harnesses whose lifecycle observations and bridge prompt path are verified. */
 const PROMPT_RECOVERY_HARNESSES: Record<string, true> = { pi: true, omp: true, agy: true };
 const TMUX_LOSS_STATE_VERSION = 1;
@@ -290,14 +272,10 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       truncated: records.length > MAX_SESSIONS, totalRecords: records.length };
   }
 
-  async function run(
-    record: RecoveryRecord,
-    trigger: RecoveryTrigger,
-    options?: { expectedTmuxServer?: ProcessIdentity | null },
-  ): Promise<RecoveryOutcome> {
+  async function run(record: RecoveryRecord, trigger: RecoveryTrigger): Promise<RecoveryOutcome> {
     const id = routeId(record);
     const explicit = trigger === 'explicit';
-    const isRestoreOnly = () => trigger === 'tmux-lost' || restoreOnly.has(id);
+    const isRestoreOnly = () => restoreOnly.has(id);
     const previous = store.getControl(record.harnessId, record.nativeSessionId).attempt;
     const ambiguous = previous?.delivery === 'uncertain' || previous?.status === 'restoring';
     // Settings, a newer observation, or a confirmed tmux loss can cancel continuation at any await.
@@ -332,13 +310,10 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
         const suppressedReason = suppressedAtStartup(id);
         if (suppressedReason) return remember(record, 'needs-review', suppressedReason);
       }
-      // A confirmed tmux server loss hangs up every agent inside it: that SIGHUP shutdown is the loss, not a quit.
-      if (!explicit && record.shutdown && trigger !== 'tmux-lost') {
+      if (!explicit && record.shutdown) {
         return remember(record, 'needs-review', 'The harness shut down; quit, reload, and operating-system shutdown cannot be distinguished.');
       }
-      const repeatIdleRestore = record.activity === 'idle'
-        && (previous?.status === 'restored' || (trigger === 'tmux-lost' && previous?.status === 'failed'))
-        && !previous.delivery;
+      const repeatIdleRestore = record.activity === 'idle' && previous?.status === 'restored' && !previous.delivery;
       if (!explicit && previous?.observationId === record.observationId && !repeatIdleRestore) {
         return remember(record, 'needs-review', previous.reason || 'This observation was already recovered; automatic retries are disabled.');
       }
@@ -352,8 +327,6 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
             : !Object.hasOwn(PROMPT_RECOVERY_HARNESSES, record.harnessId) ? 'This harness has no verified recovery prompt path.'
               : await continuationSafety(record.sessionFile);
       } else if (isRestoreOnly() && !explicit && recoveryMode(getMode()) === 'continue' && record.activity === 'running') {
-        // Server-loss recovery never starts a new paid turn on its own; still inspect
-        // the transcript with continuationSafety so interrupted work is flagged clearly.
         safety = !matched
           ? 'The transcript changed after the last durable observation; restored idle without prompting.'
           : await continuationSafety(record.sessionFile);
@@ -361,7 +334,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       // Durable intent precedes even the launch. A crash after this point is
       // ambiguous until a live identity or an explicit restore-only retry.
       save(record, 'restoring', null, { id: crypto.randomUUID(), delivery: previous?.delivery === 'uncertain' ? 'uncertain' : null });
-      const result = await restore(record, options);
+      const result = await restore(record);
       // A returned launch is not a running agent: restored means a live, registered session now.
       const session = await probeLive(record);
       if (!session) {
@@ -372,13 +345,13 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
         if (previous?.delivery === 'uncertain') {
           return save(record, 'needs-review', 'Restored without resending the earlier uncertain recovery prompt.');
         }
-        if (recoveryMode(getMode()) === 'continue' && record.activity === 'running') {
+        if (!explicit && recoveryMode(getMode()) === 'continue' && record.activity === 'running') {
           const inspection = safety ?? (!store.checkpointMatches(record)
             ? 'The transcript changed after the last durable observation; restored idle without prompting.'
             : await continuationSafety(record.sessionFile));
           return save(record, 'needs-review', inspection || 'Restored idle after tmux server loss without sending a prompt; inspect interrupted work before continuing.');
         }
-        return save(record, 'restored', 'Restored after tmux server loss without sending a prompt.');
+        return save(record, 'restored', 'Restored without sending a prompt.');
       }
       if (explicit || recoveryMode(getMode()) !== 'continue' || record.activity === 'idle') {
         return save(record, previous?.delivery === 'uncertain' ? 'needs-review' : 'restored', previous?.delivery === 'uncertain'
@@ -400,8 +373,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       return save(record, 'continued', 'Sent one visible recovery prompt to inspect state before continuing.', { delivery: 'confirmed' });
     } catch (error) {
       const attempt = store.getControl(record.harnessId, record.nativeSessionId).attempt;
-      const uncertain = attempt?.delivery === 'uncertain'
-        || (attempt?.status === 'restoring' && !(error instanceof TmuxServerLostError && error.beforeSpawn));
+      const uncertain = attempt?.delivery === 'uncertain' || attempt?.status === 'restoring';
       try { return save(record, uncertain ? 'needs-review' : 'failed', errorMessage(error)); }
       catch (persistError) {
         log.error?.(`Recovery ${id}: ${errorMessage(persistError)}`);
@@ -410,15 +382,11 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     }
   }
 
-  function recover(
-    record: RecoveryRecord,
-    trigger: RecoveryTrigger = 'startup',
-    options?: { expectedTmuxServer?: ProcessIdentity | null },
-  ): Promise<RecoveryOutcome> {
+  function recover(record: RecoveryRecord, trigger: RecoveryTrigger = 'startup'): Promise<RecoveryOutcome> {
     const id = routeId(record);
     const existing = flights.get(id);
     if (existing) return existing;
-    const flight = Promise.resolve().then(() => run(record, trigger, options)).then(outcome => {
+    const flight = Promise.resolve().then(() => run(record, trigger)).then(outcome => {
       if (Object.hasOwn(RUNNING_STATUSES, outcome.status)) lost.delete(id);
       return outcome;
     });
@@ -487,89 +455,74 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     return outcomes;
   }
 
-  async function reconcileLost(
-    ids: readonly string[],
-    reason: string,
-    { status = 'needs-review' }: { status?: 'failed' | 'needs-review' } = {},
-  ): Promise<ReconcileLostResult> {
-    markLostRestoreOnly(ids);
-    const wanted = new Set(ids);
-    const live: RecoveryOutcome[] = [];
-    const deadIds: string[] = [];
-    const outcomes: RecoveryOutcome[] = [];
-    for (const record of newestRecords()) {
-      const id = safeRouteId(record);
-      if (!id || !wanted.has(id)) continue;
-      const control = store.getControl(record.harnessId, record.nativeSessionId);
-      if (control.closed || control.excluded || hibernated(id) || isPendingClose(id)) continue;
-      const running = await probeLive(record).catch(() => null);
-      if (running) {
-        const row = remember(record, 'live', 'Attached to the surviving session; no prompt was sent.');
-        lost.delete(id);
-        live.push(row);
-        outcomes.push(row);
-        continue;
-      }
-      deadIds.push(id);
-      lost.add(id);
-      try {
-        outcomes.push(save(record, status, reason));
-      } catch (persistError) {
-        log.error?.(`Recovery ${id}: ${errorMessage(persistError)}`);
-        outcomes.push(remember(record, status, reason));
-      }
-    }
-    return { live, deadIds, outcomes };
-  }
-
-  async function recoverLost(ids: readonly string[], { expectedTmuxServer = null, checkServer }: RecoverLostOptions = {}): Promise<RecoveryOutcome[]> {
+  /**
+   * Marks sessions affected by a confirmed tmux server loss without launching
+   * them automatically. Idle sessions stay `pending` for manual single/bulk
+   * retry; interrupted running turns and ambiguous deliveries stay `needs-review`.
+   */
+  async function markLost(ids: readonly string[], reason?: string): Promise<RecoveryOutcome[]> {
     markLostRestoreOnly(ids);
     const wanted = new Set(ids);
     const outcomes: RecoveryOutcome[] = [];
-    let serverLost = false;
     for (const record of newestRecords()) {
       if (stopped) break;
       const id = safeRouteId(record);
       if (!id || !wanted.has(id)) continue;
-      if (checkServer && !(await checkServer())) {
-        serverLost = true;
-        break;
-      }
-      outcomes.push(await recover(record, 'tmux-lost', { expectedTmuxServer }));
-      if (checkServer && !(await checkServer())) {
-        serverLost = true;
-        break;
-      }
-    }
-    if (serverLost && !stopped) {
-      const reconciled = await reconcileLost(ids, 'Replacement tmux server died during recovery batch.', { status: 'failed' });
-      return reconciled.outcomes;
-    }
-    return outcomes;
-  }
-
-  function markLostRateLimited(ids: readonly string[], reason: string): RecoveryOutcome[] {
-    markLostRestoreOnly(ids);
-    const wanted = new Set(ids);
-    const outcomes: RecoveryOutcome[] = [];
-    for (const record of newestRecords()) {
-      const id = safeRouteId(record);
-      if (!id || !wanted.has(id)) continue;
       const control = store.getControl(record.harnessId, record.nativeSessionId);
-      if (control.closed || control.excluded || hibernated(id) || isPendingClose(id)) continue;
+      if (control.closed) {
+        lost.delete(id);
+        outcomes.push(remember(record, 'closed', 'This session was explicitly closed.'));
+        continue;
+      }
+      if (isPendingClose(id)) {
+        lost.delete(id);
+        outcomes.push(remember(record, 'closed', 'Routine one-shot session was pending auto-close.'));
+        continue;
+      }
+      if (hibernated(id)) {
+        lost.delete(id);
+        outcomes.push(remember(record, 'pending', HIBERNATED_REASON));
+        continue;
+      }
+      if (control.excluded) {
+        lost.delete(id);
+        outcomes.push(remember(record, 'pending', 'Excluded from automatic recovery.'));
+        continue;
+      }
+      const running = await probeLive(record).catch(() => null);
+      if (running) {
+        lost.delete(id);
+        outcomes.push(remember(record, 'live', 'Attached to the surviving session; no prompt was sent.'));
+        continue;
+      }
+      const previous = control.attempt;
+      const ambiguous = previous?.delivery === 'uncertain' || previous?.status === 'restoring';
+      if (ambiguous) {
+        outcomes.push(remember(record, 'needs-review', 'An earlier recovery launch or prompt has an uncertain outcome; inspect it before retrying.'));
+        continue;
+      }
+      let nextStatus: 'pending' | 'needs-review' = 'pending';
+      let nextReason = reason || 'Lost when the pi-dish tmux server died; retry manually to restore idle without prompting.';
+      if (record.activity === 'running') {
+        nextStatus = 'needs-review';
+        const safety = !store.checkpointMatches(record)
+          ? 'The transcript changed after the last durable observation; inspect work and retry manually to restore idle.'
+          : await continuationSafety(record.sessionFile);
+        nextReason = safety || 'Interrupted when the pi-dish tmux server died; inspect work and retry manually to restore idle.';
+      }
       lost.add(id);
       try {
-        outcomes.push(save(record, 'needs-review', reason));
+        outcomes.push(save(record, nextStatus, nextReason));
       } catch (persistError) {
         log.error?.(`Recovery ${id}: ${errorMessage(persistError)}`);
-        outcomes.push(remember(record, 'needs-review', reason));
+        outcomes.push(remember(record, nextStatus, nextReason));
       }
     }
     return outcomes;
   }
 
   return {
-    start, retry, retryAll, markLostRestoreOnly, recoverLost, reconcileLost, markLostRateLimited,
+    start, retry, retryAll, markLostRestoreOnly, markLost,
     isRecovering: id => flights.has(id),
     report, outcome: id => reports.get(id) ?? null,
     stop: () => { stopped = true; },
@@ -590,30 +543,15 @@ export type TmuxLossVerdict =
   | { allowed: true }
   | { allowed: false; retryAt: number | null; reason: string };
 
-export interface TmuxLossSuppression {
-  agentIds?: readonly string[];
-  botIds?: readonly string[];
-}
-
 export interface TmuxLossLimiter {
   check(at?: number): TmuxLossVerdict;
   record(at?: number): void;
-  /** Persists agents/bots suppressed by a rate-limited or failed server-loss recovery across restarts. */
-  suppress(targets: TmuxLossSuppression): void;
-  /** Clears agents/bots from persisted suppression once running or explicitly resumed. */
-  clearSuppressed(targets: TmuxLossSuppression): void;
-  /** Returns a refusal reason if startup launch for `botId` is currently suppressed by backoff/cap or corrupt state. */
-  suppressedBotReason(botId: string, at?: number): string | null;
-  /** Returns a refusal reason if startup recovery for `agentId` is currently suppressed by backoff/cap or corrupt state. */
-  suppressedAgentReason(agentId: string, at?: number): string | null;
 }
 
 interface TmuxLossState {
   version: 1;
   attempts: number[];
   nextAllowedAt: number;
-  suppressedBots: string[];
-  suppressedAgents: string[];
 }
 
 function formatDuration(ms: number): string {
@@ -634,10 +572,6 @@ function ensurePrivateDir(dir: string): void {
       current = path.dirname(current);
     }
   }
-}
-
-function validStringList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(entry => typeof entry === 'string' && entry.length > 0 && entry.length <= 512);
 }
 
 /**
@@ -669,21 +603,17 @@ export function createTmuxLossLimiter(options: TmuxLossLimiterOptions = {}): Tmu
           || !parsed.attempts.every(entry => typeof entry === 'number' && Number.isFinite(entry) && entry >= 0)
           || typeof parsed.nextAllowedAt !== 'number'
           || !Number.isFinite(parsed.nextAllowedAt)
-          || parsed.nextAllowedAt < 0
-          || (parsed.suppressedBots !== undefined && !validStringList(parsed.suppressedBots))
-          || (parsed.suppressedAgents !== undefined && !validStringList(parsed.suppressedAgents))) {
+          || parsed.nextAllowedAt < 0) {
         throw new Error('Corrupt tmux recovery rate-limit state');
       }
       return {
         version: TMUX_LOSS_STATE_VERSION,
         attempts: [...parsed.attempts],
         nextAllowedAt: parsed.nextAllowedAt,
-        suppressedBots: parsed.suppressedBots ? [...parsed.suppressedBots] : [],
-        suppressedAgents: parsed.suppressedAgents ? [...parsed.suppressedAgents] : [],
       };
     } catch (error) {
       if (isRecord(error) && error.code === 'ENOENT') {
-        return { version: TMUX_LOSS_STATE_VERSION, attempts: [], nextAllowedAt: 0, suppressedBots: [], suppressedAgents: [] };
+        return { version: TMUX_LOSS_STATE_VERSION, attempts: [], nextAllowedAt: 0 };
       }
       throw error;
     } finally {
@@ -736,54 +666,10 @@ export function createTmuxLossLimiter(options: TmuxLossLimiterOptions = {}): Tmu
       version: TMUX_LOSS_STATE_VERSION,
       attempts: recent,
       nextAllowedAt: Math.max(state.nextAllowedAt, at + backoff),
-      suppressedBots: state.suppressedBots,
-      suppressedAgents: state.suppressedAgents,
     });
   }
 
-  function suppress({ agentIds = [], botIds = [] }: TmuxLossSuppression): void {
-    if (!agentIds.length && !botIds.length) return;
-    const state = readState();
-    const bots = new Set(state.suppressedBots);
-    const agents = new Set(state.suppressedAgents);
-    for (const id of botIds) if (id) bots.add(id);
-    for (const id of agentIds) if (id) agents.add(id);
-    writeState({
-      ...state,
-      suppressedBots: [...bots],
-      suppressedAgents: [...agents],
-    });
-  }
-
-  function clearSuppressed({ agentIds = [], botIds = [] }: TmuxLossSuppression): void {
-    if (!agentIds.length && !botIds.length) return;
-    let state: TmuxLossState;
-    try { state = readState(); } catch { return; }
-    const clearBots = new Set(botIds);
-    const clearAgents = new Set(agentIds);
-    const nextBots = state.suppressedBots.filter(id => !clearBots.has(id));
-    const nextAgents = state.suppressedAgents.filter(id => !clearAgents.has(id));
-    if (nextBots.length === state.suppressedBots.length && nextAgents.length === state.suppressedAgents.length) return;
-    writeState({ ...state, suppressedBots: nextBots, suppressedAgents: nextAgents });
-  }
-
-  function suppressedReason(kind: 'bot' | 'agent', id: string, at = now()): string | null {
-    const verdict = check(at);
-    if (verdict.allowed) return null;
-    let state: TmuxLossState;
-    try { state = readState(); } catch { return verdict.reason; }
-    const list = kind === 'bot' ? state.suppressedBots : state.suppressedAgents;
-    return list.includes(id) ? verdict.reason : null;
-  }
-
-  return {
-    check,
-    record,
-    suppress,
-    clearSuppressed,
-    suppressedBotReason: (botId, at) => suppressedReason('bot', botId, at),
-    suppressedAgentReason: (agentId, at) => suppressedReason('agent', agentId, at),
-  };
+  return { check, record };
 }
 
 export interface WatchedTmuxServerSessions {
@@ -989,11 +875,9 @@ export function createRecoveryRuntime({
     routeId: recoveryRouteId,
     probeLive: operations.probeRecoveryLive,
     validateRecord: validateRecoveryRecord,
-    restore: async (record, options) => {
+    restore: async record => {
       const model = ['pi', 'omp'].includes(record.harnessId) ? formatModelRef(record.model) || undefined : undefined;
-      const result = await operations.resumeSessionById(recoveryRouteId(record), {
-        model, recovery: record, expectedTmuxServer: options?.expectedTmuxServer ?? null,
-      });
+      const result = await operations.resumeSessionById(recoveryRouteId(record), { model, recovery: record });
       const session = await operations.probeRecoveryLive(record);
       const pid = session instanceof BridgeSession ? ownership.getRegisteredSession(result.id)?.pid
         : session instanceof PrimeDaemonSession ? session.summary.workerPid

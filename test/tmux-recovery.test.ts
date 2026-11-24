@@ -1,9 +1,14 @@
 /**
  * Private-tmux integration tests for pi-dish tmux server loss recovery:
- * - Recreates pi-dish's tmux server (-f /dev/null, exit-empty off) and restores
- *   both live agent sessions (idle, no new paid turn) and active bot relays
- *   once without operator intervention, while never relaunching retired bots.
- * - Enforces the persisted rate limit / backoff on a rapid second server loss.
+ * - Recreates pi-dish's tmux server (-f /dev/null, exit-empty off) and restarts
+ *   active bot relays once bound to the replacement server (-N), never
+ *   relaunching retired bots.
+ * - Marks lost agent sessions accurately without auto-relaunching them (manual
+ *   PIN-safe retry restores them idle without starting a paid turn).
+ * - Enforces persisted backoff across rapid losses, restarts during active
+ *   backoff (even with no suppressedBots list), and delivery attempts, while
+ *   leaving healthy running relays alone.
+ * - Never kills panes on a different tmux server if a bound launch sees server loss.
  * - Distinguishes a single session exiting on its own from the whole server dying,
  *   and supports on-demand server-loss detection when a tmux command fails with no server.
  * - Preserves the private-session PIN gate on /api/recovery and /api/recovery/retry.
@@ -25,6 +30,7 @@ import type { AddressInfo } from 'node:net';
 import { present, record, records } from './test-types.js';
 import { sanitizeTestEnv } from './test-env.js';
 import { encodeSessionKey, validSessionId } from '../lib/session-key.js';
+import * as tmux from '../lib/tmux.js';
 import crypto = require('node:crypto');
 
 const SERVER = path.join(__dirname, '..', 'server.js');
@@ -262,7 +268,7 @@ function agyClaim(home: string): Record<string, unknown> | null {
   } catch { return null; }
 }
 
-test('killing the pi-dish tmux server restores sessions and active bot relays once, skips retired bots, and enforces persisted backoff',
+test('killing the pi-dish tmux server restarts active bot relays once, marks agents lost without auto-relaunch, skips retired bots, and enforces persisted backoff across restarts and delivery',
   { skip: !tmuxOk, timeout: 180_000 }, async t => {
     const home = makeHome(t, { bots: true, hibernation: 'off', recoveryMode: 'restore' });
     const server = await boot(home, {
@@ -330,16 +336,17 @@ test('killing the pi-dish tmux server restores sessions and active bot relays on
     // 4. Kill the private pi-dish tmux server!
     execFileSync('tmux', ['-S', tmuxSocket(home), 'kill-server'], { env: sanitizeTestEnv(process.env) });
 
-    // 5. Assert both the agent session and Fleet bot come back automatically once.
+    // 5. Assert Fleet bot comes back automatically once, while agy is marked lost without auto-relaunch.
     await untilAsync(async () => {
       const report = await get(server.base, '/api/recovery');
       const agyRow = records(report.body.sessions).find(row => row.id === agyRoute);
       const fleetLock = relayLock(home, fleetId);
-      const agyLive = agyClaim(home);
-      return agyRow?.status === 'restored'
-        && !!agyLive && Number(agyLive.pid) !== firstAgyPid && alive(Number(agyLive.pid))
+      return agyRow?.status === 'pending'
+        && /tmux server died/i.test(String(agyRow.reason ?? ''))
         && !!fleetLock && fleetLock.pid !== firstFleetPid && alive(fleetLock.pid);
-    }, 'agy session and Fleet bot both restored automatically', 60_000);
+    }, 'Fleet bot restarted automatically and agy marked lost', 60_000);
+    await until(() => /\[tmux-recovery\] summary: sessions marked lost=1.*bots restarted=1 \[Fleet\]/.test(server.log()),
+      'recovery summary logged');
 
     // Server was recreated with -f /dev/null and exit-empty off.
     const secondTmuxPid = present(tmuxServerPid(home));
@@ -348,9 +355,11 @@ test('killing the pi-dish tmux server restores sessions and active bot relays on
     assert.equal(secondArgv[secondArgv.indexOf('-f') + 1], '/dev/null', 'recreated server uses -f /dev/null');
     assert.equal(tmuxOut(home, 'show-options', '-sv', 'exit-empty'), 'off', 'recreated server keeps exit-empty off');
 
-    // Recovered agent resumed its conversation without starting a new paid turn.
-    const replies = agyMirrorText(home).match(/Fake Antigravity reply\./g) || [];
-    assert.equal(replies.length, 1, 'recovered agy session must not start a new paid turn on its own');
+    // Agent session was NOT auto-relaunched and never received a new paid turn.
+    assert.equal(agyClaim(home), null, 'agy session is not auto-relaunched on tmux server loss');
+    assert.equal(alive(firstAgyPid), false);
+    const repliesBeforeRetry = agyMirrorText(home).match(/Fake Antigravity reply\./g) || [];
+    assert.equal(repliesBeforeRetry.length, 1, 'lost agy session did not start a new paid turn');
 
     // Roster reports Fleet running:true and RetiredHelper running:false (never relaunched).
     const roster = await get(server.base, `/api/bots/${encodeURIComponent(fleetId)}/roster`);
@@ -361,38 +370,37 @@ test('killing the pi-dish tmux server restores sessions and active bot relays on
     assert.equal(retiredEntry.running, false, 'RetiredHelper must not be relaunched');
     assert.equal(relayLock(home, retiredBotId), null, 'RetiredHelper has no relay lock');
 
+    // Manual retry-all restores the lost agy session idle without sending a paid prompt.
+    const retryAll = await post(server.base, '/api/recovery/retry', { all: true });
+    assert.equal(retryAll.status, 200, JSON.stringify(retryAll.body));
+    const retried = records(retryAll.body.outcomes);
+    assert.equal(retried.length, 1);
+    assert.equal(retried[0].id, agyRoute);
+    assert.equal(retried[0].status, 'restored');
+    const repliesAfterRetry = agyMirrorText(home).match(/Fake Antigravity reply\./g) || [];
+    assert.equal(repliesAfterRetry.length, 1, 'manual retry restores idle without sending a paid turn');
+
     // Persisted rate-limit state recorded exactly one attempt with 0600 mode.
     const stateFile = path.join(home, '.pi', 'dish', 'tmux-recovery-state.json');
     const state = record(JSON.parse(fs.readFileSync(stateFile, 'utf8')));
     assert.equal(Array.isArray(state.attempts) && state.attempts.length, 1);
     assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
-    await until(() => /\[tmux-recovery\] summary: sessions recovered=1.*bots restarted=1 \[Fleet\]/.test(server.log()),
-      'recovery summary logged');
 
-    // 6. Rapid second server loss hits the persisted backoff and refuses to respawn.
+    // 6. Rapid second server loss hits the persisted backoff and refuses to respawn Fleet or tmux.
     const secondFleetPid = present(relayLock(home, fleetId)).pid;
     const secondAgyPid = Number(present(agyClaim(home)?.pid));
     await new Promise(resolve => setTimeout(resolve, 600));
     execFileSync('tmux', ['-S', tmuxSocket(home), 'kill-server'], { env: sanitizeTestEnv(process.env) });
 
-    await untilAsync(async () => {
-      const report = await get(server.base, '/api/recovery');
-      const agyRow = records(report.body.sessions).find(row => row.id === agyRoute);
-      return agyRow?.status === 'needs-review' && /backoff/i.test(String(agyRow.reason ?? ''));
-    }, 'second rapid server loss is rate-limited to needs-review', 30_000);
-
+    await until(() => /\[tmux-recovery\] automatic bot restart skipped \(rate-limited\)/.test(server.log()),
+      'second rapid server loss is rate-limited', 30_000);
     await new Promise(resolve => setTimeout(resolve, 600));
     assert.equal(tmuxServerPid(home), null, 'rate-limited server loss does not recreate the tmux server');
     assert.equal(relayLock(home, fleetId), null, 'rate-limited server loss does not respawn Fleet');
     assert.equal(alive(secondFleetPid), false);
     assert.equal(alive(secondAgyPid), false);
-    assert.match(server.log(), /\[tmux-recovery\] automatic recovery skipped \(rate-limited\)/);
 
-    const stateAfterLimit = record(JSON.parse(fs.readFileSync(stateFile, 'utf8')));
-    assert.deepEqual(stateAfterLimit.suppressedBots, [fleetId], 'suppressed bot persisted in backoff state');
-    assert.deepEqual(stateAfterLimit.suppressedAgents, [agyRoute], 'suppressed agent persisted in backoff state');
-
-    // 7. Deploy restart during active backoff honours persisted suppression (neither tmux nor Fleet nor agy starts).
+    // 7. Deploy restart during active backoff does not relaunch offline Fleet or tmux (even with no suppressedBots list).
     await server.stop();
     const restarted = await boot(home, {
       PI_DISH_AGY_COMMAND: agyCommand('default'),
@@ -407,10 +415,16 @@ test('killing the pi-dish tmux server restores sessions and active bot relays on
     await until(() => /bot Fleet: startup skipped \(.*backoff/i.test(restarted.log()), 'startup bot skip logged during backoff');
     await new Promise(resolve => setTimeout(resolve, 800));
     assert.equal(tmuxServerPid(home), null, 'restart during backoff does not recreate tmux');
-    assert.equal(relayLock(home, fleetId), null, 'restart during backoff does not relaunch suppressed Fleet');
-    assert.equal(agyClaim(home), null, 'restart during backoff does not relaunch suppressed agy session');
+    assert.equal(relayLock(home, fleetId), null, 'restart during backoff does not relaunch offline Fleet');
+    assert.equal(agyClaim(home), null, 'restart during backoff does not relaunch offline agy session');
 
-    // Explicit manual resume clears suppression, and a subsequent restart leaves the healthy relay untouched.
+    // Sending a prompt to offline Fleet during active backoff does not auto-wake it or start tmux.
+    const blockedPrompt = await post(restarted.base, `/api/sessions/${encodeURIComponent(fleetRoute)}/prompt`, { message: 'ping during backoff' });
+    assert.notEqual(blockedPrompt.status, 200, 'delivery does not auto-wake an offline bot during backoff');
+    assert.equal(tmuxServerPid(home), null, 'delivery during backoff does not recreate tmux');
+    assert.equal(relayLock(home, fleetId), null, 'delivery during backoff does not relaunch offline Fleet');
+
+    // Explicit manual resume still works, and a subsequent restart during active backoff leaves the healthy relay untouched.
     const manualResume = await post(restarted.base, `/api/sessions/${encodeURIComponent(fleetRoute)}/resume`, {});
     assert.equal(manualResume.status, 200, JSON.stringify(manualResume.body));
     await until(() => {
@@ -431,83 +445,64 @@ test('killing the pi-dish tmux server restores sessions and active bot relays on
     });
     t.after(() => afterHealthyRestart.stop());
     await until(() => afterHealthyRestart.log().includes(`bot Fleet: relay ${healthyFleetPid} is already running`),
-      'healthy relay is left alone across restart even while backoff state remains');
+      'healthy relay is left alone across restart even while backoff is active');
     assert.equal(relayLock(home, fleetId)?.pid, healthyFleetPid, 'healthy relay PID unchanged');
   });
 
-test('killing the replacement tmux server mid-batch stops the batch, never starts a 3rd server, and reconciles all rows',
-  { skip: !tmuxOk, timeout: 180_000 }, async t => {
-    const home = makeHome(t, { hibernation: 'off', recoveryMode: 'restore' });
-    const triggerFile = path.join(home, 'kill-on-second-resume');
-    const countFile = path.join(home, 'resume-count');
-    // Wrapper around fake-agy-acp: when `triggerFile` exists, records each launch
-    // and kills the replacement tmux server on the 2nd launch mid-batch.
-    const wrapper = path.join(home, 'agy-wrapper.js');
-    fs.writeFileSync(wrapper, `#!/usr/bin/env node
-const fs = require('fs');
-const { execFileSync, spawn } = require('child_process');
-const trigger = ${JSON.stringify(triggerFile)};
-const counter = ${JSON.stringify(countFile)};
-const socket = ${JSON.stringify(tmuxSocket(home))};
-if (fs.existsSync(trigger)) {
-  const n = (fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8').trim()) : 0) + 1;
-  fs.writeFileSync(counter, String(n));
-  if (n === 2) {
-    try { fs.unlinkSync(trigger); } catch {}
-    try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore' }); } catch {}
-    process.exit(1);
-  }
-}
-const child = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(AGY_FIXTURE)}, ...process.argv.slice(2)], {
-  stdio: 'inherit',
-  env: { ...process.env, FAKE_AGY_SCRIPT: 'default' },
-});
-child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
-`, { mode: 0o755 });
-
-    const server = await boot(home, {
-      PI_DISH_AGY_COMMAND: `${process.execPath} ${wrapper}`,
-      PI_DISH_BOTS: 'off',
-      PI_DISH_TMUX_WATCH_MS: '200',
-      PI_DISH_TMUX_SETTLE_MS: '100',
-      PI_DISH_TMUX_RECOVERY_BACKOFF_MS: '60000',
+test('bound spawnInTmux never starts a new server on loss and never kills panes on a replacement server',
+  { skip: !tmuxOk, timeout: 60_000 }, async t => {
+    const home = makeHome(t, {});
+    const socket = tmuxSocket(home);
+    const savedTmp = process.env.TMUX_TMPDIR;
+    process.env.TMUX_TMPDIR = path.dirname(socket);
+    t.after(() => {
+      if (savedTmp === undefined) delete process.env.TMUX_TMPDIR;
+      else process.env.TMUX_TMPDIR = savedTmp;
     });
-    t.after(() => server.stop());
 
-    // Create 3 live agy sessions on the initial tmux server.
-    const routes: string[] = [];
-    for (let i = 0; i < 3; i++) {
-      const created = await post(server.base, '/api/sessions/new', { harness: 'agy', cwd: path.join(home, 'proj') });
-      assert.equal(created.status, 200, JSON.stringify(created.body));
-      routes.push(String(present(created.body.id)));
-    }
-    const firstTmuxPid = present(tmuxServerPid(home));
-    await new Promise(resolve => setTimeout(resolve, 600));
+    // Start server A and capture its identity.
+    const serverA = present(await tmux.ensureHeadlessServer(socket));
+    assert.equal(tmuxServerPid(home), serverA.pid);
 
-    // Arm the mid-batch killer for the 2nd resume, then kill server #1.
-    fs.writeFileSync(triggerFile, '1');
-    execFileSync('tmux', ['-S', tmuxSocket(home), 'kill-server'], { env: sanitizeTestEnv(process.env) });
+    // Kill server A; bound spawnInTmux must fail with TmuxServerLostError and never create a new server (-N).
+    execFileSync('tmux', ['-S', socket, 'kill-server'], { env: sanitizeTestEnv(process.env) });
+    await until(() => tmuxServerPid(home) === null, 'server A died');
+    await assert.rejects(
+      () => tmux.spawnInTmux({
+        socket, newTmuxSessionName: 'bound-dead', cwd: home, command: ['sleep', '30'], expectedServer: serverA,
+      }),
+      error => error instanceof tmux.TmuxServerLostError,
+      'bound spawn fails when expected server is dead',
+    );
+    assert.equal(tmuxServerPid(home), null, 'bound spawnInTmux with -N must never start a replacement server');
 
-    // Wait for mid-batch server loss detection and reconciliation of all 3 rows.
-    await untilAsync(async () => {
-      const report = await get(server.base, '/api/recovery');
-      const rows = routes.map(id => records(report.body.sessions).find(row => row.id === id));
-      return rows.every(row => row?.status === 'needs-review' && /backoff/i.test(String(row.reason ?? '')));
-    }, 'all 3 sessions reconciled to needs-review after mid-batch replacement server death', 60_000);
+    // Start an unrelated server B on the same socket with its own pane (%0).
+    execFileSync('tmux', ['-S', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'unrelated', 'sleep', '60'], {
+      env: sanitizeTestEnv(process.env),
+    });
+    const serverBPid = present(tmuxServerPid(home));
+    assert.notEqual(serverBPid, serverA.pid);
+    const paneBId = tmuxOut(home, 'list-panes', '-a', '-F', '#{pane_id}');
+    const paneBPid = Number(tmuxOut(home, 'display-message', '-p', '-t', paneBId, '#{pane_pid}'));
+    assert.ok(alive(paneBPid));
 
-    await new Promise(resolve => setTimeout(resolve, 600));
-    assert.equal(tmuxServerPid(home), null, 'no 3rd tmux server was started under the first limiter reservation');
-    assert.equal(Number(fs.readFileSync(countFile, 'utf8').trim()), 2, '3rd session was never launched after replacement server died');
-    const state = record(JSON.parse(fs.readFileSync(path.join(home, '.pi', 'dish', 'tmux-recovery-state.json'), 'utf8')));
-    assert.equal(Array.isArray(state.attempts) && state.attempts.length, 1, 'only the first limiter reservation was consumed');
-    assert.notEqual(firstTmuxPid, null);
-    assert.match(server.log(), /replacement tmux server \(pid \d+\) died mid-batch/);
+    // Bound spawn targeting old server A must reject AND leave server B's pane completely untouched.
+    await assert.rejects(
+      () => tmux.spawnInTmux({
+        socket, newTmuxSessionName: 'bound-replaced', cwd: home, command: ['sleep', '30'], expectedServer: serverA,
+      }),
+      error => error instanceof tmux.TmuxServerLostError,
+      'bound spawn rejects mismatched replacement server',
+    );
+    assert.equal(tmuxServerPid(home), serverBPid, 'server B still running');
+    assert.equal(tmuxOut(home, 'list-panes', '-a', '-F', '#{pane_id}'), paneBId, 'unrelated pane on server B was never killed');
+    assert.equal(alive(paneBPid), true, 'unrelated pane process on server B is still alive');
   });
 
-test('single session exit does not trigger server loss, while on-demand no-server detection recovers immediately',
+test('single session exit does not trigger server loss, while on-demand no-server detection marks lost immediately without auto-relaunch',
   { skip: !tmuxOk, timeout: 120_000 }, async t => {
     const home = makeHome(t, { hibernation: 'off', recoveryMode: 'restore' });
-    // Very long poll interval (60s): server-loss recovery below MUST happen via on-demand detection.
+    // Very long poll interval (60s): server-loss detection below MUST happen via on-demand detection.
     const server = await boot(home, {
       PI_DISH_AGY_COMMAND: agyCommand('default'),
       PI_DISH_BOTS: 'off',
@@ -547,13 +542,22 @@ test('single session exit does not trigger server loss, while on-demand no-serve
     const targets = await get(server.base, '/api/tmux/targets');
     assert.equal(targets.status, 200);
 
-    // Even with a 60s poll interval, on-demand detection restores the session promptly.
+    // Even with a 60s poll interval, on-demand detection marks the session lost promptly without auto-relaunching.
     await untilAsync(async () => {
-      const claim = agyClaim(home);
       const report = await get(server.base, '/api/recovery');
       const row = records(report.body.sessions).find(entry => entry.id === route);
-      return row?.status === 'restored' && !!claim && Number(claim.pid) !== resumedPid && alive(Number(claim.pid));
-    }, 'on-demand detection restored session despite 60s poll interval', 20_000);
+      return row?.status === 'pending' && /tmux server died/i.test(String(row.reason ?? ''));
+    }, 'on-demand detection marked session lost despite 60s poll interval', 20_000);
+    assert.equal(agyClaim(home), null, 'agent session is not auto-relaunched');
+    assert.equal(tmuxServerPid(home), null, 'tmux server is not recreated when no bots need restarting');
+
+    // Manual retry-all restores it cleanly.
+    const retryRes = await post(server.base, '/api/recovery/retry', { all: true });
+    assert.equal(retryRes.status, 200, JSON.stringify(retryRes.body));
+    const retried = records(retryRes.body.outcomes);
+    assert.equal(retried.length, 1);
+    assert.equal(retried[0].id, route);
+    assert.equal(retried[0].status, 'restored');
   });
 
 test('PIN gate protects private sessions on /api/recovery and /api/recovery/retry (single id and all: true)',
