@@ -931,6 +931,7 @@ const messageStreamController: ReturnType<typeof createMessageStream> = createMe
   probeOrigin: () => probeOriginFailure(requestOrigin),
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
   reviewUpdate: (payload, session) => reviewDecks.applyUpdate(payload, session),
+  reviews: owner => reviewDecks.load(owner),
   status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: refreshSessions, artifacts: owner => sessionInfo.refreshArtifacts(owner),
   ...chromeScroll, follow: () => appChrome.following, highlight: root => richText.highlight(root),
   select: selectSession, deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),

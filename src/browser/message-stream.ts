@@ -53,6 +53,7 @@ export function createMessageStream(options: {
   activity: MessageStreamActivity; renderer: MessageStreamRenderer; streaming: MessageStreamRendering;
   tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI; sideChat: MessageStreamSideChat;
   reviewUpdate?: (payload: unknown, session: ExtensionSession) => void;
+  reviews?: (owner: SelectionOwner) => unknown;
   status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void; highlight: (root: Element) => void;
   select: (id: string, options: { forceTranscriptReload: boolean; host: string | null }) => unknown;
@@ -172,6 +173,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
           // Incremental catch-up avoids a full-reload stall.
           options.catchup(owner);
         }
+        // Reconcile review decks on every connect/reconnect without polling.
+        options.reviews?.(owner);
       } catch {}
     });
 

@@ -86,6 +86,7 @@ export interface ClientReview {
   readonly id: string;
   readonly sessionId: string;
   readonly createdAt: number;
+  readonly updatedAt: number | null;
   readonly anchorMessageIndex: number | null;
   readonly title: string;
   readonly companionPage: string | null;
@@ -224,6 +225,7 @@ export function decodeClientReview(raw: unknown): ClientReview | null {
     id: raw.id,
     sessionId: raw.sessionId,
     createdAt: num(raw.createdAt) ?? 0,
+    updatedAt: num(raw.updatedAt),
     anchorMessageIndex: num(raw.anchorMessageIndex),
     title: raw.title,
     companionPage: safeReviewUrl(raw.companionPage),

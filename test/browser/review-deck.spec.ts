@@ -2,7 +2,7 @@ import fs = require('node:fs');
 import path = require('node:path');
 import zlib = require('node:zlib');
 import { record as isRecord } from '../../lib/helper-values.js';
-import { test, expect, ROOT } from './fixtures.js';
+import { test, expect, ROOT, heldRoute, requiredRoute } from './fixtures.js';
 import type { BrowserHost } from './fixtures.js';
 
 test.use({ instrumentApp: false, liveSessions: true });
@@ -425,57 +425,403 @@ test('peer /hosts/<name> proxying, submit error recovery, and HTML/JS version sk
     }],
   }, { Authorization: `Bearer ${peer.token}` });
 
-  // Switch off device-local peer entry and reload so self advertises `/hosts/remote`.
+  // Open a clean tab without the fixture's localStorage direct-peer init script
+  // so `self` advertises `peer` exclusively via hub-proxied `/hosts/remote`.
   await page.evaluate(() => localStorage.removeItem('pi-dish-hosts'));
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(self.base);
-  await page.getByRole('button', { name: 'Open session list' }).click();
-  await page.locator('#tabAll').click();
+  const tab = await page.context().newPage();
+  tab.on('pageerror', error => errors.push(error.message));
+  try {
+    await tab.setViewportSize({ width: 390, height: 844 });
+    await tab.goto(self.base);
+    await tab.getByRole('button', { name: 'Open session list' }).click();
+    await tab.locator('#tabAll').click();
 
-  const peerRow = page.locator(`.session-item[data-id="${ROOT}"][data-host="${peer.hostId}"]`);
-  await expect(peerRow).toBeVisible();
-  await peerRow.click();
+    const peerRow = tab.locator(`.session-item[data-id="${ROOT}"][data-host="${peer.hostId}"]`);
+    await expect(peerRow).toBeVisible();
+    await peerRow.click();
 
-  const deck = page.locator(`.review-deck[data-review-id="${peerDeck.id}"]`);
-  await expect(deck).toBeVisible();
+    const deck = tab.locator(`.review-deck[data-review-id="${peerDeck.id}"]`);
+    await expect(deck).toBeVisible();
 
-  // Media loads through `/hosts/remote/api/sessions/.../media/0`.
-  const img = deck.locator('img.review-shot-img');
-  await expect(img).toHaveAttribute('src', new RegExp(`^/hosts/remote/api/sessions/${ROOT}/reviews/${peerDeck.id}/media/0$`));
-  await expect.poll(async () => img.evaluate(el => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0)).toBe(true);
+    // Media loads through `/hosts/remote/api/sessions/.../media/0`.
+    const img = deck.locator('img.review-shot-img');
+    await expect(img).toHaveAttribute('src', new RegExp(`^/hosts/remote/api/sessions/${ROOT}/reviews/${peerDeck.id}/media/0$`));
+    await expect.poll(async () => img.evaluate(el => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0)).toBe(true);
 
-  // Transient 500 on submit clears busy state, preserves draft, shows inline error, and allows retry.
-  await page.route(`**/hosts/remote/api/sessions/${ROOT}/reviews/${peerDeck.id}/submit`, route =>
-    route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Temporary failure' }) }), { times: 1 });
-  await deck.locator('[data-review-action="submit"]').click();
-  await expect(deck.locator('.review-error')).toContainText('Temporary failure');
-  await expect(deck.locator('[data-review-action="submit"]')).toBeEnabled();
+    // Transient 500 on submit clears busy state, preserves draft, shows inline error, and allows retry.
+    await tab.route(`**/hosts/remote/api/sessions/${ROOT}/reviews/${peerDeck.id}/submit`, route =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Temporary failure' }) }), { times: 1 });
+    await deck.locator('[data-review-action="submit"]').click();
+    await expect(deck.locator('.review-error')).toContainText('Temporary failure');
+    await expect(deck.locator('[data-review-action="submit"]')).toBeEnabled();
 
-  // Retry succeeds through `/hosts/remote` with `X-Pi-Dish-Client: 1`.
-  let proxyHeader: string | null = null;
-  page.on('request', req => {
-    if (req.method() === 'POST' && req.url().includes(`/hosts/remote/api/sessions/${ROOT}/reviews/${peerDeck.id}/submit`)) {
-      proxyHeader = req.headers()['x-pi-dish-client'] ?? null;
+    // Retry succeeds through `/hosts/remote` with `X-Pi-Dish-Client: 1`.
+    let proxyHeader: string | null = null;
+    tab.on('request', req => {
+      if (req.method() === 'POST' && req.url().includes(`/hosts/remote/api/sessions/${ROOT}/reviews/${peerDeck.id}/submit`)) {
+        proxyHeader = req.headers()['x-pi-dish-client'] ?? null;
+      }
+    });
+    await deck.locator('[data-review-action="submit"]').click();
+    await expect(deck).toHaveClass(/\bis-submitted\b/);
+    expect(proxyHeader).toBe('1');
+
+    // Version skew: older server answering 404 on /reviews degrades silently.
+    await tab.route(`**/api/sessions/${ROOT}/reviews`, route =>
+      route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Not found' }) }));
+    await tab.getByRole('button', { name: 'Open session list' }).click();
+    const selfRow = tab.locator(`.session-item[data-id="${ROOT}"][data-host="${self.hostId}"]`);
+    await expect(selfRow).toBeVisible();
+    await selfRow.click();
+    await expect(tab.locator('#messages')).toContainText('self root transcript');
+    await expect(tab.locator('.review-deck')).toHaveCount(0);
+    // Missing optional `.input-area` shell markup never throws on scroll/jump-bar sync.
+    await tab.evaluate(() => {
+      document.querySelector('.input-area')?.remove();
+      document.getElementById('messages')?.dispatchEvent(new Event('scroll'));
+    });
+    expect(errors).toEqual([]);
+  } finally {
+    await tab.close();
+  }
+});
+
+test('reconnect reconciles missed decks, delayed lists never regress receipts, unchanged decks keep focus/caret, and quick-submit persists submissionId', async ({ page, fleet }) => {
+  const { self } = fleet;
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+
+  seedWorkAndTranscript(self);
+  const deck1 = await createDeck(self.base, ROOT, {
+    title: 'Initial deck',
+    wait: false,
+    cards: [{
+      id: 'c1',
+      title: 'Step 1',
+      context: 'Created before opening.',
+      questions: [{ id: 'ok', type: 'approve', prompt: 'Approve initial?', default: 'approve' }],
+    }],
+  });
+
+  // Hold the first list GET so we can replay its stale `open` snapshot after a receipt arrives.
+  const staleList = heldRoute();
+  let listRequests = 0;
+  await page.route(`**/api/sessions/${ROOT}/reviews`, route => {
+    if (route.request().method() === 'GET' && ++listRequests === 1) {
+      staleList.hold(route);
+      return;
+    }
+    return route.continue();
+  });
+
+  // First stream connect returns `init` then ends so EventSource triggers a real reconnect;
+  // hold the reconnect stream to create a deterministic stream gap.
+  const reconnectStream = heldRoute();
+  let streamRequests = 0;
+  await page.route(`**/api/sessions/${ROOT}/stream*`, route => {
+    streamRequests++;
+    if (streamRequests === 1) {
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        body: 'event: init\ndata: {"turnInProgress":false,"compacting":false}\n\n',
+      });
+    }
+    if (streamRequests === 2) {
+      reconnectStream.hold(route);
+      return;
+    }
+    return route.continue();
+  });
+
+  await fleet.row(self, ROOT).click();
+  const heldListRoute = requiredRoute(await staleList.received);
+  const heldReconnectRoute = requiredRoute(await reconnectStream.received);
+
+  // While the stream is disconnected: submit deck1 and create deck2 on the server.
+  const submitRes = await fetch(`${self.base}/api/sessions/${ROOT}/reviews/${deck1.id}/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Pi-Dish-Client': '1' },
+    body: JSON.stringify({ submissionId: 'server-sub-0001', answers: { ok: { value: 'approve' } } }),
+  });
+  expect(submitRes.status).toBe(202);
+
+  const deck2 = await createDeck(self.base, ROOT, {
+    title: 'Created during gap',
+    wait: false,
+    cards: [
+      {
+        id: 'c1',
+        title: 'Typing card',
+        context: 'Created while the stream was down.',
+        questions: [
+          { id: 'note_q', type: 'text', prompt: 'Feedback' },
+          { id: 'pick', type: 'choice', prompt: 'Choice', default: 'a', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] },
+        ],
+      },
+      {
+        id: 'c2',
+        title: 'Final card',
+        context: 'Second card so Accept defaults is available on card 1.',
+        questions: [{ id: 'ship', type: 'approve', prompt: 'Ship?', default: 'approve' }],
+      },
+    ],
+  });
+
+  // Still in the stream gap: deck2 has not appeared yet.
+  await expect(page.locator(`.review-deck[data-review-id="${deck2.id}"]`)).toHaveCount(0);
+
+  // Reconnect the real SSE stream: `init` fetches /reviews once and reconciles both decks.
+  await heldReconnectRoute.continue();
+  const deck1El = page.locator(`.review-deck[data-review-id="${deck1.id}"]`);
+  const deck2El = page.locator(`.review-deck[data-review-id="${deck2.id}"]`);
+  await expect(deck1El).toHaveClass(/\bis-submitted\b/);
+  await expect(deck2El).toBeVisible();
+
+  // Releasing the earlier delayed `open` list snapshot must NEVER regress deck1's submitted receipt.
+  await heldListRoute.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ reviews: [deck1.review] }),
+  });
+  await page.waitForTimeout(150);
+  await expect(deck1El).toHaveClass(/\bis-submitted\b/);
+  await expect(deck2El).toBeVisible();
+
+  // Promoted nit (a): transcript re-render must keep the existing deck DOM node, focus, caret, and typed text.
+  const textarea = deck2El.locator('textarea[data-question-id="note_q"]');
+  await textarea.click();
+  await textarea.fill('hello world');
+  await textarea.evaluate(el => {
+    if (el instanceof HTMLTextAreaElement) {
+      el.setSelectionRange(5, 5);
+      Reflect.set(window, '__deckTextareaBefore', el);
     }
   });
-  await deck.locator('[data-review-action="submit"]').click();
-  await expect(deck).toHaveClass(/\bis-submitted\b/);
-  expect(proxyHeader).toBe('1');
-
-  // Version skew: older server answering 404 on /reviews degrades silently.
-  await page.route(`**/api/sessions/${ROOT}/reviews`, route =>
-    route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Not found' }) }));
-  await page.getByRole('button', { name: 'Open session list' }).click();
-  const selfRow = page.locator(`.session-item[data-id="${ROOT}"][data-host="${self.hostId}"]`);
-  await expect(selfRow).toBeVisible();
-  await selfRow.click();
-  await expect(page.locator('#messages')).toContainText('self root transcript');
-  await expect(page.locator('.review-deck')).toHaveCount(0);
-  // Missing optional `.input-area` shell markup never throws on scroll/jump-bar sync.
-  await page.evaluate(() => {
-    document.querySelector('.input-area')?.remove();
-    document.getElementById('messages')?.dispatchEvent(new Event('scroll'));
+  self.emit('turn_start', {});
+  self.emit('message_end', {
+    message: { role: 'assistant', content: 'A live update arrived while you were typing.', timestamp: Date.now() },
+  }, {
+    type: 'message',
+    message: { role: 'assistant', content: 'A live update arrived while you were typing.', timestamp: Date.now() },
   });
+  self.emit('turn_end', {});
+  await expect(page.locator('#messages')).toContainText('A live update arrived while you were typing.');
+  const preserved = await textarea.evaluate(el => ({
+    sameNode: el === Reflect.get(window, '__deckTextareaBefore'),
+    focused: document.activeElement === el,
+    value: el instanceof HTMLTextAreaElement ? el.value : '',
+    start: el instanceof HTMLTextAreaElement ? el.selectionStart : -1,
+    end: el instanceof HTMLTextAreaElement ? el.selectionEnd : -1,
+  }));
+  expect(preserved).toEqual({ sameNode: true, focused: true, value: 'hello world', start: 5, end: 5 });
+
+  // Promoted nit (b): untouched "Accept defaults" persists submissionId before sending so reload retries reuse it.
+  const deck3 = await createDeck(self.base, ROOT, {
+    title: 'Quick submit idempotency',
+    wait: false,
+    cards: [
+      { id: 'c1', title: 'One', context: 'Card one.', questions: [{ id: 'q1', type: 'approve', prompt: 'Q1?', default: 'approve' }] },
+      { id: 'c2', title: 'Two', context: 'Card two.', questions: [{ id: 'q2', type: 'approve', prompt: 'Q2?', default: 'approve' }] },
+    ],
+  });
+  const deck3El = page.locator(`.review-deck[data-review-id="${deck3.id}"]`);
+  await expect(deck3El).toBeVisible();
+  const sentIds: string[] = [];
+  await page.route(`**/api/sessions/${ROOT}/reviews/${deck3.id}/submit`, route => {
+    const payload: unknown = route.request().postDataJSON();
+    if (isRecord(payload) && typeof payload.submissionId === 'string') sentIds.push(payload.submissionId);
+    if (sentIds.length === 1) {
+      return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Retry me' }) });
+    }
+    return route.continue();
+  });
+  await deck3El.getByRole('button', { name: 'Accept defaults' }).click();
+  await expect(deck3El.locator('.review-error')).toContainText('Retry me');
+  expect(sentIds).toHaveLength(1);
+  const storedSubId = await page.evaluate(reviewId => {
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i);
+      if (k && k.endsWith(`:${reviewId}`)) {
+        const parsed: unknown = JSON.parse(sessionStorage.getItem(k) || 'null');
+        return parsed && typeof parsed === 'object' && 'submissionId' in parsed ? parsed.submissionId : null;
+      }
+    }
+    return null;
+  }, deck3.id);
+  expect(storedSubId).toBe(sentIds[0]);
+
+  await page.unroute(`**/api/sessions/${ROOT}/stream*`);
+  await page.unroute(`**/api/sessions/${ROOT}/reviews`);
+  await page.reload();
+  await expect(deck3El).toBeVisible();
+  await deck3El.getByRole('button', { name: 'Accept defaults' }).click();
+  await expect(deck3El).toHaveClass(/\bis-submitted\b/);
+  expect(sentIds).toEqual([sentIds[0], sentIds[0]]);
+  expect(errors).toEqual([]);
+});
+
+test('direct bearer-protected peer loads shots via revocable blob URLs and private sessions keep drafts in memory only', async ({ page, fleet }) => {
+  const { self, peer } = fleet;
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+
+  // Part A: directly configured bearer-protected peer (from localStorage pi-dish-hosts, not /hosts/).
+  const { shotsDir: peerShots } = seedWorkAndTranscript(peer);
+  const peerDeck = await createDeck(peer.base, ROOT, {
+    title: 'Direct bearer peer deck',
+    wait: false,
+    cards: [{
+      id: 'c1',
+      title: 'Bearer shots',
+      context: 'Images load via authenticated fetch + revocable blob URL.',
+      media: [
+        { src: path.join(peerShots, 'hero-a.png'), label: 'Bearer shot A' },
+        { src: path.join(peerShots, 'hero-b.png'), label: 'Bearer shot B' },
+      ],
+      questions: [{ id: 'ok', type: 'approve', prompt: 'Approve bearer shot?', default: 'approve' }],
+    }],
+  }, { Authorization: `Bearer ${peer.token}` });
+
+  // Track revoked blob URLs without interfering with normal behavior.
+  await page.evaluate(() => {
+    const revoked: string[] = [];
+    Reflect.set(window, '__revokedBlobUrls', revoked);
+    const orig = URL.revokeObjectURL.bind(URL);
+    URL.revokeObjectURL = (url: string) => { revoked.push(url); return orig(url); };
+  });
+
+  await fleet.row(peer, ROOT).click();
+  const peerDeckEl = page.locator(`.review-deck[data-review-id="${peerDeck.id}"]`);
+  await expect(peerDeckEl).toBeVisible();
+
+  const imgs = peerDeckEl.locator('img.review-shot-img');
+  await expect.poll(async () => imgs.evaluateAll(list =>
+    list.length === 2 && list.every(img => img instanceof HTMLImageElement && img.src.startsWith('blob:') && img.complete && img.naturalWidth > 0),
+  )).toBe(true);
+
+  const firstBlobSrcs = await imgs.evaluateAll(list => list.map(img => img instanceof HTMLImageElement ? img.src : ''));
+  for (const src of firstBlobSrcs) expect(src).not.toContain(peer.token);
+
+  // Lightbox also displays the authenticated blob URL and loads cleanly.
+  await peerDeckEl.locator('.review-shot-btn[data-card-index="0"][data-shot-index="0"]').click();
+  const lightboxImg = page.locator('.lightbox-overlay.review-lightbox img.review-lightbox-img');
+  await expect(lightboxImg).toBeVisible();
+  await expect.poll(async () => lightboxImg.evaluate(el =>
+    el instanceof HTMLImageElement && el.src.startsWith('blob:') && el.complete && el.naturalWidth > 0,
+  )).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.lightbox-overlay')).toHaveCount(0);
+
+  // Switching to another session revokes the bearer peer's blob URLs.
+  await fleet.row(self, ROOT).click();
+  const revokedOnSwitch = await page.evaluate(() => Reflect.get(window, '__revokedBlobUrls') as string[]);
+  for (const src of firstBlobSrcs) expect(revokedOnSwitch).toContain(src);
+
+  // Returning re-fetches fresh blob URLs, and submitting revokes them as well.
+  await fleet.row(peer, ROOT).click();
+  await expect.poll(async () => imgs.evaluateAll(list =>
+    list.length === 2 && list.every(img => img instanceof HTMLImageElement && img.src.startsWith('blob:') && img.complete && img.naturalWidth > 0),
+  )).toBe(true);
+  const secondBlobSrcs = await imgs.evaluateAll(list => list.map(img => img instanceof HTMLImageElement ? img.src : ''));
+  await peerDeckEl.locator('[data-review-action="submit"]').click();
+  await expect(peerDeckEl).toHaveClass(/\bis-submitted\b/);
+  const revokedOnSubmit = await page.evaluate(() => Reflect.get(window, '__revokedBlobUrls') as string[]);
+  for (const src of secondBlobSrcs) expect(revokedOnSubmit).toContain(src);
+
+  // Part B: private session keeps review drafts in memory only — zero sessionStorage persistence across PIN lock.
+  const pinRes = await fetch(`${self.base}/api/private-sessions/pin`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '4321' }),
+  });
+  expect(pinRes.status).toBe(200);
+  const unlockBody: unknown = await (await fetch(`${self.base}/api/private-sessions/unlock`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '4321' }),
+  })).json();
+  const unlockToken = isRecord(unlockBody) && typeof unlockBody.token === 'string' ? unlockBody.token : '';
+  expect(unlockToken).not.toBe('');
+
+  const privId = '2026-09-09T00-05-00-private01';
+  const privDir = path.join(self.home, '.local', 'state', 'pi-dish', 'private-sessions', 'pi');
+  fs.mkdirSync(privDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(privDir, `${privId}.jsonl`), [
+    { type: 'session', cwd: path.join(self.home, 'work'), timestamp: '2026-09-09T00:05:00.000Z' },
+    { type: 'message', message: { role: 'user', content: 'Private review prompt' } },
+  ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
+
+  const privDeck = await createDeck(self.base, privId, {
+    title: 'Private session review',
+    wait: false,
+    cards: [
+      {
+        id: 'c1',
+        title: 'Secret choices',
+        context: 'Must never land in sessionStorage.',
+        questions: [{
+          id: 'secret_pick',
+          type: 'choice',
+          prompt: 'Pick one',
+          default: 'a',
+          allowOther: true,
+          options: [{ value: 'a', label: 'Alpha' }, { value: 'b', label: 'Beta' }],
+        }],
+      },
+      {
+        id: 'c2',
+        title: 'Confirm',
+        context: 'Step two.',
+        questions: [{ id: 'secret_note', type: 'text', prompt: 'Private note' }],
+      },
+    ],
+  }, { 'x-pi-dish-private-unlock': unlockToken });
+
+  // Unlock in the browser via the real PIN modal and select the private session.
+  await page.locator('#btnPrivateSessions').click();
+  await page.locator('#privateUnlockPin').fill('4321');
+  await page.locator('#privateUnlockForm button[type="submit"]').click();
+  await page.locator('#tabAll').click();
+  const privRow = page.locator(`.session-item[data-id="${privId}"]`);
+  await expect(privRow).toBeVisible();
+  await privRow.click();
+
+  const privDeckEl = page.locator(`.review-deck[data-review-id="${privDeck.id}"]`);
+  await expect(privDeckEl).toBeVisible();
+  await privDeckEl.locator('.review-option[data-question-id="secret_pick"][data-value="b"]').click();
+  await privDeckEl.locator('.review-disclosure-toggle[data-question-id="secret_pick"]').click();
+  await privDeckEl.locator('input[data-review-input="note"][data-question-id="secret_pick"]').fill('top secret answer');
+
+  // Draft works in memory across card navigation...
+  await privDeckEl.locator('[data-review-action="next-card"]').click();
+  await privDeckEl.locator('[data-review-action="prev-card"]').click();
+  await expect(privDeckEl.locator('.review-option[data-question-id="secret_pick"][data-value="b"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(privDeckEl.locator('input[data-review-input="note"][data-question-id="secret_pick"]')).toHaveValue('top secret answer');
+
+  // ...and NEVER writes to sessionStorage.
+  const leakedBeforeLock = await page.evaluate(id => {
+    const out: string[] = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i) || '';
+      const v = sessionStorage.getItem(k) || '';
+      if (k.includes(id) || v.includes('top secret answer')) out.push(`${k}=${v}`);
+    }
+    return out;
+  }, privId);
+  expect(leakedBeforeLock).toEqual([]);
+
+  // Locking private sessions reloads and leaves zero trace in sessionStorage.
+  await Promise.all([
+    page.waitForNavigation(),
+    page.locator('#btnPrivateSessions').click(),
+  ]);
+  const leakedAfterLock = await page.evaluate(id => {
+    const out: string[] = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i) || '';
+      const v = sessionStorage.getItem(k) || '';
+      if (k.includes(id) || v.includes('top secret answer')) out.push(`${k}=${v}`);
+    }
+    return out;
+  }, privId);
+  expect(leakedAfterLock).toEqual([]);
   expect(errors).toEqual([]);
 });
 

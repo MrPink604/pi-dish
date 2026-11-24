@@ -7,16 +7,30 @@ import type { SelectionOwner, SessionState } from './session-state';
 import {
   buildSubmitAnswers, decodeClientReview, decodeReviewList, firstMissingRequired, hydrateDraft,
   initialDraft, REVIEW_CLIENT_HEADER, REVIEW_CLIENT_VALUE, reviewReceiptSummary,
-  type ClientReview, type DraftAnswer, type ReviewCard, type ReviewMedia, type ReviewQuestion, type ReviewDraft,
+  type ClientReview, type DraftAnswer, type ReviewCard, type ReviewMedia, type ReviewQuestion, type ReviewDraft, type ReviewStatus,
 } from './review-deck-data';
 
 export interface ReviewSessionRef { readonly id: string; readonly host: string | null }
 
+interface ActiveOwner {
+  readonly selection: SelectionOwner;
+  readonly endpoint: Readonly<HostEndpoint>;
+}
+
+interface LightboxShot {
+  readonly src: string | null;
+  readonly load?: () => Promise<string | null>;
+  readonly label: string;
+  readonly alt: string;
+}
+
 interface LightboxState {
+  readonly reviewId: string;
   readonly overlay: HTMLElement;
   readonly events: AbortController;
 }
 
+const STATUS_RANK: Record<ReviewStatus, number> = { open: 0, cancelled: 1, submitted: 2 };
 const DELIVERY_RANK: Record<string, number> = {
   pending: 0,
   delivering: 1,
@@ -27,13 +41,29 @@ const DELIVERY_RANK: Record<string, number> = {
 
 function isForwardReviewUpdate(existing: ClientReview | undefined, incoming: ClientReview): boolean {
   if (!existing) return true;
-  if (existing.status !== 'open' && incoming.status === 'open') return false;
+  if (STATUS_RANK[incoming.status] < STATUS_RANK[existing.status]) return false;
+  if (STATUS_RANK[incoming.status] > STATUS_RANK[existing.status]) return true;
+  if (existing.updatedAt !== null && incoming.updatedAt !== null && incoming.updatedAt < existing.updatedAt) {
+    return false;
+  }
   if (existing.status === 'submitted' && incoming.status === 'submitted') {
     const curRank = DELIVERY_RANK[existing.submission?.delivery.state ?? ''] ?? -1;
     const nextRank = DELIVERY_RANK[incoming.submission?.delivery.state ?? ''] ?? -1;
     if (nextRank < curRank) return false;
+    if (nextRank > curRank) return true;
+    const curAt = existing.submission?.delivery.at ?? existing.submission?.submittedAt ?? 0;
+    const nextAt = incoming.submission?.delivery.at ?? incoming.submission?.submittedAt ?? 0;
+    if (nextAt < curAt) return false;
   }
   return true;
+}
+
+function sameOwner(left: ActiveOwner | null, right: ActiveOwner): boolean {
+  return !!left
+    && left.selection.id === right.selection.id
+    && left.selection.host === right.selection.host
+    && left.selection.generation === right.selection.generation
+    && sameEndpoint(left.endpoint, right.endpoint);
 }
 
 /**
@@ -62,11 +92,13 @@ export function createReviewDecks(options: {
   const { document, sessionState } = options;
   const store = options.storage ?? (() => { try { return sessionStorage; } catch { return null; } })();
   let disposed = false;
-  let loadGeneration = 0;
-  let activeLoad: AbortController | null = null;
-  let activeOwner: { selection: SelectionOwner; endpoint: Readonly<HostEndpoint> } | null = null;
+  let sessionAbort: AbortController | null = null;
+  let activeOwner: ActiveOwner | null = null;
   const reviewsById = new Map<string, ClientReview>();
   const drafts = new Map<string, ReviewDraft>();
+  const renderedKeys = new Map<string, string>();
+  const mediaBlobs = new Map<string, { url: string; reviewId: string }>();
+  const mediaLoads = new Map<string, Promise<string | null>>();
   const expandedReceipts = new Set<string>();
   const submitting = new Set<string>();
   const errors = new Map<string, string>();
@@ -79,14 +111,24 @@ export function createReviewDecks(options: {
     return `pi-dish-review-draft:${sessionKey(hostId, sessionId)}:${reviewId}`;
   }
 
+  function isPrivateSession(hostId: string | null, sessionId: string): boolean {
+    const current = sessionState.currentSession;
+    if (current && current.id === sessionId && (current.host || null) === hostId && current.private === true) {
+      return true;
+    }
+    return sessionState.findSession(sessionId, hostId)?.private === true;
+  }
+
   function loadDraft(hostId: string | null, review: ClientReview): ReviewDraft {
     const existing = drafts.get(review.id);
     if (existing) return existing;
     let parsed: unknown = null;
-    try {
-      const raw = store?.getItem(draftStorageKey(hostId, review.sessionId, review.id));
-      if (raw) parsed = JSON.parse(raw);
-    } catch {}
+    if (!isPrivateSession(hostId, review.sessionId)) {
+      try {
+        const raw = store?.getItem(draftStorageKey(hostId, review.sessionId, review.id));
+        if (raw) parsed = JSON.parse(raw);
+      } catch {}
+    }
     const draft = parsed ? hydrateDraft(review, parsed) : initialDraft(review);
     drafts.set(review.id, draft);
     return draft;
@@ -94,6 +136,7 @@ export function createReviewDecks(options: {
 
   function saveDraft(hostId: string | null, review: ClientReview, draft: ReviewDraft): void {
     drafts.set(review.id, draft);
+    if (isPrivateSession(hostId, review.sessionId)) return;
     try { store?.setItem(draftStorageKey(hostId, review.sessionId, review.id), JSON.stringify(draft)); } catch {}
   }
 
@@ -102,9 +145,85 @@ export function createReviewDecks(options: {
     try { store?.removeItem(draftStorageKey(hostId, sessionId, reviewId)); } catch {}
   }
 
-  function owns(owner: { selection: SelectionOwner; endpoint: Readonly<HostEndpoint> }): boolean {
+  function owns(owner: ActiveOwner): boolean {
     if (disposed || !sessionState.ownsSelection(owner.selection)) return false;
     return sameEndpoint(options.host(owner.selection.host), owner.endpoint);
+  }
+
+  function needsAuthMedia(endpoint: Readonly<HostEndpoint> | null | undefined): boolean {
+    return Boolean(endpoint?.token);
+  }
+
+  function mediaCacheKey(reviewId: string, asset: number): string {
+    return `${reviewId}:${asset}`;
+  }
+
+  function revokeReviewMedia(reviewId: string): void {
+    if (lightbox?.reviewId === reviewId) closeLightbox();
+    for (const [key, entry] of [...mediaBlobs.entries()]) {
+      if (entry.reviewId !== reviewId) continue;
+      try { URL.revokeObjectURL(entry.url); } catch {}
+      mediaBlobs.delete(key);
+    }
+    for (const key of [...mediaLoads.keys()]) {
+      if (key.startsWith(`${reviewId}:`)) mediaLoads.delete(key);
+    }
+  }
+
+  function revokeAllMedia(): void {
+    closeLightbox();
+    for (const entry of mediaBlobs.values()) {
+      try { URL.revokeObjectURL(entry.url); } catch {}
+    }
+    mediaBlobs.clear();
+    mediaLoads.clear();
+  }
+
+  function ensureAuthMedia(owner: ActiveOwner, reviewId: string, sessionId: string, asset: number): Promise<string | null> {
+    const key = mediaCacheKey(reviewId, asset);
+    const cached = mediaBlobs.get(key);
+    if (cached) return Promise.resolve(cached.url);
+    const pending = mediaLoads.get(key);
+    if (pending) return pending;
+    const signal = sessionAbort?.signal;
+    const promise: Promise<string | null> = (async () => {
+      try {
+        const apiPath = `/api/sessions/${encodeURIComponent(sessionId)}/reviews/${encodeURIComponent(reviewId)}/media/${asset}`;
+        const response = await options.request(owner.endpoint, apiPath, signal ? { signal } : {});
+        if (!response.ok) return null;
+        const blob = await response.blob();
+        if (disposed || !owns(owner) || !sameOwner(activeOwner, owner) || reviewsById.get(reviewId)?.status !== 'open') {
+          return null;
+        }
+        const url = URL.createObjectURL(blob);
+        const prev = mediaBlobs.get(key);
+        if (prev) { try { URL.revokeObjectURL(prev.url); } catch {} }
+        mediaBlobs.set(key, { url, reviewId });
+        const container = document.getElementById('messages');
+        if (container) {
+          for (const img of container.querySelectorAll<HTMLImageElement>(`img[data-review-media-key="${CSS.escape(key)}"]`)) {
+            if (img.src !== url) img.src = url;
+          }
+        }
+        return url;
+      } catch {
+        return null;
+      }
+    })();
+    mediaLoads.set(key, promise);
+    void promise.finally(() => {
+      if (mediaLoads.get(key) === promise) mediaLoads.delete(key);
+    });
+    return promise;
+  }
+
+  function hydrateAuthMedia(owner: ActiveOwner, review: ClientReview, cardIndex: number): void {
+    if (!needsAuthMedia(owner.endpoint) || review.status !== 'open') return;
+    const card = review.cards[cardIndex];
+    if (!card) return;
+    for (const item of card.media) {
+      if (item.asset !== null) void ensureAuthMedia(owner, review.id, review.sessionId, item.asset);
+    }
   }
 
   function shotUrl(hostId: string | null, review: ClientReview, media: ReviewMedia): string | null {
@@ -122,7 +241,7 @@ export function createReviewDecks(options: {
     lightbox = null;
   }
 
-  function openLightbox(shots: readonly { src: string; label: string; alt: string }[], startIndex: number): void {
+  function openLightbox(reviewId: string, shots: readonly LightboxShot[], startIndex: number): void {
     if (disposed || !shots.length) return;
     closeLightbox();
     let index = Math.max(0, Math.min(startIndex, shots.length - 1));
@@ -161,13 +280,23 @@ export function createReviewDecks(options: {
     closeBtn.textContent = '✕';
 
     const paint = () => {
-      const current = shots[index]!;
-      image.src = current.src;
+      const targetIndex = index;
+      const current = shots[targetIndex]!;
       image.alt = current.alt;
       caption.textContent = current.label || current.alt || '';
-      counter.textContent = `${index + 1} / ${shots.length}`;
-      prev.disabled = index <= 0;
-      next.disabled = index >= shots.length - 1;
+      counter.textContent = `${targetIndex + 1} / ${shots.length}`;
+      prev.disabled = targetIndex <= 0;
+      next.disabled = targetIndex >= shots.length - 1;
+      if (current.src) {
+        image.src = current.src;
+      } else {
+        image.removeAttribute('src');
+        if (current.load) {
+          void current.load().then(resolved => {
+            if (resolved && overlay.isConnected && index === targetIndex) image.src = resolved;
+          });
+        }
+      }
     };
     const step = (delta: number) => {
       const target = index + delta;
@@ -205,18 +334,29 @@ export function createReviewDecks(options: {
       if (Math.abs(dx) >= 40) step(dx < 0 ? 1 : -1);
     }, { passive: true, signal: events.signal });
 
-    lightbox = { overlay, events };
+    lightbox = { reviewId, overlay, events };
     document.body.append(overlay);
   }
 
   function renderMediaHtml(hostId: string | null, review: ClientReview, card: ReviewCard, cardIndex: number): string {
     if (!card.media.length) return '';
     const single = card.media.length === 1;
+    const authMedia = needsAuthMedia(activeOwner?.endpoint);
     const shots = card.media.map((item, shotIndex) => {
-      const src = shotUrl(hostId, review, item);
-      if (!src) return '';
       const label = item.label || '';
       const alt = item.alt || item.label || `Shot ${shotIndex + 1}`;
+      if (item.asset !== null && authMedia) {
+        const key = mediaCacheKey(review.id, item.asset);
+        const cached = mediaBlobs.get(key)?.url ?? null;
+        return `<figure class="review-shot">
+          <button type="button" class="review-shot-btn" data-review-action="lightbox" data-card-index="${cardIndex}" data-shot-index="${shotIndex}" aria-label="${escapeHtml(`Zoom ${alt}`)}">
+            <img class="review-shot-img" data-review-media-key="${escapeHtml(key)}"${cached ? ` src="${escapeHtml(cached)}"` : ''} alt="${escapeHtml(alt)}" loading="lazy" decoding="async">
+          </button>
+          ${label ? `<figcaption class="review-shot-label">${escapeHtml(label)}</figcaption>` : ''}
+        </figure>`;
+      }
+      const src = shotUrl(hostId, review, item);
+      if (!src) return '';
       return `<figure class="review-shot">
         <button type="button" class="review-shot-btn" data-review-action="lightbox" data-card-index="${cardIndex}" data-shot-index="${shotIndex}" aria-label="${escapeHtml(`Zoom ${alt}`)}">
           <img class="review-shot-img" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy" decoding="async">
@@ -455,9 +595,32 @@ export function createReviewDecks(options: {
     return true;
   }
 
-  function renderOne(container: HTMLElement, review: ClientReview): void {
-    const hostId = activeOwner?.selection.host ?? null;
+  function deckRenderKey(hostId: string | null, review: ClientReview): string {
+    if (review.status === 'cancelled') return `cancelled|${review.title}`;
+    if (review.status === 'submitted') {
+      return JSON.stringify([
+        'submitted', hostId ?? '', review.title, review.companionPage ?? '',
+        review.submission?.id ?? '', review.submission?.delivery.state ?? '', review.submission?.delivery.error ?? '',
+        expandedReceipts.has(review.id),
+      ]);
+    }
+    const draft = loadDraft(hostId, review);
+    const questionState = review.cards.flatMap(card => card.questions.map(question => {
+      const entry = draft.answers[question.id];
+      if (!entry || question.type === 'text') return [question.id];
+      return [question.id, entry.value, entry.noteOpen];
+    }));
+    return JSON.stringify([
+      'open', hostId ?? '', review.title, review.companionPage ?? '', review.cards.length,
+      draft.cardIndex, submitting.has(review.id), errors.get(review.id) ?? '', questionState,
+    ]);
+  }
+
+  function renderOne(container: HTMLElement, review: ClientReview, force = false): void {
+    const owner = activeOwner;
+    const hostId = owner?.selection.host ?? null;
     let el = deckElement(container, review.id);
+    const created = !el;
     if (!el) {
       el = document.createElement('section');
       el.className = 'review-deck';
@@ -468,8 +631,22 @@ export function createReviewDecks(options: {
     el.classList.toggle('is-open', review.status === 'open');
     el.classList.toggle('is-submitted', review.status === 'submitted');
     el.classList.toggle('is-cancelled', review.status === 'cancelled');
-    if (!placeDeck(container, el, review)) return;
+    if (!placeDeck(container, el, review)) {
+      renderedKeys.delete(review.id);
+      revokeReviewMedia(review.id);
+      return;
+    }
+    if (review.status !== 'open') revokeReviewMedia(review.id);
+    const key = deckRenderKey(hostId, review);
+    if (!force && !created && el.childElementCount > 0 && renderedKeys.get(review.id) === key) {
+      return;
+    }
     el.innerHTML = renderDeckInnerHtml(hostId, review);
+    renderedKeys.set(review.id, key);
+    if (owner && review.status === 'open') {
+      const draft = loadDraft(hostId, review);
+      hydrateAuthMedia(owner, review, draft.cardIndex);
+    }
   }
 
   function syncJumpBar(): void {
@@ -530,8 +707,13 @@ export function createReviewDecks(options: {
     if (!activeOwner || !owns(activeOwner)) return;
     const validIds = new Set(reviewsById.keys());
     for (const child of Array.from(container.children)) {
-      if (child instanceof HTMLElement && child.classList.contains('review-deck') && !validIds.has(child.dataset.reviewId || '')) {
-        child.remove();
+      if (child instanceof HTMLElement && child.classList.contains('review-deck')) {
+        const id = child.dataset.reviewId || '';
+        if (!validIds.has(id)) {
+          child.remove();
+          renderedKeys.delete(id);
+          if (id) revokeReviewMedia(id);
+        }
       }
     }
     const ordered = [...reviewsById.values()].sort((a, b) => a.createdAt - b.createdAt);
@@ -554,6 +736,8 @@ export function createReviewDecks(options: {
       return;
     }
 
+    // Persist submissionId before sending (including untouched "Accept defaults") so reload retries stay idempotent.
+    saveDraft(captured.selection.host, review, draft);
     errors.delete(reviewId);
     submitting.add(reviewId);
     sync();
@@ -642,11 +826,24 @@ export function createReviewDecks(options: {
       const shotIndex = Number(actionEl.dataset.shotIndex);
       const card = review.cards[cardIndex];
       if (!card) return;
-      const shots = card.media.flatMap((item, idx) => {
-        const src = shotUrl(activeOwner!.selection.host, review, item);
-        return src ? [{ src, label: item.label || '', alt: item.alt || item.label || `Shot ${idx + 1}` }] : [];
+      const owner = activeOwner;
+      const authMedia = needsAuthMedia(owner.endpoint);
+      const shots: LightboxShot[] = card.media.flatMap<LightboxShot>((item, idx) => {
+        const label = item.label || '';
+        const alt = item.alt || item.label || `Shot ${idx + 1}`;
+        if (item.asset !== null && authMedia) {
+          const cached = mediaBlobs.get(mediaCacheKey(review.id, item.asset))?.url ?? null;
+          return [{
+            src: cached,
+            load: () => ensureAuthMedia(owner, review.id, review.sessionId, item.asset!),
+            label,
+            alt,
+          }];
+        }
+        const src = shotUrl(owner.selection.host, review, item);
+        return src ? [{ src, label, alt }] : [];
       });
-      if (shots.length) openLightbox(shots, Number.isFinite(shotIndex) ? shotIndex : 0);
+      if (shots.length) openLightbox(review.id, shots, Number.isFinite(shotIndex) ? shotIndex : 0);
       return;
     }
 
@@ -756,7 +953,10 @@ export function createReviewDecks(options: {
     else if (kind === 'note') entry.note = input.value;
     else if (kind === 'other') entry.other = input.value;
     saveDraft(activeOwner.selection.host, review, draft);
-    if (errors.delete(reviewId)) deck.querySelector('.review-error')?.remove();
+    if (errors.delete(reviewId)) {
+      deck.querySelector('.review-error')?.remove();
+      renderedKeys.set(reviewId, deckRenderKey(activeOwner.selection.host, review));
+    }
   }
 
   function mount(): void {
@@ -767,19 +967,23 @@ export function createReviewDecks(options: {
     container.addEventListener('scroll', scheduleJumpBar, { passive: true, signal: domEvents.signal });
   }
 
-  function clear(): void {
-    loadGeneration++;
-    activeLoad?.abort();
-    activeLoad = null;
+  function resetSessionState(): void {
+    sessionAbort?.abort();
+    sessionAbort = null;
     activeOwner = null;
     reviewsById.clear();
     drafts.clear();
+    renderedKeys.clear();
     expandedReceipts.clear();
     submitting.clear();
     errors.clear();
     jumpBarEl?.remove();
     jumpBarEl = null;
-    closeLightbox();
+    revokeAllMedia();
+  }
+
+  function clear(): void {
+    resetSessionState();
   }
 
   async function load(selection = sessionState.captureSelection()): Promise<void> {
@@ -787,15 +991,17 @@ export function createReviewDecks(options: {
     const endpoint = options.host(selection.host);
     if (!endpoint) return;
     const frozen = Object.freeze({ ...endpoint });
-    const owner = { selection, endpoint: frozen };
-    const generation = ++loadGeneration;
-    activeLoad?.abort();
-    const controller = new AbortController();
-    activeLoad = controller;
-    activeOwner = owner;
-    reviewsById.clear();
-    errors.clear();
-    submitting.clear();
+    const incomingOwner: ActiveOwner = { selection, endpoint: frozen };
+    const isSameSession = sameOwner(activeOwner, incomingOwner);
+    if (!isSameSession) {
+      resetSessionState();
+      activeOwner = incomingOwner;
+      sessionAbort = new AbortController();
+    } else if (!sessionAbort) {
+      sessionAbort = new AbortController();
+    }
+    const owner = activeOwner!;
+    const signal = sessionAbort.signal;
 
     if (options.supports && !options.supports(frozen)) {
       sync();
@@ -806,33 +1012,38 @@ export function createReviewDecks(options: {
       const response = await options.request(
         frozen,
         `/api/sessions/${encodeURIComponent(selection.id)}/reviews`,
-        { signal: controller.signal },
+        { signal },
       );
-      if (generation !== loadGeneration || !owns(owner)) return;
+      if (!owns(owner) || !sameOwner(activeOwner, owner)) return;
       // Older pi-dish host without reviewsV1 answers 404: degrade silently.
       if (response.status === 404) { sync(); return; }
       const data = await readJson(response);
-      if (generation !== loadGeneration || !owns(owner)) return;
+      if (!owns(owner) || !sameOwner(activeOwner, owner)) return;
       if (!response.ok) return;
       const container = document.getElementById('messages');
       const wasPinned = container && options.pinned ? options.pinned(container) : false;
-      let hasOpen = false;
+      let hasNewOpen = false;
       for (const review of decodeReviewList(data)) {
+        const existing = reviewsById.get(review.id);
+        if (!isForwardReviewUpdate(existing, review)) continue;
+        const wasNew = !existing;
         reviewsById.set(review.id, review);
-        if (review.status === 'open') hasOpen = true;
-        else clearDraft(selection.host, review.id, review.sessionId);
+        if (review.status === 'open') {
+          if (wasNew) hasNewOpen = true;
+        } else {
+          clearDraft(selection.host, review.id, review.sessionId);
+          revokeReviewMedia(review.id);
+        }
       }
       sync(container);
-      if (hasOpen && container && wasPinned) {
+      if (hasNewOpen && container && wasPinned) {
         scrollToOpenDeck(container);
         syncJumpBar();
       }
     } catch (error) {
-      if (generation !== loadGeneration || !owns(owner)) return;
+      if (!owns(owner) || !sameOwner(activeOwner, owner)) return;
       const failure = frozen.base === '' ? classifyOriginError(error) : null;
       if (failure === 'auth') options.originFailure?.('auth');
-    } finally {
-      if (activeLoad === controller) activeLoad = null;
     }
   }
 
@@ -857,12 +1068,16 @@ export function createReviewDecks(options: {
       const captured = sessionState.captureSelection();
       if (!endpoint || !captured) return;
       activeOwner = { selection: captured, endpoint: Object.freeze({ ...endpoint }) };
+      if (!sessionAbort) sessionAbort = new AbortController();
     }
     const existing = reviewsById.get(review.id);
     const wasNew = !existing;
     if (!isForwardReviewUpdate(existing, review)) return;
     reviewsById.set(review.id, review);
-    if (review.status !== 'open') clearDraft(session.host, review.id, review.sessionId);
+    if (review.status !== 'open') {
+      clearDraft(session.host, review.id, review.sessionId);
+      revokeReviewMedia(review.id);
+    }
     const container = document.getElementById('messages');
     const wasPinned = container && options.pinned ? options.pinned(container) : false;
     sync(container);

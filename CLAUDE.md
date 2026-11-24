@@ -1674,14 +1674,19 @@ Browser deck (`src/browser/review-deck.ts`, `src/browser/review-deck-data.ts`):
 mounts top-level `.review-deck` cards inline in `#messages` (never swept into
 `details.tool-group`, visible in Focus mode), stepping one card at a time with
 native `hidden` attributes so version skew degrades safely, preselected defaults,
-lazy-loaded media shots opened in `.lightbox-overlay`, host-scoped `sessionStorage`
-drafts with a stable idempotent `submissionId`, an off-screen `.review-jump-bar`
+lazy-loaded media shots (plain URLs on same-origin/cookie/proxy hosts; authenticated
+fetch + revocable `blob:` URLs on bearer-protected peers, never putting tokens in
+URLs) opened in `.lightbox-overlay`, host-scoped `sessionStorage` drafts for
+non-private sessions (in-memory only for private sessions, persisting `submissionId`
+before submit including untouched quick-submit), an off-screen `.review-jump-bar`
 in `.input-area`, and in-place collapse to a 1-line receipt on submission.
+Each stream `init` (connect/reconnect) fetches and forward-merges the review list
+without polling or regressing newer receipts, and unchanged decks keep their DOM
+nodes across transcript re-renders so focus, caret and typed text survive.
 Requests carry `X-Pi-Dish-Client: 1` (working through `/hosts/<peer>` as well),
-reject stale delivery regressions when a `202` reply races SSE `review_updated`,
-and use only existing theme CSS variables in `public/style.css` (Solarized Dark
-and Graphite). Fallback `[review response: …]` user messages render collapsed as
-`.message.custom-message.review-response-notice`.
+and styles use only existing theme CSS variables in `public/style.css` (Solarized
+Dark and Graphite). Fallback `[review response: …]` user messages render collapsed
+as `.message.custom-message.review-response-notice`.
 
 ## Multi-host fleet (TASKS/multi-host.md; lib/host-identity.js, lib/remote-hosts.js)
 
