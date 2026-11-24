@@ -17,6 +17,7 @@ import { createAgentRefResolver } from './agent-ref';
 import { createComposerAutocomplete } from './composer-autocomplete';
 import { createSidebarActivity } from './sidebar-activity';
 import { createSidebarQuery } from './sidebar-query';
+import { createDrawerSwipe } from './drawer-swipe';
 import { createSidebarLists } from './sidebar-lists';
 import { createSidebarControls } from './sidebar-controls';
 import { createBots } from './bots';
@@ -648,6 +649,12 @@ const sidebarQuery: ReturnType<typeof createSidebarQuery> = createSidebarQuery({
   prompt: (label, initial) => window.prompt(label, initial), alert: message => alert(message),
 });
 sidebarQuery.mount();
+const drawerSwipe: ReturnType<typeof createDrawerSwipe> = createDrawerSwipe({
+  document,
+  open: () => sidebarQuery.open(),
+  close: () => sidebarQuery.close(),
+});
+drawerSwipe.mount();
 const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
   document, request, sessionState, activity: sidebarActivity,
   hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,

@@ -126,6 +126,7 @@ export { createSidebarControls } from './sidebar-controls';
 export { createSidebarActivity } from './sidebar-activity';
 export { createSidebarLists } from './sidebar-lists';
 export { createSidebarQuery } from './sidebar-query';
+export { createDrawerSwipe } from './drawer-swipe';
 
 export { decodeRenderMessage, decodeMessageContent, decodeMessageUsage } from './message-data';
 export { createMessageRenderer } from './message-render';

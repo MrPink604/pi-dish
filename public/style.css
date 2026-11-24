@@ -4377,8 +4377,19 @@ pre.tool-code code.hljs {
     transform: translateX(0);
   }
 
+  .sidebar.drawer-dragging {
+    transition: none;
+    will-change: transform;
+  }
+
   .sidebar-overlay.active {
     z-index: 190;
+  }
+
+  .sidebar-overlay.drawer-dragging {
+    display: block;
+    z-index: 190;
+    transition: none;
   }
 
   .sidebar-header {
@@ -4681,6 +4692,12 @@ pre.tool-code code.hljs {
     max-height: 60vh;
     border-radius: 10px;
     z-index: 100;
+  }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
   }
 }
 

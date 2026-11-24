@@ -80,16 +80,31 @@ export function createSidebarQuery(options: {
     if (query) { options.busy(true); const generation = queryGeneration, captured = query; debounce = setTimeout(() => { debounce = null; if (!disposed && generation === queryGeneration) void options.reload(captured); }, 300); }
     else void options.reload();
   }
-  function toggle() { if (disposed) return; const sidebar = document.getElementById('sidebar')!, open = !sidebar.classList.contains('open'); sidebar.classList.toggle('open', open); document.getElementById('sidebarOverlay')?.classList.toggle('active', open); document.body.classList.toggle('sidebar-open', open); }
-  function close() { document.getElementById('sidebar')?.classList.remove('open'); document.getElementById('sidebarOverlay')?.classList.remove('active'); document.body.classList.remove('sidebar-open'); }
+  function setOpen(next: boolean) {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    sidebar.classList.toggle('open', next);
+    document.getElementById('sidebarOverlay')?.classList.toggle('active', next);
+    document.body.classList.toggle('sidebar-open', next);
+    for (const button of Array.from(document.querySelectorAll<HTMLElement>('button[data-toggle-sidebar]'))) {
+      button.setAttribute('aria-expanded', next ? 'true' : 'false');
+    }
+  }
+  function open() { if (disposed) return; setOpen(true); }
+  function toggle() { if (disposed) return; const sidebar = document.getElementById('sidebar'); if (!sidebar) return; setOpen(!sidebar.classList.contains('open')); }
+  function close() { setOpen(false); }
   function mount() {
     if (disposed || mounted) return; mounted = true; const { signal } = lifetime;
     input.addEventListener('input', onInput, { signal }); document.getElementById('tabActive')?.addEventListener('click', () => switchTab('active'), { signal }); document.getElementById('tabAll')?.addEventListener('click', () => switchTab('all'), { signal });
     document.getElementById('viewToggle')?.addEventListener('click', toggleView, { signal });
     document.querySelector('.filter-search-btn')?.addEventListener('click', () => options.openSearch(query || undefined), { signal });
-    for (const button of Array.from(document.querySelectorAll('[data-toggle-sidebar]'))) button.addEventListener('click', toggle, { signal });
+    const isOpen = !!document.getElementById('sidebar')?.classList.contains('open');
+    for (const button of Array.from(document.querySelectorAll<HTMLElement>('[data-toggle-sidebar]'))) {
+      if (button.tagName === 'BUTTON') button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      button.addEventListener('click', toggle, { signal });
+    }
   }
   function dispose() { if (disposed) return; cancelDebounce(); settingsGeneration++; options.invalidateLists(); options.busy(false); close(); disposed = true; lifetime.abort(); chipEvents.abort(); }
-  return { mount, dispose, toggleView, updateView, scope, setFilters, loadFilters, persistFilters, toggleScope, saveCurrent, renderChips, switchTab, onInput, toggle, close,
+  return { mount, dispose, toggleView, updateView, scope, setFilters, loadFilters, persistFilters, toggleScope, saveCurrent, renderChips, switchTab, onInput, open, toggle, close,
     get filters(): readonly SavedFilter[] { return filters; }, get tab() { return tab; }, get view() { return view; }, get query() { return query; } };
 }
