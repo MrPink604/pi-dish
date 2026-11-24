@@ -77,6 +77,7 @@
     "test/browser/rich-text.spec.ts",
     "test/browser/extension-ui.spec.ts",
     "test/browser/file-views.spec.ts",
+    "test/browser/model-view.spec.ts",
     "test/browser/anchored-comments.spec.ts",
     "test/browser/menu-ownership.spec.ts",
     "test/browser/model-selector.spec.ts",

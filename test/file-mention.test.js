@@ -142,6 +142,35 @@ test('readFileForViewer: text, truncation flag, binary rejection, images', () =>
         assert.equal(vid.video.mimeType, expectedMime);
         assert.equal(vid.size, bytes.length);
     }
+    // 3D models (.glb/.gltf) return model metadata; raw companions (.ktx2/.bin)
+    // remain rejected for preview (415) while permitted for raw /file/content.
+    const glbPath = path.join(cwd, 'weapon.glb');
+    const glbBytes = Buffer.from([0x67, 0x6c, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00, 0x00]);
+    fs.writeFileSync(glbPath, glbBytes);
+    const glbPreview = (0, file_mention_1.readFileForViewer)(glbPath);
+    assert.ok('model' in glbPreview && glbPreview.model);
+    assert.equal(glbPreview.model.mimeType, 'model/gltf-binary');
+    assert.equal(glbPreview.size, glbBytes.length);
+    const glbRaw = (0, file_mention_1.readFileForContent)(glbPath);
+    assert.ok('mimeType' in glbRaw && glbRaw.mimeType === 'model/gltf-binary');
+    const gltfPath = path.join(cwd, 'scene.gltf');
+    fs.writeFileSync(gltfPath, '{"asset":{"version":"2.0"}}');
+    const gltfPreview = (0, file_mention_1.readFileForViewer)(gltfPath);
+    assert.ok('model' in gltfPreview && gltfPreview.model);
+    assert.equal(gltfPreview.model.mimeType, 'model/gltf+json');
+    const ktxPath = path.join(cwd, 'albedo.ktx2');
+    const ktxBytes = Buffer.from([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    fs.writeFileSync(ktxPath, ktxBytes);
+    const ktxPreview = (0, file_mention_1.readFileForViewer)(ktxPath);
+    assert.ok('error' in ktxPreview && ktxPreview.status === 415);
+    const ktxRaw = (0, file_mention_1.readFileForContent)(ktxPath);
+    assert.ok('mimeType' in ktxRaw && ktxRaw.mimeType === 'image/ktx2' && ktxRaw.size === ktxBytes.length);
+    const binRaw = (0, file_mention_1.readFileForContent)(binPath);
+    assert.ok('mimeType' in binRaw && binRaw.mimeType === 'application/octet-stream');
+    const exePath = path.join(cwd, 'program.dat');
+    fs.writeFileSync(exePath, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01]));
+    const exeRaw = (0, file_mention_1.readFileForContent)(exePath);
+    assert.ok('error' in exeRaw && exeRaw.status === 415, 'unrelated binary files remain rejected on /file/content');
 });
 test('videoMimeForPath and parseByteRange handle video extensions and RFC 9110 byte ranges', () => {
     assert.equal((0, helper_media_1.videoMimeForPath)('demo.mp4?v=1#t=2'), 'video/mp4');

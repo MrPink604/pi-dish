@@ -124,6 +124,14 @@ export function renderFilePage({ token, root, title, file }: FilePageOptions): s
       + `<a class="video-btn video-download" href="${escapeHtml(src)}" target="_blank" rel="noopener">Open</a>`
       + `<a class="video-btn video-download" href="${escapeHtml(src)}" download="${escapeHtml(fileName)}">Download</a>`
       + `</div></div></details></figure>`;
+  } else if (file.model) {
+    const src = `/page/${encodeURIComponent(token)}?content=1&v=${file.mtime}-${file.size}`;
+    const fileName = path.basename(root);
+    content = `<div class="model-standalone-card">`
+      + `<div class="model-standalone-name">${escapeHtml(fileName)}</div>`
+      + `<div class="model-standalone-meta">${escapeHtml(file.model.mimeType)} · ${escapeHtml(formatMediaSize(file.size))}</div>`
+      + `<a class="btn-small" href="${escapeHtml(src)}" download="${escapeHtml(fileName)}">Download model</a>`
+      + `</div>`;
   } else {
     const ext = path.extname(root).slice(1).toLowerCase();
     if (ext === 'md' || ext === 'markdown') {

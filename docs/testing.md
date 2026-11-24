@@ -69,6 +69,13 @@ The [file-view video spec](../test/browser/file-views.spec.ts) uses a fixed,
 seekable VP8 WebM for playback, seeking, and pause-on-collapse. It also checks
 that video collapse survives a transcript remount without leaking across hosts.
 
+The [3D model viewer spec](../test/browser/model-view.spec.ts) runs at phone
+width (`390×844`) against a generated GLB with an external 4×4 RGBA8+zstd
+`.ktx2` texture over a bearer-authenticated peer host, checking lazy versioned
+bundle loading, `apiVersion` skew rejection, blocked external URIs, 25 MB load
+gating, camera view chips, PNG snapshot download, theme background updates,
+and WebGL disposal on close.
+
 `npm run lint` applies correctness rules to repository JavaScript, including
 undefined names, duplicate arguments/keys/cases, unreachable code, unsafe
 finally blocks, and invalid `typeof` comparisons. Browser script globals are

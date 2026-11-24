@@ -3,6 +3,7 @@ export interface FilePreview {
   readonly path: string; readonly relPath: string; readonly content: string; readonly size: number; readonly mtime: number; readonly truncated: boolean;
   readonly image: { readonly url: string; readonly mimeType: string; readonly data: string } | null;
   readonly video: { readonly url: string; readonly mimeType: string } | null;
+  readonly model: { readonly url: string; readonly mimeType: string } | null;
   readonly artifact: { readonly requestFeedback: boolean; readonly summary: string; readonly artifactType: string } | null;
 }
 export interface DiffFile { readonly path: string; readonly oldPath: string; readonly status: string; readonly additions: number; readonly deletions: number; readonly binary: boolean; readonly truncated: boolean; readonly patch: string; readonly patchDeferred: boolean }
@@ -13,6 +14,7 @@ export function decodeFilePreview(v: unknown): FilePreview {
   return { path: v.path, relPath: text(v.relPath), content: text(v.content), size: count(v.size), mtime: count(v.mtime), truncated: v.truncated === true,
     image: record(v.image) ? { url: text(v.image.url), mimeType: text(v.image.mimeType), data: text(v.image.data) } : null,
     video: record(v.video) ? { url: text(v.video.url), mimeType: text(v.video.mimeType) } : null,
+    model: record(v.model) ? { url: text(v.model.url), mimeType: text(v.model.mimeType) } : null,
     artifact: record(v.artifact) ? { requestFeedback: v.artifact.requestFeedback === true, summary: text(v.artifact.summary), artifactType: text(v.artifact.artifactType) } : null };
 }
 export function decodeDiffView(v: unknown): DiffView {

@@ -10,6 +10,8 @@ import { escapeHtml } from '../core/helper-format';
 import { formatMediaSize } from '../core/helper-media';
 import { shortCwd } from './helper-format';
 import { pauseAndUnloadVideos, type RenderVideoPreview, type VideoEnhanceContext } from './video-player';
+import { modelContentApiPath } from './model-view-data';
+import type { ModelMountOptions, MountedModelView } from './model-view';
 function resolveRelativePosixPath(baseFilePath: string, rel: string): string {
   const dir = baseFilePath.includes('/') ? baseFilePath.slice(0, baseFilePath.lastIndexOf('/')) : '';
   const combined = rel.startsWith('/') ? rel : `${dir}/${rel}`;
@@ -27,6 +29,7 @@ export function createFileViews(options: {
   assetUrl?: (host: string | null | undefined, path: string) => string;
   markdown: (text: string) => string; highlight: (root: HTMLElement, context?: VideoEnhanceContext) => void; copy: (text: string) => Promise<unknown>;
   video: RenderVideoPreview;
+  mountModel?: (options: ModelMountOptions) => MountedModelView;
   status: (message: string, type?: string) => void; refreshArtifacts: (owner: SelectionOwner) => void;
   closeComments: () => void; clearComments: () => void; refreshComments: () => void; markComments: () => void;
 }) {
@@ -37,6 +40,7 @@ export function createFileViews(options: {
   const diff: View = { owner: null, endpoint: null, sessionId: null, generation: 0 };
   let disposed = false, pageSequence = 0, copySequence = 0;
   let displayedPage: PublishedPage | null = null;
+  let activeModel: MountedModelView | null = null;
   let fileEvents = new AbortController(), pageEvents = new AbortController(), diffEvents = new AbortController();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const patchOwners = new WeakMap<HTMLElement, { generation: number; owner: SelectionOwner; endpoint: Readonly<HostEndpoint>; request: symbol | null }>();
@@ -63,14 +67,16 @@ export function createFileViews(options: {
     file.generation++; file.owner = null; file.endpoint = null; file.sessionId = null; file.raw = null; file.path = null; file.relPath = null;
     fileEvents.abort(); pageEvents.abort(); pageSequence++; copySequence++;
     for (const timer of timers) clearTimeout(timer); timers.clear();
+    activeModel?.dispose(); activeModel = null;
     const viewBody = element('fileViewBody');
     pauseAndUnloadVideos(viewBody, { unload: true });
+    viewBody.classList.remove('file-view-model-body');
     element('sessionView').classList.remove('file-open'); viewBody.innerHTML = '';
     const raw = element<HTMLAnchorElement>('fileViewRaw'); raw.style.display = 'none'; raw.removeAttribute('href');
     const publish = element<HTMLButtonElement>('fileViewPublish'); publish.disabled = false; publish.style.display = 'none';
     const proceed = document.getElementById('fileViewProceed') as HTMLButtonElement | null;
     if (proceed) { proceed.disabled = false; proceed.style.display = 'none'; }
-    element('fileViewCopy').textContent = '⧉';
+    const copyBtn = element('fileViewCopy'); copyBtn.style.display = ''; copyBtn.textContent = '⧉';
     clearPage(); options.closeComments(); options.clearComments();
   }
   function closeDiff() {
@@ -190,6 +196,32 @@ export function createFileViews(options: {
         }, { host: owner.host, sessionId: id });
         return;
       }
+      if (data.model) {
+        copyButton.style.display = 'none';
+        if (!options.mountModel) {
+          body.innerHTML = '<div class="error">3D model viewer is unavailable.</div>';
+          return;
+        }
+        body.classList.add('file-view-model-body');
+        activeModel = options.mountModel({
+          container: body,
+          modelPath: data.path,
+          sizeBytes: data.size,
+          mtime: data.mtime,
+          fetchFile: async (absPath, signal, cacheKey) => {
+            if (!ownsFile(id, generation)) throw new Error('File view closed');
+            const apiPath = modelContentApiPath(id, absPath, cacheKey);
+            const res = await request(owner, endpoint, apiPath, { signal });
+            if (!res.ok) {
+              const payload: unknown = await res.json().catch(() => null);
+              throw new Error(responseError(res, payload, `HTTP ${res.status}`));
+            }
+            return res.arrayBuffer();
+          },
+          status: options.status,
+        });
+        return;
+      }
       file.raw = data.content;
       const ext = data.path.match(/\.([A-Za-z0-9]+)$/)?.[1]?.toLowerCase();
       if (ext === 'md' || ext === 'markdown') {
@@ -257,6 +289,7 @@ export function createFileViews(options: {
     }
   }
   return { openFile, closeFile, publish, copy, openDiff, closeDiff, toggleDiff, loadDiff, loadPatch, ownsFile, ownsDiff,
+    refreshTheme: () => { activeModel?.refreshTheme(); },
     isFileOpen: () => isOpen('file'), isDiffOpen: () => isOpen('diff'),
     get file(): Readonly<typeof file> { return file; }, get diff(): Readonly<typeof diff> { return diff; },
     dispose() { closeFile(); closeDiff(); disposed = true; },

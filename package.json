@@ -61,6 +61,7 @@
     "@types/katex": "0.16.8",
     "@types/node": "22.20.5",
     "@types/proper-lockfile": "4.1.4",
+    "@types/three": "0.187.0",
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.2",
     "@xmldom/xmldom": "0.8.15",
@@ -70,6 +71,7 @@
     "espree": "11.2.0",
     "globals": "17.14.0",
     "mermaid": "^12.3.0",
+    "three": "0.187.0",
     "typebox": "1.4.6",
     "typescript": "7.0.2"
   },

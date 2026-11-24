@@ -1672,6 +1672,64 @@ test('GET /file returns video metadata and serves Range requests (206/416/HEAD/I
     assert.equal((await fetch(`${base}/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent('../../secret.mp4')}`)).status, 404);
     assert.equal((await fetch(`${base}/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent(path.join(tmpHome, 'secret.mp4'))}`)).status, 404);
 });
+test('GET /file and /file/content serve .glb/.gltf models with 206 Range and gate sibling .ktx2/.bin assets', async () => {
+    const meshesDir = path.join(realCwd, 'assets', 'weapons', 'meshes');
+    const texDir = path.join(realCwd, 'assets', 'textures', 'material');
+    fs.mkdirSync(meshesDir, { recursive: true });
+    fs.mkdirSync(texDir, { recursive: true });
+    const glbBytes = Buffer.alloc(2048);
+    glbBytes.write('glTF', 0, 'ascii');
+    for (let i = 4; i < glbBytes.length; i++)
+        glbBytes[i] = i % 251;
+    const ktxBytes = Buffer.concat([
+        Buffer.from([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a, 0x2b, 0x00, 0x00, 0x00]),
+        Buffer.alloc(256, 0x00),
+    ]);
+    const binBytes = Buffer.from([0x00, 0x01, 0x02, 0x03, 0x7f, 0xff]);
+    fs.writeFileSync(path.join(meshesDir, 'rifle.glb'), glbBytes);
+    fs.writeFileSync(path.join(meshesDir, 'mesh.bin'), binBytes);
+    fs.writeFileSync(path.join(texDir, 'rifle_base.ktx2'), ktxBytes);
+    fs.writeFileSync(path.join(tmpHome, 'outside.ktx2'), ktxBytes);
+    // /file returns model metadata with a content URL.
+    const preview = await get(`/api/sessions/${REAL_CWD_ID}/file?path=${encodeURIComponent('assets/weapons/meshes/rifle.glb')}`);
+    assert.equal(preview.status, 200);
+    const model = (0, test_types_js_1.record)(preview.body.model);
+    assert.equal(model.mimeType, 'model/gltf-binary');
+    assert.ok(typeof model.url === 'string' && model.url.includes('/file/content?path='));
+    // /file/content serves .glb with model/gltf-binary, nosniff, no gzip, and 206 Range.
+    const fullGlb = await rawGet(text(model.url), { 'Accept-Encoding': 'gzip' });
+    assert.equal(fullGlb.status, 200);
+    assert.equal(fullGlb.headers['content-type'], 'model/gltf-binary');
+    assert.equal(fullGlb.headers['x-content-type-options'], 'nosniff');
+    assert.equal(fullGlb.headers['accept-ranges'], 'bytes');
+    assert.equal(fullGlb.headers['content-encoding'], undefined, 'binary GLB must not be gzip-compressed');
+    assert.deepEqual(fullGlb.body, glbBytes);
+    const rangedGlb = await rawGet(`/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent('assets/weapons/meshes/rifle.glb')}`, { Range: 'bytes=0-15' });
+    assert.equal(rangedGlb.status, 206);
+    assert.equal(rangedGlb.headers['content-type'], 'model/gltf-binary');
+    assert.equal(rangedGlb.headers['content-range'], `bytes 0-15/${glbBytes.length}`);
+    assert.deepEqual(rangedGlb.body, glbBytes.subarray(0, 16));
+    // Sibling/ancestor .ktx2 and .bin under cwd serve raw with nosniff; /file still refuses preview (415).
+    const ktxAbs = path.join(texDir, 'rifle_base.ktx2');
+    const ktxPreview = await get(`/api/sessions/${REAL_CWD_ID}/file?path=${encodeURIComponent(ktxAbs)}`);
+    assert.equal(ktxPreview.status, 415);
+    const ktxRes = await rawGet(`/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent(ktxAbs)}`, { 'Accept-Encoding': 'gzip' });
+    assert.equal(ktxRes.status, 200);
+    assert.equal(ktxRes.headers['content-type'], 'image/ktx2');
+    assert.equal(ktxRes.headers['x-content-type-options'], 'nosniff');
+    assert.equal(ktxRes.headers['content-encoding'], undefined, 'KTX2 must not be gzip-compressed');
+    assert.deepEqual(ktxRes.body, ktxBytes);
+    const binRes = await rawGet(`/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent(path.join(meshesDir, 'mesh.bin'))}`);
+    assert.equal(binRes.status, 200);
+    assert.equal(binRes.headers['content-type'], 'application/octet-stream');
+    assert.equal(binRes.headers['x-content-type-options'], 'nosniff');
+    assert.deepEqual(binRes.body, binBytes);
+    // KTX2 outside the session's allowed reach returns 404.
+    const outsideRes = await fetch(`${base}/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent(path.join(tmpHome, 'outside.ktx2'))}`);
+    assert.equal(outsideRes.status, 404);
+    const traverseRes = await fetch(`${base}/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent('../../outside.ktx2')}`);
+    assert.equal(traverseRes.status, 404);
+});
 test('published file pages and transcript video attachments serve video with Range support', async () => {
     const bytes = Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz');
     const videoPath = path.join(realCwd, 'published-clip.mp4');

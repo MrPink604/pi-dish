@@ -973,11 +973,13 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       return res.status(file.status || 415).type('text/plain').send('File cannot be previewed');
     }
     if (req.query.content != null) {
-      if (!file.image && !file.video) return notFound();
+      if (!file.image && !file.video && !file.model) return notFound();
       const safeMime = file.video
         ? file.video.mimeType
-        : file.image && file.image.mimeType !== 'image/svg+xml'
-          ? file.image.mimeType : 'text/plain; charset=utf-8';
+        : file.model
+          ? file.model.mimeType
+          : file.image && file.image.mimeType !== 'image/svg+xml'
+            ? file.image.mimeType : 'text/plain; charset=utf-8';
       res.setHeader('Cache-Control', 'public, no-cache');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       return sendRangedFile(req, res, root, { mimeType: safeMime, size: file.size, mtimeMs: file.mtime, onError: notFound });

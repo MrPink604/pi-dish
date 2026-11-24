@@ -6936,6 +6936,198 @@ img.msg-image {
 
 .file-view-img { max-width: 100%; display: block; margin: 0 auto; }
 
+/* Inline 3D model viewer (GLB / glTF inside the file panel) */
+.file-view-body.file-view-model-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 10px max(16px, calc((100% - var(--content-max)) / 2)) 14px;
+}
+
+.model-viewer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-darker);
+  overflow: hidden;
+}
+
+.model-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg-darker);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+
+.model-views,
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-chip {
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 5px 10px;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.model-chip:hover:not(:disabled) {
+  color: var(--text-bright);
+  border-color: var(--accent-dim);
+  background: var(--bg-hover);
+}
+
+.model-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.model-chip.active {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-card));
+}
+
+.model-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.model-stage {
+  position: relative;
+  flex: 1;
+  min-height: 240px;
+  min-width: 0;
+  overflow: hidden;
+  /* Mid-tone neutral backdrop derived strictly from active theme tokens so dark
+     models and bright emissives stay legible in both Solarized Dark and Graphite. */
+  background: color-mix(in srgb, var(--bg-card) 84%, var(--text-muted));
+}
+
+.model-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+.model-canvas:active {
+  cursor: grabbing;
+}
+
+.model-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+  background: color-mix(in srgb, var(--bg-darker) 72%, transparent);
+}
+
+.model-overlay[hidden] {
+  display: none;
+}
+
+.model-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+.model-overlay-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.model-overlay-sub,
+.model-overlay-msg {
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.model-overlay-error {
+  color: var(--error);
+}
+
+.model-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-darker);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.model-stats-text {
+  overflow-wrap: anywhere;
+}
+
+.model-stats-warn {
+  color: var(--warning);
+}
+
+.model-standalone-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.model-standalone-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.model-standalone-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* Video playback (file viewer, standalone file pages, and inline transcript media) */
 .msg-videos {
   display: flex;
@@ -9246,6 +9438,14 @@ mark.comment-mark {
 
 @media (max-width: 768px) {
   .diff-view-body, .file-view-body { padding: 8px 10px 16px; }
+  .file-view-body.file-view-model-body { padding: 8px 8px 10px; }
+  .file-view-header { gap: 6px; padding: 8px 10px; }
+  .file-view-title { min-width: 0; max-width: 55%; }
+  .file-view-path { min-width: 0; }
+  .model-toolbar { padding: 6px 8px; gap: 6px; }
+  .model-views, .model-actions { gap: 4px; }
+  .model-chip { padding: 5px 8px; font-size: 11px; }
+  .model-stats { padding: 6px 8px; font-size: 10px; }
   .msg-video-player { width: 100%; }
   video.msg-video { max-height: 260px; }
   video.file-view-video { max-height: 60dvh; }

@@ -2,7 +2,7 @@ import type { Request, Response, RequestHandler } from 'express';
 import type { SessionSource } from './session-source';
 import { record } from './helper-values';
 import { searchHomeDirs, getDirChildren, isPathCompletionToken, completePath, searchFiles } from './file-search';
-import { resolveFileMention, readFileForViewer } from './file-mention';
+import { resolveFileMention, readFileForViewer, readFileForContent } from './file-mention';
 import { sendRangedFile } from './range-response';
 import { agyBrainDir, readAgyBrainArtifactMeta } from './agy-brain';
 import { readSessionMessages } from './session-files';
@@ -92,7 +92,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     return { cwd, session, resolved };
   }
 
-  async function prepareViewerFile(req: FileRequest) {
+  async function resolveRequestFile(req: FileRequest) {
     const mention = String(req.query.path || '');
     if (!mention || mention.length > 1024) {
       return { status: 400, body: { error: 'path required' } } as const;
@@ -103,29 +103,22 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     if (!resolved) {
       return { status: 404, body: { error: `Couldn't find "${mention}" among this session's files` } } as const;
     }
-    const file = readFileForViewer(resolved.absPath, { imageData: false });
-    if ('error' in file) {
-      return { status: file.status || 415, body: { error: file.error, path: resolved.absPath } } as const;
-    }
-    const artifact = session?.harnessId === 'agy'
-      ? readAgyBrainArtifactMeta(session.nativeSessionId, resolved.absPath)
-      : null;
-    return { cwd, resolved, mention, file, artifact };
+    return { cwd, session, resolved, mention };
   }
 
   // Both preview and raw bytes use the same session-aware reach rules.
   const fileContent: FileHandler = async (req, res) => {
     try {
-      const prepared = await prepareViewerFile(req);
-      if (prepared.status !== undefined) return res.status(prepared.status).json(prepared.body);
-      const { resolved, file } = prepared;
+      const target = await resolveRequestFile(req);
+      if (target.status !== undefined) return res.status(target.status).json(target.body);
+      const { resolved } = target;
+      const content = readFileForContent(resolved.absPath);
+      if ('error' in content) {
+        return res.status(content.status || 415).json({ error: content.error, path: resolved.absPath });
+      }
       res.setHeader('Cache-Control', 'private, no-cache');
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      const mimeType = file.video
-        ? file.video.mimeType
-        : file.image && file.image.mimeType !== 'image/svg+xml'
-          ? file.image.mimeType : 'text/plain; charset=utf-8';
-      sendRangedFile(req, res, resolved.absPath, { mimeType, size: file.size, mtimeMs: file.mtime });
+      sendRangedFile(req, res, resolved.absPath, { mimeType: content.mimeType, size: content.size, mtimeMs: content.mtime });
     } catch (error) {
       res.status(500).json({ error: record(error) ? error.message : undefined });
     }
@@ -133,13 +126,22 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
 
   const filePreview: FileHandler = async (req, res) => {
     try {
-      const prepared = await prepareViewerFile(req);
-      if (prepared.status !== undefined) return res.status(prepared.status).json(prepared.body);
-      const { cwd, resolved, mention, file, artifact } = prepared;
+      const target = await resolveRequestFile(req);
+      if (target.status !== undefined) return res.status(target.status).json(target.body);
+      const { cwd, session, resolved, mention } = target;
+      const file = readFileForViewer(resolved.absPath, { imageData: false });
+      if ('error' in file) {
+        return res.status(file.status || 415).json({ error: file.error, path: resolved.absPath });
+      }
+      const artifact = session?.harnessId === 'agy'
+        ? readAgyBrainArtifactMeta(session.nativeSessionId, resolved.absPath)
+        : null;
       if (file.image) {
         file.image.url = `/api/sessions/${encodeURIComponent(req.params.id)}/file/content?path=${encodeURIComponent(mention)}&v=${file.mtime}-${file.size}`;
       } else if (file.video) {
         file.video.url = `/api/sessions/${encodeURIComponent(req.params.id)}/file/content?path=${encodeURIComponent(mention)}&v=${file.mtime}-${file.size}`;
+      } else if (file.model) {
+        file.model.url = `/api/sessions/${encodeURIComponent(req.params.id)}/file/content?path=${encodeURIComponent(mention)}&v=${file.mtime}-${file.size}`;
       }
       res.json({
         path: resolved.absPath,

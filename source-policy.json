@@ -186,6 +186,7 @@
     "test/browser/rich-text.spec.ts",
     "test/browser/extension-ui.spec.ts",
     "test/browser/file-views.spec.ts",
+    "test/browser/model-view.spec.ts",
     "test/browser/anchored-comments.spec.ts",
     "test/browser/menu-ownership.spec.ts",
     "test/browser/model-selector.spec.ts",
@@ -379,6 +380,7 @@
           {"source": "node_modules/highlight.js/lib/common", "output": "public/vendor/highlight.js"},
           {"source": "node_modules/katex/dist/katex.min.js", "output": "public/vendor/katex.min.js"},
           {"source": "node_modules/mermaid/dist/mermaid.min.js", "output": "public/vendor/mermaid.min.js"},
+          {"source": "node_modules/three/build/three.module.js", "output": "public/vendor/three-gltf.js"},
           {"source": "node_modules/@xterm/xterm/lib/xterm.js", "output": "public/vendor/xterm.js"},
           {"source": "node_modules/@xterm/addon-fit/lib/addon-fit.js", "output": "public/vendor/xterm-addon-fit.js"}
         ]

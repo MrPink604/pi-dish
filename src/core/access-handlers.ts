@@ -177,7 +177,8 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
       if (req.path.startsWith('/hosts/')) return false;
       if (req.headers.range || res.statusCode === 206) return false;
       const type = String(res.getHeader('Content-Type') || '');
-      if (type.startsWith('text/event-stream') || type.startsWith('video/')) return false;
+      if (type.startsWith('text/event-stream') || type.startsWith('video/')
+          || type.startsWith('model/gltf-binary') || type.startsWith('image/ktx2')) return false;
       return compression.filter(req, res);
     },
   });

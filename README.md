@@ -167,8 +167,9 @@ Rules of thumb:
   (the prompt API already executes code via the agent, but the terminal
   removes even that indirection).
 - **No CDN dependencies** — `marked`, `highlight.js`, `katex`, `mermaid`,
-  `xterm`, and a symbols-only Nerd Font (terminal prompt glyphs) are
-  vendored, so it works on LAN clients with no internet.
+  `three` (glTF/KTX2 3D viewer, lazy-loaded), `xterm`, and a symbols-only Nerd
+  Font (terminal prompt glyphs) are vendored, so it works on LAN clients with
+  no internet.
 
 The skill CLI sources under `skills/` are authored in TypeScript; run
 `npm run build:edges` after changing them. Runtime JavaScript is checked in,

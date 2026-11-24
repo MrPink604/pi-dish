@@ -212,10 +212,16 @@ viewBox-only drawing to its viewBox. Theme changes re-render these like
 mermaid diagrams. The file viewer runs the same pass, so a `.svg` file renders
 there too.
 
-`mermaid` and the xterm packages are build-time inputs in `devDependencies`;
+`mermaid`, `three` (`public/vendor/three-gltf.js`, lazy-loaded on first `.glb`/`.gltf`
+open via the content-hashed `pi-dish-asset-three-gltf` meta tag in `index.html`, with an
+`apiVersion` skew check), and the xterm packages are build-time inputs in `devDependencies`;
 the running server uses their checked-in `public/vendor` outputs. They are absent
 from the production dependency graph, so the large browser-only source trees are
-not shipped beside their bundles.
+not shipped beside their bundles. External relative textures (including RGBA8+zstd `.ktx2`)
+and `.bin` buffers resolve lexically against the opened model path and load through the
+owning host's authenticated `/api/sessions/:id/file/content` route; `http(s)://` and
+`file://` URIs are refused. Files over 25 MB gate behind a tap-to-load prompt, and
+closing the file view disposes the WebGL renderer, geometry, materials and textures.
 
 PlantUML (`@startuml`) is *not* rendered: it needs a PlantUML server or the
 Java jar, i.e. a network dependency or a 12MB runtime, which the offline-LAN

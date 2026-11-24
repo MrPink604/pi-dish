@@ -84,6 +84,12 @@ export { decodeClientReview, decodeReviewList, initialDraft, hydrateDraft, build
 export { createFileViews } from './file-views';
 export { decodeFilePreview, decodeDiffView, decodeDiffPatch } from './file-view-data';
 export { renderDiffViewHtml } from './file-view-render';
+export { createModelViewer } from './model-view';
+export {
+  MODEL_VENDOR_API_VERSION, MODEL_LARGE_FILE_BYTES, MODEL_VENDOR_META_NAME, DEFAULT_MODEL_VENDOR_URL, MODEL_VIEWS,
+  modelViewById, resolvePosixPath, resolveModelResourcePath, modelContentApiPath, modelVendorUrl,
+  shouldGateModelLoad, formatModelBounds, formatModelStats, modelSnapshotFilename, parseCssColorToHex,
+} from './model-view-data';
 
 export { createAnchoredComments } from './anchored-comments';
 export { decodeAnchoredComments, decodeCommentTarget, decodeCommentIndex } from './anchored-comment-data';

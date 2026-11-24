@@ -34,6 +34,16 @@ export interface ResolvedFileMention {
   line: number | null;
 }
 
+export const MODEL_MIME_BY_EXT: Readonly<Record<string, string>> = {
+  '.glb': 'model/gltf-binary',
+  '.gltf': 'model/gltf+json',
+};
+
+export const RAW_ASSET_MIME_BY_EXT: Readonly<Record<string, string>> = {
+  '.ktx2': 'image/ktx2',
+  '.bin': 'application/octet-stream',
+};
+
 export interface FileViewerImageData {
   mimeType: string;
   data?: string;
@@ -46,6 +56,11 @@ export interface FileViewerVideoData {
   url?: string;
 }
 
+export interface FileViewerModelData {
+  mimeType: string;
+  url?: string;
+}
+
 export interface FileViewerText {
   content: string;
   truncated: boolean;
@@ -53,6 +68,7 @@ export interface FileViewerText {
   mtime: number;
   image?: never;
   video?: never;
+  model?: never;
 }
 
 export interface FileViewerImage {
@@ -62,6 +78,7 @@ export interface FileViewerImage {
   content?: never;
   truncated?: never;
   video?: never;
+  model?: never;
 }
 
 export interface FileViewerVideo {
@@ -71,6 +88,17 @@ export interface FileViewerVideo {
   content?: never;
   truncated?: never;
   image?: never;
+  model?: never;
+}
+
+export interface FileViewerModel {
+  model: FileViewerModelData;
+  size: number;
+  mtime: number;
+  content?: never;
+  truncated?: never;
+  image?: never;
+  video?: never;
 }
 
 export interface FileViewerError {
@@ -78,8 +106,16 @@ export interface FileViewerError {
   status: 413 | 415;
 }
 
-export type FileViewerFile = FileViewerText | FileViewerImage | FileViewerVideo;
+export type FileViewerFile = FileViewerText | FileViewerImage | FileViewerVideo | FileViewerModel;
 export type FileViewerResult = FileViewerFile | FileViewerError;
+
+export interface FileContentDescriptor {
+  mimeType: string;
+  size: number;
+  mtime: number;
+}
+
+export type FileContentResult = FileContentDescriptor | FileViewerError;
 
 export interface FileViewerOptions {
   imageData?: 'base64' | 'buffer' | false;
@@ -237,6 +273,16 @@ export function readFileForViewer(absPath: string, { imageData = 'base64' }: Fil
       size: stats.size, mtime: stats.mtimeMs,
     };
   }
+  const modelMime = Object.hasOwn(MODEL_MIME_BY_EXT, ext) ? MODEL_MIME_BY_EXT[ext] : undefined;
+  if (modelMime) {
+    return {
+      model: { mimeType: modelMime },
+      size: stats.size, mtime: stats.mtimeMs,
+    };
+  }
+  if (Object.hasOwn(RAW_ASSET_MIME_BY_EXT, ext)) {
+    return { error: 'Binary file — no preview', status: 415 };
+  }
   const fd = fs.openSync(absPath, 'r');
   try {
     const len = Math.min(stats.size, MAX_TEXT_BYTES);
@@ -253,4 +299,28 @@ export function readFileForViewer(absPath: string, { imageData = 'base64' }: Fil
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/**
+ * Inspect a resolved file for raw `/file/content` delivery: permits 3D models
+ * and companion binary assets (`.ktx2`, `.bin`) alongside images, video and
+ * text while keeping arbitrary binaries rejected.
+ */
+export function readFileForContent(absPath: string): FileContentResult {
+  const ext = path.extname(absPath).toLowerCase();
+  const rawMime = Object.hasOwn(RAW_ASSET_MIME_BY_EXT, ext) ? RAW_ASSET_MIME_BY_EXT[ext] : undefined;
+  if (rawMime) {
+    const stats = fs.statSync(absPath);
+    return { mimeType: rawMime, size: stats.size, mtime: stats.mtimeMs };
+  }
+  const file = readFileForViewer(absPath, { imageData: false });
+  if ('error' in file) return file;
+  const mimeType = file.video
+    ? file.video.mimeType
+    : file.model
+      ? file.model.mimeType
+      : file.image && file.image.mimeType !== 'image/svg+xml'
+        ? file.image.mimeType
+        : 'text/plain; charset=utf-8';
+  return { mimeType, size: file.size, mtime: file.mtime };
 }

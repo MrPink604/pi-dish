@@ -17,6 +17,8 @@ export interface ResolvedFileMention {
     absPath: string;
     line: number | null;
 }
+export declare const MODEL_MIME_BY_EXT: Readonly<Record<string, string>>;
+export declare const RAW_ASSET_MIME_BY_EXT: Readonly<Record<string, string>>;
 export interface FileViewerImageData {
     mimeType: string;
     data?: string;
@@ -27,6 +29,10 @@ export interface FileViewerVideoData {
     mimeType: string;
     url?: string;
 }
+export interface FileViewerModelData {
+    mimeType: string;
+    url?: string;
+}
 export interface FileViewerText {
     content: string;
     truncated: boolean;
@@ -34,6 +40,7 @@ export interface FileViewerText {
     mtime: number;
     image?: never;
     video?: never;
+    model?: never;
 }
 export interface FileViewerImage {
     image: FileViewerImageData;
@@ -42,6 +49,7 @@ export interface FileViewerImage {
     content?: never;
     truncated?: never;
     video?: never;
+    model?: never;
 }
 export interface FileViewerVideo {
     video: FileViewerVideoData;
@@ -50,13 +58,29 @@ export interface FileViewerVideo {
     content?: never;
     truncated?: never;
     image?: never;
+    model?: never;
+}
+export interface FileViewerModel {
+    model: FileViewerModelData;
+    size: number;
+    mtime: number;
+    content?: never;
+    truncated?: never;
+    image?: never;
+    video?: never;
 }
 export interface FileViewerError {
     error: string;
     status: 413 | 415;
 }
-export type FileViewerFile = FileViewerText | FileViewerImage | FileViewerVideo;
+export type FileViewerFile = FileViewerText | FileViewerImage | FileViewerVideo | FileViewerModel;
 export type FileViewerResult = FileViewerFile | FileViewerError;
+export interface FileContentDescriptor {
+    mimeType: string;
+    size: number;
+    mtime: number;
+}
+export type FileContentResult = FileContentDescriptor | FileViewerError;
 export interface FileViewerOptions {
     imageData?: 'base64' | 'buffer' | false;
 }
@@ -67,3 +91,9 @@ export declare function extractSessionPaths(messages: readonly unknown[], cwd: s
 export declare function resolveFileMention(rawMention: unknown, { cwd, messages, home, extraRoots }: FileMentionContext): Promise<ResolvedFileMention | null>;
 /** Base64 is the default for library callers; HTTP routes opt into no bytes or a Buffer. */
 export declare function readFileForViewer(absPath: string, { imageData }?: FileViewerOptions): FileViewerResult;
+/**
+ * Inspect a resolved file for raw `/file/content` delivery: permits 3D models
+ * and companion binary assets (`.ktx2`, `.bin`) alongside images, video and
+ * text while keeping arbitrary binaries rejected.
+ */
+export declare function readFileForContent(absPath: string): FileContentResult;

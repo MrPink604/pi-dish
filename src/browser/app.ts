@@ -41,6 +41,7 @@ import { createSkills } from './skills';
 import { createUsageView } from './usage-view';
 import { createSessionInfo } from './session-info';
 import { createFileViews } from './file-views';
+import { createModelViewer, type ThreeGltfRuntime } from './model-view';
 import { createAnchoredComments } from './anchored-comments';
 import { createTranscript } from './transcript';
 import { createMessageRenderer } from './message-render';
@@ -85,6 +86,7 @@ declare const FitAddon: { FitAddon: typeof XtermFitAddon } | typeof XtermFitAddo
 import type { SessionEntry } from './session-state';
 import type { HighlightRuntime, MarkedRuntime, MermaidRuntime } from './rich-text-vendors';
 declare const marked: MarkedRuntime | undefined, hljs: HighlightRuntime | undefined, mermaid: MermaidRuntime | undefined;
+declare const PiDishThreeGltf: ThreeGltfRuntime | undefined;
 
 // The pre-paint guard owns the visible failure surface; announce that this
 // bundle reached application construction before touching the DOM.
@@ -886,6 +888,7 @@ const fileViews: ReturnType<typeof createFileViews> = createFileViews({
   document, sessionState, request, host: hostEntryFor, assetUrl: hostAssetUrl,
   markdown: text => richText.format(text), highlight: (root, context) => richText.highlight(root, context), copy: copyTextToClipboard,
   video: (player, context) => richText.video(player, context),
+  mountModel: mountOptions => modelViewer.mount(mountOptions),
   status: setStatus, refreshArtifacts: owner => sessionInfo.refreshArtifacts(owner),
   closeComments: () => anchoredCommentController.close(), clearComments: () => anchoredCommentController.set([]),
   refreshComments: () => anchoredCommentController.refresh(), markComments: () => anchoredCommentController.applyMarks(),
@@ -1118,6 +1121,9 @@ const reviewDecks: ReturnType<typeof createReviewDecks> = createReviewDecks({
 });
 
 const browserAssets: ReturnType<typeof createBrowserAssets> = createBrowserAssets(document);
+const modelViewer: ReturnType<typeof createModelViewer> = createModelViewer({
+  document, assets: browserAssets, runtime: () => typeof PiDishThreeGltf === 'undefined' ? null : PiDishThreeGltf,
+});
 const diagramRenderer: ReturnType<typeof createDiagrams> = createDiagrams({
   document, assets: browserAssets, runtime: () => typeof mermaid === 'undefined' ? null : mermaid,
   retainedRoots: () => transcriptController.retainedRoots(), isPinned: feed => appChrome.pinned(feed), scrollBottom: feed => appChrome.scroll(feed),
@@ -1211,7 +1217,7 @@ async function loadConfig() {
 }
 
 const themesController: ReturnType<typeof createThemes> = createThemes({ document, storage: localStorage, request, host: () => hostEntryFor(null)!,
-  changed: () => { terminalController.refreshTheme(); diagramRenderer.refreshTheme(); },
+  changed: () => { terminalController.refreshTheme(); diagramRenderer.refreshTheme(); fileViews.refreshTheme(); },
 });
 
 const terminalController: ReturnType<typeof createTerminalController> = createTerminalController({

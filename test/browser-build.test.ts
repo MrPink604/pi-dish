@@ -77,6 +77,20 @@ test('browser build detects stale output and preserves it on type failure', () =
     assert.equal(run().status, 0);
     assert.notEqual(fs.readFileSync(shell, 'utf8'), firstShell, 'a CSS-only change must get a new stylesheet URL');
     const cleanShell = fs.readFileSync(shell, 'utf8');
+    // Lazy vendor assets declared in <meta name="pi-dish-asset-..."> get content-hashed too.
+    fs.mkdirSync(path.join(root, 'public/vendor'), { recursive: true });
+    const lazyVendor = path.join(root, 'public/vendor/three-gltf.js');
+    fs.writeFileSync(lazyVendor, 'globalThis.PiDishThreeGltf = { apiVersion: 1 };');
+    fs.writeFileSync(shell, '<meta name="pi-dish-asset-three-gltf" content="vendor/three-gltf.js"><link href="style.css" rel="stylesheet"><script src="app.js" defer></script>');
+    assert.equal(run().status, 0);
+    const metaShellOne = fs.readFileSync(shell, 'utf8');
+    assert.match(metaShellOne, /content="vendor\/three-gltf\.js\?v=[0-9a-f]{16}"/);
+    assert.equal(run('--check').status, 0);
+    fs.writeFileSync(lazyVendor, 'globalThis.PiDishThreeGltf = { apiVersion: 2 };');
+    assert.equal(run('--check').status, 1, 'changing a versioned lazy vendor bundle must fail --check until shell hash updates');
+    assert.equal(run().status, 0);
+    assert.notEqual(fs.readFileSync(shell, 'utf8'), metaShellOne);
+    fs.rmSync(lazyVendor);
     // Unresolved merge conflict markers or duplicate app.js tags must never pass build or check.
     fs.writeFileSync(shell, '<<<<<<< HEAD\n<script src="app.js" defer></script>\n=======\n<script src="app.js" defer></script>\n>>>>>>> other\n');
     const conflicted = run('--check');

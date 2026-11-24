@@ -53,17 +53,21 @@ if (/^(?:<{7}|={7}|>{7})(?:\s|$)/m.test(shell)) {
   throw new Error(`${shellFile} contains unresolved merge conflict markers`);
 }
 const seenShellAssets = new Set<string>();
-const versioned = shell.replace(/\b(src|href)="([\w./-]+\.(?:js|css))(?:\?v=[0-9a-f]+)?"/g,
-  (_match, attribute: string, asset: string) => {
-    if (seenShellAssets.has(asset)) {
-      throw new Error(`${shellFile} references local asset "${asset}" more than once`);
-    }
-    seenShellAssets.add(asset);
-    const file = `public/${asset}`;
-    const content = prepared.find(output => output.file === file)?.content ?? readFileSync(path.join(root, file));
-    const version = createHash('sha256').update(content).digest('hex').slice(0, 16);
-    return `${attribute}="${asset}?v=${version}"`;
-  });
+const versionShellAsset = (asset: string): string => {
+  if (seenShellAssets.has(asset)) {
+    throw new Error(`${shellFile} references local asset "${asset}" more than once`);
+  }
+  seenShellAssets.add(asset);
+  const file = `public/${asset}`;
+  const content = prepared.find(output => output.file === file)?.content ?? readFileSync(path.join(root, file));
+  const version = createHash('sha256').update(content).digest('hex').slice(0, 16);
+  return `${asset}?v=${version}`;
+};
+const versioned = shell
+  .replace(/\b(src|href)="([\w./-]+\.(?:js|css))(?:\?v=[0-9a-f]+)?"/g,
+    (_match, attribute: string, asset: string) => `${attribute}="${versionShellAsset(asset)}"`)
+  .replace(/(<meta\b[^>]*\bname="pi-dish-asset-[a-z0-9-]+"[^>]*\bcontent=")([\w./-]+\.(?:js|css))(?:\?v=[0-9a-f]+)?(")/g,
+    (_match, before: string, asset: string, after: string) => `${before}${versionShellAsset(asset)}${after}`);
 if (versioned !== shell) prepared.push({ file: shellFile, target: shellPath, content: versioned, mode: 0o644 });
 
 writeOutputs(prepared, {
