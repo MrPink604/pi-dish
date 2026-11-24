@@ -476,25 +476,6 @@ function handlePrompt(id: number, params: Frame): void {
       }, 5);
       return;
     }
-    case 'background-rerun': {
-      // Each prompt launches a fresh background run_command (or run_workflow) that stays
-      // open past end_turn so brain reconciliation can be exercised across re-runs.
-      const promptArr = Array.isArray(params.prompt) ? params.prompt : [];
-      const firstText = promptArr.find((p): p is Frame => !!p && typeof p === 'object' && (p as Frame).type === 'text');
-      const promptText = typeof firstText?.text === 'string' ? firstText.text : '';
-      setTimeout(() => {
-        if (promptText.includes('workflow')) {
-          toolCall(`call-wf-${id}`, 'run_workflow', { Description: 'Audit modules' }, 'Audit modules', 'other');
-          textChunk('Running workflow.');
-        } else {
-          toolCall(`call-bg-run-${id}`, 'run_command', { CommandLine: 'npm test', WaitMsBeforeAsync: 5000 }, 'npm test', 'execute');
-          textChunk('Running background test.');
-        }
-        usageUpdate(700);
-        finishPrompt(id, 'end_turn');
-      }, 5);
-      return;
-    }
     case 'autonomous-permission': {
       // After end_turn and background tool completion, the agent emits closing prose
       // and requests permission with no open tools; after approval it pauses before replying.

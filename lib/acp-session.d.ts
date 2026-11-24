@@ -103,8 +103,6 @@ export declare class AcpSession extends TransportSession {
     private planEntries;
     /** Polls live task-*.log tails onto long-running `run_command` tool cards. */
     private taskLogTimer;
-    /** Brain task ids already reconciled into tool results so they never close a later re-run. */
-    private reconciledTaskIds;
     /** Sibling ACP session ids opened for ephemeral `/btw` side chats. */
     private sideSessionIds;
     /** Tombstones for closed side-chat session ids so late/post-close frames stay isolated. */
