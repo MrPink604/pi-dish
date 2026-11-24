@@ -160,6 +160,8 @@ export function createSubagentsView(options: {
   let boardStatusText = '';
   let addDrawerOpen = false;
   let boardComposer: SwarmComposer | null = null;
+  let swarmStartCard: HTMLElement | null = null;
+  let tasksStdin: { taskId: string; fullTaskId: string; root: HTMLElement; input: HTMLInputElement } | null = null;
   let coordModelsForId: string | null = null;
   let coordModels: SwarmModelOption[] = [];
   let modelsLoadingForId: string | null = null;
@@ -295,6 +297,8 @@ export function createSubagentsView(options: {
     treeEvents.abort();
     auxEvents.abort();
     boardComposer = null;
+    swarmStartCard = null;
+    tasksStdin = null;
     addDrawerOpen = false;
     element('subagentsAddDrawer').style.display = 'none';
     element('subagentsAddWorkerBtn').style.display = 'none';
@@ -770,6 +774,7 @@ export function createSubagentsView(options: {
     const aux = element('subagentsAuxPanel');
 
     if (selection?.kind === 'swarm-board') {
+      tasksStdin = null;
       empty.style.display = 'none';
       content.style.display = 'none';
       aux.style.display = 'flex';
@@ -780,7 +785,9 @@ export function createSubagentsView(options: {
       hideMentionMenu();
       boardComposer = null;
     }
+    swarmStartCard = null;
     if (selection?.kind === 'swarm-overview') {
+      tasksStdin = null;
       empty.style.display = 'none';
       content.style.display = 'none';
       aux.style.display = 'flex';
@@ -794,6 +801,7 @@ export function createSubagentsView(options: {
       renderTaskDetailPanel(aux);
       return;
     }
+    tasksStdin = null;
 
     aux.style.display = 'none';
     auxEvents.abort();
@@ -1180,12 +1188,19 @@ export function createSubagentsView(options: {
       hideMentionMenu();
       boardComposer = null;
     }
+    if (swarmData.hasSwarm || !swarmData.isActive) {
+      swarmStartCard = null;
+    }
+    const keepStartCard = !swarmData.hasSwarm && swarmData.isActive ? swarmStartCard : null;
     const composer = boardComposer?.root ?? null;
-    // Keep the live composer attached while replacing its read-only neighbors.
-    while (container.firstChild && container.firstChild !== composer) container.firstChild.remove();
+    // Keep any live composer or start-swarm card attached while replacing read-only neighbors.
+    for (const child of Array.from(container.children)) {
+      if (child !== composer && child !== keepStartCard) child.remove();
+    }
 
     if (!swarmData.hasSwarm) {
       if (swarmData.isActive) {
+        if (keepStartCard && keepStartCard.parentElement === container) return;
         const card = document.createElement('div');
         card.className = 'swarm-start-card';
         const heading = document.createElement('div'); heading.className = 'swarm-overview-heading'; heading.textContent = 'Start a Swarm';
@@ -1194,16 +1209,18 @@ export function createSubagentsView(options: {
         const actions = document.createElement('div'); actions.className = 'swarm-start-actions';
         const startBtn = document.createElement('button'); startBtn.type = 'button'; startBtn.id = 'swarmStartBtn'; startBtn.className = 'btn btn-small btn-primary'; startBtn.textContent = 'Start Swarm';
         const launch = async () => {
+          if (swarmStartCard !== card) return;
           const task = ta.value.trim();
           if (!task) { ta.focus(); return; }
           startBtn.disabled = true;
           const ok = await dispatchCoordinatorText(`/swarm ${task}`, 'prompt', { fullReload: true, successText: 'Swarm start sent' });
-          if (owns()) { startBtn.disabled = false; if (ok) ta.value = ''; }
+          if (owns() && swarmStartCard === card) { startBtn.disabled = false; if (ok) ta.value = ''; }
         };
-        startBtn.addEventListener('click', () => { void launch(); }, { signal: auxEvents.signal });
-        ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void launch(); } }, { signal: auxEvents.signal });
+        startBtn.addEventListener('click', () => { void launch(); }, { signal: events.signal });
+        ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void launch(); } }, { signal: events.signal });
         actions.appendChild(startBtn);
         card.append(heading, desc, ta, actions);
+        swarmStartCard = card;
         container.appendChild(card);
         return;
       }
@@ -1657,12 +1674,26 @@ export function createSubagentsView(options: {
     auxEvents.abort();
     auxEvents = new AbortController();
     const task = selectedTask();
-    container.replaceChildren();
+    const canStdin = !!(task && tasksData.canControl && task.kind === 'shell' && task.status === 'running');
+    if (!canStdin || tasksStdin?.taskId !== task.id) tasksStdin = null;
+    else tasksStdin.fullTaskId = task.fullTaskId || task.id;
+    const prevLog = container.querySelector<HTMLElement>('#tasksDetailLog');
+    const prevLogScroll = prevLog?.scrollTop ?? 0;
+    const keptStdin = tasksStdin?.root ?? null;
+    // Keep the live stdin bar attached across 2.5s polls so drafts and focus survive.
+    for (const child of Array.from(container.children)) {
+      if (child !== keptStdin) child.remove();
+    }
     if (!task) {
       const empty = document.createElement('div'); empty.className = 'subagents-state'; empty.textContent = 'Select a background task to inspect its log.';
       container.appendChild(empty);
       return;
     }
+
+    const insertBeforeStdin = (node: Node) => {
+      if (keptStdin && keptStdin.parentElement === container) container.insertBefore(node, keptStdin);
+      else container.appendChild(node);
+    };
 
     const header = document.createElement('div');
     header.className = 'tasks-detail-header';
@@ -1710,12 +1741,12 @@ export function createSubagentsView(options: {
       actions.appendChild(killBtn);
     }
     header.append(heading, actions);
-    container.appendChild(header);
+    insertBeforeStdin(header);
 
     const cmdText = task.command || (task.cron ? `${task.cron} — ${task.preview}` : task.preview);
     if (cmdText) {
       const cmdEl = document.createElement('pre'); cmdEl.className = 'tasks-detail-command'; cmdEl.textContent = cmdText;
-      container.appendChild(cmdEl);
+      insertBeforeStdin(cmdEl);
     }
 
     const logBar = document.createElement('div'); logBar.className = 'tasks-detail-log-bar';
@@ -1746,30 +1777,35 @@ export function createSubagentsView(options: {
     }, { signal: auxEvents.signal });
     logActions.append(followBtn, moreBtn, copyBtn);
     logBar.append(logLabel, logMeta, logActions);
-    container.appendChild(logBar);
+    insertBeforeStdin(logBar);
 
     const logEl = document.createElement('pre');
     logEl.className = 'tasks-detail-log'; logEl.id = 'tasksDetailLog';
     logEl.textContent = lastLogText || (task.hasLog ? 'Loading log…' : (task.preview || 'No log file recorded for this task.'));
-    container.appendChild(logEl);
+    insertBeforeStdin(logEl);
+    if (followLog) logEl.scrollTop = logEl.scrollHeight;
+    else if (prevLog) logEl.scrollTop = prevLogScroll;
 
-    if (tasksData.canControl && task.kind === 'shell' && task.status === 'running') {
+    if (canStdin && (!keptStdin || keptStdin.parentElement !== container)) {
       const stdinBar = document.createElement('div'); stdinBar.className = 'tasks-stdin-bar'; stdinBar.id = 'tasksStdinBar';
       const input = document.createElement('input'); input.type = 'text'; input.id = 'tasksStdinInput'; input.placeholder = 'Send stdin line to running task…';
       const sendBtn = document.createElement('button'); sendBtn.type = 'button'; sendBtn.id = 'tasksStdinSendBtn'; sendBtn.className = 'btn btn-small'; sendBtn.textContent = 'Send';
+      const entry = { taskId: task.id, fullTaskId: task.fullTaskId || task.id, root: stdinBar, input };
       const submitStdin = async () => {
+        if (tasksStdin !== entry) return;
         const line = input.value;
         if (!line.trim()) return;
-        const targetId = task.fullTaskId || task.id;
+        const targetId = entry.fullTaskId;
         const ok = await sendTaskControlPrompt(
           `Send stdin to running task "${targetId}" using manage_task with Action="send_input", TaskId=${JSON.stringify(targetId)}, and Input=${JSON.stringify(line + '\n')}.`,
-          `Sent input to ${task.id}`,
+          `Sent input to ${entry.taskId}`,
         );
-        if (ok && owns()) input.value = '';
+        if (ok && owns() && tasksStdin === entry) input.value = '';
       };
-      sendBtn.addEventListener('click', () => { void submitStdin(); }, { signal: auxEvents.signal });
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void submitStdin(); } }, { signal: auxEvents.signal });
+      sendBtn.addEventListener('click', () => { void submitStdin(); }, { signal: events.signal });
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void submitStdin(); } }, { signal: events.signal });
       stdinBar.append(input, sendBtn);
+      tasksStdin = entry;
       container.appendChild(stdinBar);
     }
   }

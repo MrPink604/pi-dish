@@ -642,3 +642,72 @@ const lineagePayload = {
     (0, fixtures_js_1.expect)(prompts[0]).toEqual({ message: 'Proceed with the plan.' });
     await (0, fixtures_js_1.expect)(page.locator('#sessionView')).not.toHaveClass(/\bfile-open\b/);
 });
+(0, fixtures_js_1.test)('2.5s subagents polling preserves focus and draft text in #swarmStartInput and #tasksStdinInput', async ({ page, fleet }) => {
+    let swarmPolls = 0;
+    let tasksPolls = 0;
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/lineage`, route => route.fulfill({ json: lineagePayload }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/tasks`, route => {
+        tasksPolls++;
+        return route.fulfill({ json: tasksPayload });
+    });
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/tasks/task-42/log*`, route => route.fulfill({
+        json: { taskId: 'task-42', content: `poll tick ${tasksPolls}\n`, totalBytes: 14, truncated: false, updatedAt: '2026-11-19T14:01:12Z' },
+    }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/swarm*`, route => {
+        swarmPolls++;
+        return route.fulfill({
+            json: {
+                supported: true,
+                hasSwarm: false,
+                isActive: true,
+                title: null,
+                goal: null,
+                head: 0,
+                channels: [],
+                members: [],
+                posts: [],
+                groups: [],
+                plan: null,
+                timeline: [],
+            },
+        });
+    });
+    await fleet.select(fleet.self, fixtures_js_1.ROOT);
+    await page.evaluate((id) => {
+        window.fixtureSessionListPatch(id, { harnessId: 'agy', isActive: true });
+        return fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection());
+    }, fixtures_js_1.ROOT);
+    await page.locator('#promptInput').fill('/swarm board');
+    await page.locator('#promptInput').press('Enter');
+    // 1. #swarmStartInput keeps its DOM node, focus, and draft across a live poll refresh.
+    const startInput = page.locator('#swarmStartInput');
+    await (0, fixtures_js_1.expect)(startInput).toBeVisible();
+    await startInput.click();
+    await startInput.fill('Split this refactor across 3 workers');
+    const swarmPollsBefore = swarmPolls;
+    await page.evaluate(() => {
+        Reflect.set(window, '__startInputRef', document.getElementById('swarmStartInput'));
+    });
+    await fixtures_js_1.expect.poll(() => swarmPolls, { timeout: 6000 }).toBeGreaterThan(swarmPollsBefore);
+    await (0, fixtures_js_1.expect)(startInput).toHaveValue('Split this refactor across 3 workers');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => ({
+        sameNode: document.getElementById('swarmStartInput') === Reflect.get(window, '__startInputRef'),
+        focused: document.activeElement === document.getElementById('swarmStartInput'),
+    }))).toEqual({ sameNode: true, focused: true });
+    // 2. #tasksStdinInput keeps its DOM node, focus, and draft across a live poll refresh.
+    await page.locator('#subagentsTree .lineage-row', { hasText: 'Watch build' }).click();
+    const stdinInput = page.locator('#tasksStdinInput');
+    await (0, fixtures_js_1.expect)(stdinInput).toBeVisible();
+    await stdinInput.click();
+    await stdinInput.fill('confirm-stdin-draft');
+    const tasksPollsBefore = tasksPolls;
+    await page.evaluate(() => {
+        Reflect.set(window, '__stdinInputRef', document.getElementById('tasksStdinInput'));
+    });
+    await fixtures_js_1.expect.poll(() => tasksPolls, { timeout: 6000 }).toBeGreaterThan(tasksPollsBefore);
+    await (0, fixtures_js_1.expect)(stdinInput).toHaveValue('confirm-stdin-draft');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => ({
+        sameNode: document.getElementById('tasksStdinInput') === Reflect.get(window, '__stdinInputRef'),
+        focused: document.activeElement === document.getElementById('tasksStdinInput'),
+    }))).toEqual({ sameNode: true, focused: true });
+});
