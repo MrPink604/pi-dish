@@ -1,5 +1,5 @@
 // Generated from src/core/session-bounces.ts; edit that source and run npm run build:core.
-import type { BounceAuthority, LiveSession, SessionOwnership } from './session-ownership';
+import type { BeforeLifecycleAction, BounceAuthority, LiveSession, SessionOwnership } from './session-ownership';
 import type { SessionOperations } from './session-operations';
 export type SessionBounceMode = 'reload' | 'restart';
 /** Bulk modes plus pressure hibernation, which reuses the same safety proof without the queue. */
@@ -100,6 +100,16 @@ export interface SessionBounceRuntimeOptions extends SessionBounceBounds, Sessio
 }
 export declare function createSessionBounces<Authority extends object, Runtime = unknown>({ catalog, capture, inspect, execute, intervalMs, maxOperations, maxTargets, settled, }: SessionBounceQueueOptions<Authority, Runtime>): SessionBounces;
 export declare function lifecycleBlockers(state: unknown, live: LiveSession | null | undefined): string[];
+export interface IdleCloseGuardPorts {
+    ownership: Pick<SessionOwnership, 'getLiveSession' | 'getRegisteredSession' | 'getRPCSession'>;
+    hasHeldMessages?(sessionId: string): boolean;
+}
+/**
+ * Synchronous stop-boundary idle guard for `POST /api/sessions/:id/close` with `ifIdle: true`.
+ * Reads live bridge/RPC state right before signal/kill and rejects busy, queued, compacting,
+ * dialog-waiting, background-working, or unknown/unverifiable state through `lifecycleBlockers`.
+ */
+export declare function createIdleCloseGuard(ports: IdleCloseGuardPorts): (sessionId: string) => BeforeLifecycleAction;
 /** Checked ownership, live-safety and final-guard policy shared by bulk operations and hibernation. */
 export declare function createSessionLifecycleActions({ operations, ownership }: SessionLifecycleActionOptions): SessionLifecycleActions;
 /** Checked production policy composes the same process-local queue used in isolation. */

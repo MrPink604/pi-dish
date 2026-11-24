@@ -17,6 +17,7 @@ export interface MessageHold {
         held: true;
         until: string;
     };
+    hasPending(sessionId: string): boolean;
     start(): void;
     wake(sessionId: string): void;
     stop(): void;

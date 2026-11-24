@@ -6,6 +6,7 @@ import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
 import { inspectSubsessionExits } from './session-discovery';
 import { LifecycleInterruption, sameProcessIdentity } from './session-ownership';
+import type { HarnessId } from './contracts';
 import type { BeforeLifecycleAction, BounceAuthority, LiveSession, SessionOwnership } from './session-ownership';
 import type { SessionOperations } from './session-operations';
 import * as tmux from './tmux';
@@ -317,6 +318,58 @@ async function readBounceState(live: BounceLive): Promise<unknown> {
 function bounceDescendantBlockers(authority: BounceAuthority): string[] {
   if (!getHarness(authority.harnessId)?.nestedSubsessions) return [];
   return inspectSubsessionExits(authority.sessionFile, { harnessId: authority.harnessId }).blockers;
+}
+
+export interface IdleCloseGuardPorts {
+  ownership: Pick<SessionOwnership, 'getLiveSession' | 'getRegisteredSession' | 'getRPCSession'>;
+  hasHeldMessages?(sessionId: string): boolean;
+}
+
+const UNVERIFIABLE_BLOCKER_RE = /Live safety state is unknown|Live connection is not available/i;
+
+/**
+ * Synchronous stop-boundary idle guard for `POST /api/sessions/:id/close` with `ifIdle: true`.
+ * Reads live bridge/RPC state right before signal/kill and rejects busy, queued, compacting,
+ * dialog-waiting, background-working, or unknown/unverifiable state through `lifecycleBlockers`.
+ */
+export function createIdleCloseGuard(ports: IdleCloseGuardPorts): (sessionId: string) => BeforeLifecycleAction {
+  return (sessionId: string): BeforeLifecycleAction => async () => {
+    let live: LiveSession | null;
+    try { live = await ports.ownership.getLiveSession(sessionId); } catch (error) {
+      throw new LifecycleInterruption('waiting', `Live safety state is unverifiable: cannot connect to live session (${errorMessage(error)}).`);
+    }
+    if (!live?.alive) {
+      throw new LifecycleInterruption('waiting', 'Live safety state is unverifiable: live session is not connected.');
+    }
+    trackBounceActivity(live);
+    const revision = live.bounceActivityRevision;
+    let state: unknown;
+    try { state = await readBounceState(live); } catch (error) {
+      throw new LifecycleInterruption('waiting', `Live safety state is unverifiable: ${errorMessage(error)}.`);
+    }
+    if (live instanceof BridgeSession && !(isRecord(state) && state.lifecycle)) {
+      throw new LifecycleInterruption('waiting', 'Live safety state is unknown; upgrade the bridge before idle-guarded close.');
+    }
+    const reg = ports.ownership.getRegisteredSession(sessionId);
+    const rpc = ports.ownership.getRPCSession(sessionId);
+    const sessionFile = reg?.sessionFile || rpc?.sessionFile || null;
+    const harnessId = (reg?.harnessId as HarnessId | undefined) ?? (rpc ? 'pi' : undefined);
+    return () => {
+      const blockers = lifecycleBlockers(state, live);
+      const unverifiable = blockers.some(blocker => UNVERIFIABLE_BLOCKER_RE.test(blocker));
+      if (revision !== live.bounceActivityRevision) blockers.push('New activity arrived before close.');
+      if (ports.hasHeldMessages?.(sessionId)) blockers.push('Waiting for held peer messages to be delivered.');
+      let subsessionUnverifiable = false;
+      if (harnessId && getHarness(harnessId)?.nestedSubsessions) {
+        const sub = inspectSubsessionExits(typeof sessionFile === 'string' ? sessionFile : null, { harnessId });
+        if (!sub.complete) subsessionUnverifiable = true;
+        blockers.push(...sub.blockers);
+      }
+      if (!blockers.length) return;
+      const prefix = unverifiable || subsessionUnverifiable ? 'Live safety state is unverifiable' : 'Session is busy';
+      throw new LifecycleInterruption('waiting', `${prefix}: ${blockers.join(' ')}`);
+    };
+  };
 }
 
 /** Checked ownership, live-safety and final-guard policy shared by bulk operations and hibernation. */

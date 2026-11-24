@@ -149,6 +149,19 @@ declare function registryRouteId(entry: RegistryEntry): unknown;
 declare function sessionHarnessId(routeId: unknown): string | null;
 /** The harness-native session id a route id carries (its own id, for Pi). */
 declare function nativeSessionId(routeId: unknown): string | null;
+export type SessionDiscoverySource = 'explicit' | 'env' | 'pid' | 'cwd';
+export interface DiscoveredSession {
+    id: unknown;
+    source: SessionDiscoverySource;
+}
+/**
+ * Identify the session this CLI is running inside together with how it was
+ * discovered: explicit `--session` flag, `PI_DISH_SESSION_ID` env stamp,
+ * process ancestry against the bridge registry, or a unique cwd match.
+ */
+declare function discoverSessionWithSource(explicit?: string, options?: {
+    noneMessage?: string;
+}): DiscoveredSession;
 /**
  * Identify the session this CLI is running inside: explicit flag, env stamp,
  * then process ancestry against the bridge registry, then a unique cwd match.
@@ -216,4 +229,4 @@ declare function mergeSearchResults(hostResults: readonly SearchBucket[] | null 
  * `session`) and `options`.
  */
 declare function renderTranscript(input: unknown, options?: TranscriptOptions): string;
-export { makeFail, print, parseCommandLine, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit, fleetHosts, hostSupports, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, turnEnd, };
+export { makeFail, print, parseCommandLine, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionWithSource, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit, fleetHosts, hostSupports, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, turnEnd, };

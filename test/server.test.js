@@ -3783,6 +3783,79 @@ test('POST /close preserves a legacy claim when a stale pooled hello does not ma
         invalidateRegistryCache();
     }
 });
+test('POST /close with ifIdle: true enforces live lifecycle safety and refuses busy or unknown state without signaling', async () => {
+    const { spawn } = require('node:child_process');
+    const id = '2026-07-04T16-40-00-if-idle-guard';
+    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    const registryPath = path.join(registryDir, `${id}.json`);
+    const socketPath = path.join(tmpHome, 'if-idle-guard.sock');
+    const child = spawn(process.execPath, [IDLE_CHILD], { stdio: 'ignore' });
+    const identity = (0, test_types_js_1.present)(processIdentity(child.pid));
+    const sockets = [];
+    let bridgeState = {
+        turnInProgress: true,
+        compacting: false,
+        lifecycle: { idle: false, pendingMessages: false, pendingDialogs: 0, backgroundWork: false },
+    };
+    const bridge = net.createServer((sock) => {
+        sockets.push(sock);
+        sock.write(JSON.stringify({ type: 'hello', sessionId: id, pid: child.pid }) + '\n');
+        let buf = '';
+        sock.on('data', (chunk) => {
+            buf += chunk.toString('utf8');
+            for (let nl = buf.indexOf('\n'); nl !== -1; nl = buf.indexOf('\n')) {
+                const line = buf.slice(0, nl).trim();
+                buf = buf.slice(nl + 1);
+                if (!line)
+                    continue;
+                const msg = (0, test_types_js_1.record)(JSON.parse(line));
+                if (msg.command === 'get_state') {
+                    sock.write(JSON.stringify({ type: 'response', id: msg.id, success: true, data: bridgeState }) + '\n');
+                }
+            }
+        });
+    });
+    await new Promise((resolve, reject) => { bridge.once('error', reject); bridge.listen(socketPath, resolve); });
+    fs.writeFileSync(registryPath, JSON.stringify({
+        sessionId: id, socketPath, pid: child.pid, startTime: identity.startTime, sessionFile: SESSION_FILE,
+    }));
+    invalidateRegistryCache();
+    try {
+        const hostInfo = await get('/api/host');
+        assert.equal((0, test_types_js_1.record)(hostInfo.body.capabilities).ifIdleClose, true, '/api/host advertises ifIdleClose');
+        const bad = await post(`/api/sessions/${id}/close`, { ifIdle: 'yes' });
+        assert.equal(bad.status, 400);
+        const busy = await post(`/api/sessions/${id}/close`, { ifIdle: true });
+        assert.equal(busy.status, 409, JSON.stringify(busy.body));
+        assert.match(text(busy.body.error), /^Session is busy:.*turn/);
+        assert.equal(processIdentityAlive(identity), true, 'busy session was not signaled');
+        bridgeState = { turnInProgress: false, compacting: false };
+        const unknown = await post(`/api/sessions/${id}/close`, { ifIdle: true });
+        assert.equal(unknown.status, 409, JSON.stringify(unknown.body));
+        assert.match(text(unknown.body.error), /Live safety state is unknown/);
+        assert.equal(processIdentityAlive(identity), true, 'unknown lifecycle state was not signaled');
+        bridgeState = {
+            turnInProgress: false,
+            compacting: false,
+            lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false },
+        };
+        const exited = new Promise((r) => child.once('exit', (_code, signal) => r(signal)));
+        const closed = await post(`/api/sessions/${id}/close`, { ifIdle: true });
+        assert.equal(closed.status, 200, JSON.stringify(closed.body));
+        assert.equal(await exited, 'SIGTERM', 'idle session received graceful SIGTERM');
+    }
+    finally {
+        try {
+            child.kill('SIGKILL');
+        }
+        catch { }
+        for (const sock of sockets)
+            sock.destroy();
+        await new Promise((resolve, reject) => bridge.close(error => error ? reject(error) : resolve()));
+        fs.rmSync(registryPath, { force: true });
+        invalidateRegistryCache();
+    }
+});
 test('POST /close on an inactive session is a 404; inactive /stats has no runtime', async () => {
     const closed = await post(`/api/sessions/${SESSION_ID}/close`, {});
     assert.equal(closed.status, 404);

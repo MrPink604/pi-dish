@@ -6,10 +6,18 @@ import { canonicalCallerId, canonicalSessionId, parseHostQualifiedCaller, resolv
 const STORE_FILE = 'session-provenance.json';
 const MAX_LAUNCHES = 5000;
 
+export type LaunchSourceBasis = 'explicit' | 'env' | 'pid' | 'cwd';
+const VALID_SOURCE_BASES: ReadonlySet<string> = new Set<LaunchSourceBasis>(['explicit', 'env', 'pid', 'cwd']);
+
+export function validLaunchSourceBasis(value: unknown): value is LaunchSourceBasis {
+  return typeof value === 'string' && VALID_SOURCE_BASES.has(value);
+}
+
 export interface LaunchProvenance {
   sourceSessionId: SessionId;
   operationId: string | null;
   createdAt: number;
+  sourceBasis?: LaunchSourceBasis;
 }
 
 function validId(value: unknown): value is string {
@@ -56,13 +64,19 @@ export function readLaunches(): Record<string, LaunchProvenance> {
       sourceSessionId: canonicalCallerId(localize(launch.sourceSessionId, selfHostId)),
       operationId: validId(launch.operationId) ? launch.operationId : null,
       createdAt: typeof launch.createdAt === 'number' && Number.isFinite(launch.createdAt) ? launch.createdAt : 0,
+      ...(validLaunchSourceBasis(launch.sourceBasis) ? { sourceBasis: launch.sourceBasis } : {}),
     };
   }
   return launches;
 }
 
 /** Record advisory launch provenance. It never grants authority. */
-export function recordLaunch(sessionId: unknown, sourceSessionId: unknown, operationId?: unknown): LaunchProvenance {
+export function recordLaunch(
+  sessionId: unknown,
+  sourceSessionId: unknown,
+  operationId?: unknown,
+  sourceBasis?: unknown,
+): LaunchProvenance {
   if (!validId(sessionId) || !validCallerId(sourceSessionId)) throw new Error('valid session ids required');
   const canonicalId = canonicalSessionId(sessionId);
   const canonicalSourceId = canonicalCallerId(localizeCallerId(sourceSessionId));
@@ -71,6 +85,7 @@ export function recordLaunch(sessionId: unknown, sourceSessionId: unknown, opera
     sourceSessionId: canonicalSourceId,
     operationId: validId(operationId) ? operationId : null,
     createdAt: Date.now(),
+    ...(validLaunchSourceBasis(sourceBasis) ? { sourceBasis } : {}),
   };
   const ordered = Object.entries(launches)
     .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0))

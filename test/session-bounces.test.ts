@@ -4,7 +4,7 @@ import assert = require('node:assert/strict');
 import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
-import { createSessionBounces, createSessionBounceRuntime, createSessionLifecycleActions, lifecycleBlockers } from '../lib/session-bounces';
+import { createIdleCloseGuard, createSessionBounces, createSessionBounceRuntime, createSessionLifecycleActions, lifecycleBlockers } from '../lib/session-bounces';
 import type { SessionBounceInspection, SessionBounceOperationPorts, SessionBounceOwnershipPorts, SessionBounceQueueOptions } from '../lib/session-bounces';
 import { inspectSubsessionExits } from '../lib/session-discovery';
 import { BridgeSession } from '../lib/bridge-session';
@@ -415,4 +415,71 @@ test('ordinary artifact directories do not invent child sessions but cannot conc
   const proof = inspectSubsessionExits(parent);
   assert.equal(proof.complete, false);
   assert.match(proof.blockers.join(' '), /Worker/);
+});
+
+test('createIdleCloseGuard blocks busy, queued, compacting, background-working, held-message, transient-activity and unknown states, and allows idle close', async t => {
+  const sessionId = 'parent';
+  assert.ok(validSessionId(sessionId));
+  const claim = {
+    sessionId, socketPath: '/unused-idle-close', sessionFile: '/parent.jsonl',
+    harnessId: 'pi', pid: 42, startTime: '100', bridgeInstanceId: 'orig',
+  } satisfies BridgeRegistryEntry;
+  let live: InstanceType<typeof BridgeSession> | null = new BridgeSession(claim);
+  live.alive = true;
+  let held = false;
+  let state: Record<string, unknown> = {
+    turnInProgress: false,
+    compacting: false,
+    lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false },
+  };
+  t.mock.method(live, 'send', async (command: Parameters<InstanceType<typeof BridgeSession>['send']>[0]) => {
+    assert.equal(command, 'get_state');
+    return state;
+  });
+
+  const guardFactory = createIdleCloseGuard({
+    ownership: {
+      getLiveSession: async () => live,
+      getRegisteredSession: () => claim,
+      getRPCSession: () => null,
+    },
+    hasHeldMessages: () => held,
+  });
+
+  const runGuard = async () => {
+    const finalCheck = await guardFactory(sessionId)();
+    finalCheck();
+  };
+
+  // Idle session passes cleanly.
+  await runGuard();
+
+  // Busy turn, compaction, queued input, background work, held messages -> refused as busy.
+  const busyCases: [string, () => void, RegExp][] = [
+    ['turn in progress', () => { state = { turnInProgress: true, compacting: false, lifecycle: { idle: false, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } }; }, /^Session is busy:.*turn/],
+    ['compacting', () => { state = { turnInProgress: false, compacting: true, lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } }; }, /^Session is busy:.*compaction/],
+    ['queued input', () => { state = { turnInProgress: false, compacting: false, lifecycle: { idle: true, pendingMessages: true, pendingDialogs: 0, backgroundWork: false } }; }, /^Session is busy:.*queued input/],
+    ['background work', () => { state = { turnInProgress: false, compacting: false, lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: true } }; }, /^Session is busy:.*background work/],
+    ['held peer messages', () => { state = { turnInProgress: false, compacting: false, lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } }; held = true; }, /^Session is busy:.*held peer messages/],
+  ];
+  for (const [label, setup, pattern] of busyCases) {
+    held = false;
+    setup();
+    await assert.rejects(runGuard, (error: unknown) => error instanceof LifecycleInterruption && pattern.test(error.message), label);
+  }
+
+  // Activity arriving between get_state and the synchronous stop-boundary check is caught.
+  held = false;
+  state = { turnInProgress: false, compacting: false, lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } };
+  const prepared = await guardFactory(sessionId)();
+  live.emit('turn_start', {});
+  assert.throws(() => prepared(), (error: unknown) => error instanceof LifecycleInterruption && /^Session is busy:.*New activity arrived/.test(error.message));
+
+  // Older bridge without lifecycle payload fails closed as unknown/unverifiable.
+  state = { turnInProgress: false, compacting: false };
+  await assert.rejects(runGuard, (error: unknown) => error instanceof LifecycleInterruption && /Live safety state is unknown/.test(error.message));
+
+  // Disconnected / missing live session fails closed as unverifiable.
+  live = null;
+  await assert.rejects(runGuard, (error: unknown) => error instanceof LifecycleInterruption && /Live safety state is unverifiable/.test(error.message));
 });

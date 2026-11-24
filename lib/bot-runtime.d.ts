@@ -133,49 +133,59 @@ export interface ResolvedProvenanceSession {
     name: string;
     harnessId: string | null;
     isActive: boolean | null;
-    turnInProgress: boolean;
-    compacting: boolean;
-    askPending: boolean;
     parentId: string | null;
     parentSource: string | null;
+    parentLaunchBasis: string | null;
 }
 export interface AuthorizedDescendant {
     target: ResolvedProvenanceSession;
-    /** Canonical ref for `pi-dish-sessions close` (`host/id` or `id`). */
+    /** Exact route host returned by `resolve` (`null` for self, or exact remote name). */
+    host: string | null;
+    /** Exact route session id returned by `resolve`. */
+    id: string;
+    /** Display ref (`host/id` or `id`) for reporting; close uses `(host, id)` directly with `--exact`. */
     ref: string;
     /** Owned worker at the root of the verified `pi-dish-launch` chain. */
     ancestor: WorkerRecord;
 }
-export interface ProvenanceLookupPorts {
-    resolve(ref: string): Promise<ResolvedProvenanceSession | null>;
-    hosts(): Promise<readonly FleetHostInfo[]>;
-}
-export interface ActiveDescendant {
+export type DescendantAuthorization = {
+    ok: true;
+    descendant: AuthorizedDescendant;
+} | {
+    ok: false;
+    reason: 'not_descendant' | 'unverifiable';
+    detail?: string;
+};
+export type ProvenanceResolveResult = {
+    ok: true;
     session: ResolvedProvenanceSession;
-    ref: string;
-    depth: number;
-    busy: boolean;
-}
-export interface DescendantScanResult {
-    descendants: ActiveDescendant[];
-    unreachableHosts: string[];
-}
-export interface DescendantScanPorts extends ProvenanceLookupPorts {
-    listActive(host: string | null): Promise<ResolvedProvenanceSession[]>;
+} | {
+    ok: false;
+    kind: 'not_found' | 'unverifiable';
+    detail?: string;
+};
+export type FleetHostsResult = {
+    ok: true;
+    hosts: readonly FleetHostInfo[];
+} | {
+    ok: false;
+    detail?: string;
+};
+export interface ProvenanceLookupPorts {
+    resolve(ref: string, options?: {
+        host?: string | null;
+    }): Promise<ProvenanceResolveResult>;
+    hosts(): Promise<FleetHostsResult>;
 }
 /** Find one owned worker (open or closed) by exact canonical session id and normalized host. */
 export declare function findOwnedWorkerByIdentity(memory: BotMemory | undefined, host: string | null, sessionId: string, hosts?: readonly FleetHostInfo[]): [string, WorkerRecord] | undefined;
 /**
  * Authorize closing a session that is not directly in `memory.workers` by walking
  * its server-recorded `pi-dish-launch` parent chain up to an owned worker (open or closed).
- * Fails closed on non-launch parents (e.g. `pi-session-header`), cycles, missing hops, or host mismatches.
+ * Fails closed on non-launch parents (e.g. `pi-session-header`), cwd-fallback or explicit
+ * parent edges, cycles, missing hops, host mismatches, or unreachable provenance hops.
  */
-export declare function authorizeDescendantClose(memory: BotMemory | undefined, wanted: string, lookup: ProvenanceLookupPorts): Promise<AuthorizedDescendant | null>;
-/**
- * Find all active `pi-dish-launch` descendant sessions of `(rootHost, rootId)` across reachable fleet hosts,
- * sorted deepest-first so cascade teardown closes leaves before intermediate parents.
- */
-export declare function findActiveDescendants(rootHost: string | null, rootId: string, scanPorts: DescendantScanPorts): Promise<DescendantScanResult>;
+export declare function authorizeDescendantClose(memory: BotMemory | undefined, wanted: string, lookup: ProvenanceLookupPorts): Promise<DescendantAuthorization>;
 export interface ClosedWindow {
     line: string;
     closedAt: string;

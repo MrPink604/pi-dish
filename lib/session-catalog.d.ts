@@ -5,6 +5,7 @@ import type { SessionInfo } from './session-metadata';
 import type { DiscoveryCandidate, SessionSource } from './session-source';
 import type { CacheRetentionConfig } from './cache-retention';
 import { type SessionFields } from './session-api';
+import { type LaunchSourceBasis } from './session-provenance';
 /** Already computed by lifecycle policy; presentation advice is never an ownership proof. */
 export interface CatalogAdvice {
     readonly capabilities: Readonly<SessionCapabilities>;
@@ -41,6 +42,7 @@ export interface SessionCatalogInput {
     readonly active: readonly CatalogLiveObservation[];
     readonly history: readonly CatalogHistoryObservation[];
     readonly launchParents: ReadonlyMap<SessionId, SessionId>;
+    readonly launchSourceBases?: ReadonlyMap<SessionId, LaunchSourceBasis>;
     readonly routines: ReadonlyMap<SessionId, CatalogRoutineAnnotation>;
     readonly indexing: boolean;
     readonly discoveryTruncated: boolean;
@@ -106,6 +108,7 @@ declare function primeSessionObservation(value: unknown, context: ObservationCon
 /** Validate advisory store snapshots without migrating or granting authority to
  * those stores. Invalid records are ignored individually. */
 declare function decodeLaunchParents(value: unknown): ReadonlyMap<SessionId, SessionId>;
+declare function decodeLaunchSourceBases(value: unknown): ReadonlyMap<SessionId, LaunchSourceBasis>;
 declare function decodeRoutineAnnotations(value: unknown): ReadonlyMap<SessionId, CatalogRoutineAnnotation>;
 /**
  * Context derivation stays read-time: model catalogs warm after indexing, and
@@ -130,6 +133,7 @@ declare const _default: {
     rpcSessionObservation: typeof rpcSessionObservation;
     primeSessionObservation: typeof primeSessionObservation;
     decodeLaunchParents: typeof decodeLaunchParents;
+    decodeLaunchSourceBases: typeof decodeLaunchSourceBases;
     decodeRoutineAnnotations: typeof decodeRoutineAnnotations;
     withSessionContext: typeof withSessionContext;
     subsessionLabel: typeof subsessionLabel;

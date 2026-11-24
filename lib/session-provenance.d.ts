@@ -1,9 +1,12 @@
 // Generated from src/core/session-provenance.ts; edit that source and run npm run build:core.
 import type { SessionId } from './contracts';
+export type LaunchSourceBasis = 'explicit' | 'env' | 'pid' | 'cwd';
+export declare function validLaunchSourceBasis(value: unknown): value is LaunchSourceBasis;
 export interface LaunchProvenance {
     sourceSessionId: SessionId;
     operationId: string | null;
     createdAt: number;
+    sourceBasis?: LaunchSourceBasis;
 }
 export declare function isHostQualified(value: unknown): value is string;
 /**
@@ -14,7 +17,7 @@ export declare function isHostQualified(value: unknown): value is string;
 export declare function localizeCallerId(value: string): string;
 export declare function readLaunches(): Record<string, LaunchProvenance>;
 /** Record advisory launch provenance. It never grants authority. */
-export declare function recordLaunch(sessionId: unknown, sourceSessionId: unknown, operationId?: unknown): LaunchProvenance;
+export declare function recordLaunch(sessionId: unknown, sourceSessionId: unknown, operationId?: unknown, sourceBasis?: unknown): LaunchProvenance;
 export declare function getLaunch(sessionId: unknown): LaunchProvenance | null;
 export declare function getLaunchesFrom(sourceSessionId: unknown): Array<LaunchProvenance & {
     sessionId: string;

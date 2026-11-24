@@ -43,6 +43,8 @@ export function createSessionCreateHandlers(ports: SessionCreatePorts) {
     // a compatibility alias. The header lets the bundled CLI identify itself.
     const claimedSource = req.get('X-Pi-Dish-Session-Id')
       || body.requestedBySessionId || body.sourceSessionId || null;
+    const claimedBasis = req.get('X-Pi-Dish-Session-Source') || body.requestedBySource || null;
+    const sourceBasis = sessionProvenance.validLaunchSourceBasis(claimedBasis) ? claimedBasis : null;
     // Callers may name themselves fleet-globally (`<hostId>:<sessionId>`); this
     // host's qualifier is stripped and validated locally. Provenance is
     // advisory and grants nothing, so a foreign id is recorded as-is.
@@ -66,7 +68,7 @@ export function createSessionCreateHandlers(ports: SessionCreatePorts) {
     };
     if (body.async === true) {
       const spawnId = ports.sessionOperations.startSessionSpawn({
-        ...selected, sourceSessionId,
+        ...selected, sourceSessionId, sourceBasis,
       });
       return res.status(202).json({ success: true, pending: true, spawnId });
     }
@@ -78,7 +80,7 @@ export function createSessionCreateHandlers(ports: SessionCreatePorts) {
     try {
       const id = await ports.sessionOperations.createSession(selected);
       const operationId = sourceSessionId
-        ? ports.sessionOperations.recordSessionLaunch(id, sourceSessionId) : null;
+        ? ports.sessionOperations.recordSessionLaunch(id, sourceSessionId, undefined, sourceBasis) : null;
       res.json({ success: true, id, ...(operationId ? { operationId } : {}) });
     } catch (error) {
       console.error('Failed to create session:', error);

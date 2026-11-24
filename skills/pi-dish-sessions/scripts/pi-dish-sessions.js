@@ -19,7 +19,7 @@ catch (e) {
         + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n');
     process.exit(1);
 }
-const { makeFail, print, defaultBase, discoverSession, fleetCallerId, request, api, jsonInit, requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef, mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, turnEnd, wireArray, } = core;
+const { makeFail, print, defaultBase, discoverSession, discoverSessionWithSource, fleetCallerId, request, api, jsonInit, requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef, mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, turnEnd, wireArray, } = core;
 const fail = makeFail('pi-dish-sessions');
 const SHARED_FLAGS = [
     ['--json', 'machine-readable JSON instead of tab-separated lines'],
@@ -188,9 +188,12 @@ const COMMANDS = [
     {
         name: 'close',
         aliases: ['terminate'],
-        usage: 'close <ref> [--host NAME] [--json]',
+        usage: 'close <ref> [--if-idle] [--exact] [--host NAME] [--json]',
         summary: 'Graceful shutdown (SIGTERM; extension cleanup runs). There is no force-kill.',
-        flags: [],
+        flags: [
+            ['--if-idle', 'close only if the owning host confirms the session is live-idle at stop time'],
+            ['--exact', 'treat <ref> as an exact route id on --host (or self) with no alias or label lookup'],
+        ],
         example: 'close 8f3ab2c1',
     },
     {
@@ -397,6 +400,7 @@ const VALUE_FLAGS = new Map([
 const BOOL_FLAGS = new Map([
     ['--json', 'json'], ['--active', 'active'], ['--no-wait', 'no_wait'], ['--private', 'private'],
     ['--thinking', 'thinking'], ['--all-hosts', 'all_hosts'], ['--full', 'full'],
+    ['--if-idle', 'if_idle'], ['--exact', 'exact'],
 ]);
 function parseArgs(argv) {
     const leading = argv[0];
@@ -616,8 +620,11 @@ async function resolveSpawnHarness(base, host, explicit, callerSessionId) {
     }
     return wanted;
 }
-async function createSpawn(base, host, body, callerId) {
-    const init = () => jsonInit(body, { 'X-Pi-Dish-Session-Id': callerId });
+async function createSpawn(base, host, body, callerId, callerSource) {
+    const headers = { 'X-Pi-Dish-Session-Id': callerId };
+    if (callerSource)
+        headers['X-Pi-Dish-Session-Source'] = callerSource;
+    const init = () => jsonInit(body, headers);
     try {
         return await api(base, host, '/api/sessions/new', init());
     }
@@ -626,11 +633,30 @@ async function createSpawn(base, host, body, callerId) {
         // find, refuses the attribution. Provenance is advisory: drop it rather
         // than fail the spawn, and say why.
         const reason = core.errorMessage(e) || '';
-        if (!/requestedBySessionId/i.test(reason))
+        if (!/requestedBySessionId|requestedBySource/i.test(reason))
             throw e;
         process.stderr.write(`pi-dish-sessions: ${host || base} did not accept launch provenance (${reason}); spawning unattributed\n`);
-        const { requestedBySessionId, ...rest } = body;
+        const { requestedBySessionId, requestedBySource, ...rest } = body;
         return api(base, host, '/api/sessions/new', jsonInit(rest));
+    }
+}
+/** Fail closed before sending `{ ifIdle: true }` to a host that predates live idle-guarded close. */
+async function assertIfIdleCloseSupported(base, host) {
+    let entry = await entryForHostName(base, host);
+    if (entry && !entry.self && entry.reachable === false) {
+        throw new Error(`cannot verify live idle state: host ${host} is unreachable (${entry.error || 'unknown'})`);
+    }
+    if (!entry) {
+        try {
+            const { data } = await api(base, host, '/api/host');
+            entry = core.fleetHost(data ?? {});
+        }
+        catch (error) {
+            throw new Error(`cannot verify live idle state: ${host || 'this host'} did not answer /api/host (${core.errorMessage(error)})`);
+        }
+    }
+    if (!hostSupports(entry, 'ifIdleClose')) {
+        throw new Error(`cannot verify live idle state: ${host || 'this host'} does not support idle-guarded close (update pi-dish there)`);
     }
 }
 async function pollSpawn(base, host, spawnId, timeoutMs = 45000) {
@@ -1297,6 +1323,10 @@ async function main() {
     }
     if (!spec)
         return fail(`unknown command: ${args.command} (run --help for the command list)`);
+    if (args.if_idle && spec.name !== 'close')
+        return fail('--if-idle is only valid with close');
+    if (args.exact && spec.name !== 'close')
+        return fail('--exact is only valid with close');
     const base = defaultBase(args.url);
     // This session's own identity is always resolved locally, so `session`
     // ignores --host; every other command routes through it.
@@ -1455,12 +1485,13 @@ async function main() {
             return;
         }
         if (spec.name === 'spawn') {
-            const sourceSessionId = discoverSession(args.session, { noneMessage: 'no live pi-dish bridge sessions found; pass --session <id>' });
+            const discovered = discoverSessionWithSource(args.session, { noneMessage: 'no live pi-dish bridge sessions found; pass --session <id>' });
+            const sourceSessionId = discovered.id;
             // Advisory launch provenance always names the caller fleet-globally, so
             // it is valid on whichever host PI_DISH_URL or --host reaches.
             const callerId = fleetCallerId(sourceSessionId);
             const harness = await resolveSpawnHarness(base, hostFlag, args.harness, sourceSessionId);
-            const body = { async: true, requestedBySessionId: callerId, harness };
+            const body = { async: true, requestedBySessionId: callerId, requestedBySource: discovered.source, harness };
             if (args.cwd)
                 body.cwd = args.cwd;
             if (args.model)
@@ -1476,7 +1507,7 @@ async function main() {
                 if (args.name)
                     body.name = args.name;
             }
-            const { data } = await createSpawn(base, hostFlag, body, callerId);
+            const { data } = await createSpawn(base, hostFlag, body, callerId, discovered.source);
             if (args.no_wait)
                 return print({ ...core.record(data ?? {}), harness }, args.json);
             const spawnId = core.record(data).spawnId;
@@ -1543,6 +1574,15 @@ async function main() {
         const ref = args.positional.shift();
         if (!ref)
             throw new Error(`${spec.name} needs a target session ref (run 'help ${spec.name}')`);
+        if (spec.name === 'close' && args.exact) {
+            if (ref.includes('/'))
+                throw new Error('--exact takes a bare route id (use --host NAME for another host)');
+            const exactHost = hostFlag === 'self' ? null : hostFlag;
+            if (args.if_idle)
+                await assertIfIdleCloseSupported(base, exactHost);
+            const { data } = await api(base, exactHost, `/api/sessions/${encodeURIComponent(ref)}/close`, jsonInit(args.if_idle ? { ifIdle: true } : {}));
+            return print(data, args.json);
+        }
         // Every session-scoped command resolves its ref first: a full id resolves
         // to itself, so callers passing bare ids are unaffected, and the resolved
         // host is what routes the call from here on.
@@ -1658,7 +1698,13 @@ async function main() {
             const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/${route}`, jsonInit(body));
             return print(data, args.json);
         }
-        const route = spec.name === 'interrupt' ? 'abort' : spec.name === 'resume' ? 'resume' : 'close';
+        if (spec.name === 'close') {
+            if (args.if_idle)
+                await assertIfIdleCloseSupported(base, typeof host === 'string' ? host : null);
+            const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/close`, jsonInit(args.if_idle ? { ifIdle: true } : {}));
+            return print(data, args.json);
+        }
+        const route = spec.name === 'interrupt' ? 'abort' : 'resume';
         const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/${route}`, jsonInit({}));
         print(data, args.json);
     }

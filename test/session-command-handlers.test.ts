@@ -40,6 +40,7 @@ function harness({
       held.push({ sessionId, delivery, message, sender });
       return { held: true, until: new Date(Date.now() + windowMs).toISOString() };
     },
+    hasPending() { return false; },
     start() {}, wake() {}, stop() {},
   };
   const handlers = createSessionCommandHandlers({

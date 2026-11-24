@@ -90,3 +90,17 @@ test('host-qualified encoded routes (such as cross-host bots) persist and locali
     assert.deepEqual(provenance.getLaunchesFrom(botRoute).map(entry => entry.sessionId), ['local-worker-1']);
     assert.throws(() => provenance.recordLaunch('bad-child', `${remoteHost}:../escape`, 'op-bad'), /valid session ids/);
 });
+test('records and preserves launch discovery basis and ignores invalid values', () => {
+    provenance.recordLaunch('basis-pid', 'source-basis', 'op-pid', 'pid');
+    provenance.recordLaunch('basis-env', 'source-basis', 'op-env', 'env');
+    provenance.recordLaunch('basis-cwd', 'source-basis', 'op-cwd', 'cwd');
+    provenance.recordLaunch('basis-explicit', 'source-basis', 'op-explicit', 'explicit');
+    provenance.recordLaunch('basis-invalid', 'source-basis', 'op-invalid', 'not-a-basis');
+    provenance.recordLaunch('basis-legacy', 'source-basis', 'op-legacy');
+    assert.equal(provenance.getLaunch('basis-pid')?.sourceBasis, 'pid');
+    assert.equal(provenance.getLaunch('basis-env')?.sourceBasis, 'env');
+    assert.equal(provenance.getLaunch('basis-cwd')?.sourceBasis, 'cwd');
+    assert.equal(provenance.getLaunch('basis-explicit')?.sourceBasis, 'explicit');
+    assert.equal(provenance.getLaunch('basis-invalid')?.sourceBasis, undefined);
+    assert.equal(provenance.getLaunch('basis-legacy')?.sourceBasis, undefined);
+});

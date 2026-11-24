@@ -394,3 +394,62 @@ test('ordinary artifact directories do not invent child sessions but cannot conc
     assert.equal(proof.complete, false);
     assert.match(proof.blockers.join(' '), /Worker/);
 });
+test('createIdleCloseGuard blocks busy, queued, compacting, background-working, held-message, transient-activity and unknown states, and allows idle close', async (t) => {
+    const sessionId = 'parent';
+    assert.ok((0, session_key_1.validSessionId)(sessionId));
+    const claim = {
+        sessionId, socketPath: '/unused-idle-close', sessionFile: '/parent.jsonl',
+        harnessId: 'pi', pid: 42, startTime: '100', bridgeInstanceId: 'orig',
+    };
+    let live = new bridge_session_1.BridgeSession(claim);
+    live.alive = true;
+    let held = false;
+    let state = {
+        turnInProgress: false,
+        compacting: false,
+        lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false },
+    };
+    t.mock.method(live, 'send', async (command) => {
+        assert.equal(command, 'get_state');
+        return state;
+    });
+    const guardFactory = (0, session_bounces_1.createIdleCloseGuard)({
+        ownership: {
+            getLiveSession: async () => live,
+            getRegisteredSession: () => claim,
+            getRPCSession: () => null,
+        },
+        hasHeldMessages: () => held,
+    });
+    const runGuard = async () => {
+        const finalCheck = await guardFactory(sessionId)();
+        finalCheck();
+    };
+    // Idle session passes cleanly.
+    await runGuard();
+    // Busy turn, compaction, queued input, background work, held messages -> refused as busy.
+    const busyCases = [
+        ['turn in progress', () => { state = { turnInProgress: true, compacting: false, lifecycle: { idle: false, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } }; }, /^Session is busy:.*turn/],
+        ['compacting', () => { state = { turnInProgress: false, compacting: true, lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } }; }, /^Session is busy:.*compaction/],
+        ['queued input', () => { state = { turnInProgress: false, compacting: false, lifecycle: { idle: true, pendingMessages: true, pendingDialogs: 0, backgroundWork: false } }; }, /^Session is busy:.*queued input/],
+        ['background work', () => { state = { turnInProgress: false, compacting: false, lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: true } }; }, /^Session is busy:.*background work/],
+        ['held peer messages', () => { state = { turnInProgress: false, compacting: false, lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } }; held = true; }, /^Session is busy:.*held peer messages/],
+    ];
+    for (const [label, setup, pattern] of busyCases) {
+        held = false;
+        setup();
+        await assert.rejects(runGuard, (error) => error instanceof session_ownership_1.LifecycleInterruption && pattern.test(error.message), label);
+    }
+    // Activity arriving between get_state and the synchronous stop-boundary check is caught.
+    held = false;
+    state = { turnInProgress: false, compacting: false, lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } };
+    const prepared = await guardFactory(sessionId)();
+    live.emit('turn_start', {});
+    assert.throws(() => prepared(), (error) => error instanceof session_ownership_1.LifecycleInterruption && /^Session is busy:.*New activity arrived/.test(error.message));
+    // Older bridge without lifecycle payload fails closed as unknown/unverifiable.
+    state = { turnInProgress: false, compacting: false };
+    await assert.rejects(runGuard, (error) => error instanceof session_ownership_1.LifecycleInterruption && /Live safety state is unknown/.test(error.message));
+    // Disconnected / missing live session fails closed as unverifiable.
+    live = null;
+    await assert.rejects(runGuard, (error) => error instanceof session_ownership_1.LifecycleInterruption && /Live safety state is unverifiable/.test(error.message));
+});

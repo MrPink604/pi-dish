@@ -267,19 +267,26 @@ function nativeSessionId(routeId: unknown) {
   return decodeRouteId(raw)?.nativeSessionId || null;
 }
 
+export type SessionDiscoverySource = 'explicit' | 'env' | 'pid' | 'cwd';
+export interface DiscoveredSession {
+  id: unknown;
+  source: SessionDiscoverySource;
+}
+
 /**
- * Identify the session this CLI is running inside: explicit flag, env stamp,
- * then process ancestry against the bridge registry, then a unique cwd match.
+ * Identify the session this CLI is running inside together with how it was
+ * discovered: explicit `--session` flag, `PI_DISH_SESSION_ID` env stamp,
+ * process ancestry against the bridge registry, or a unique cwd match.
  */
-function discoverSession(explicit?: string, options: { noneMessage?: string } = {}): unknown {
-  if (explicit) return explicit;
-  if (process.env.PI_DISH_SESSION_ID) return process.env.PI_DISH_SESSION_ID;
+function discoverSessionWithSource(explicit?: string, options: { noneMessage?: string } = {}): DiscoveredSession {
+  if (explicit) return { id: explicit, source: 'explicit' };
+  if (process.env.PI_DISH_SESSION_ID) return { id: process.env.PI_DISH_SESSION_ID, source: 'env' };
   const entries = registryEntries();
   const ancestors = ancestorPids();
   const byPid = entries.filter((entry) => typeof entry.pid === 'number' && Number.isInteger(entry.pid) && ancestors.has(entry.pid));
   if (byPid.length) {
     byPid.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-    return registryRouteId(byPid[0]);
+    return { id: registryRouteId(byPid[0]), source: 'pid' };
   }
   const cwd = path.resolve(process.cwd());
   const byCwd = entries.filter((entry) => {
@@ -291,9 +298,17 @@ function discoverSession(explicit?: string, options: { noneMessage?: string } = 
       ? path.resolve(entry.cwd) : Reflect.apply(path.resolve, path, [entry.cwd]);
     return resolved === cwd;
   });
-  if (byCwd.length === 1) return registryRouteId(byCwd[0]);
+  if (byCwd.length === 1) return { id: registryRouteId(byCwd[0]), source: 'cwd' };
   if (!entries.length) throw new Error(options.noneMessage || 'no live pi-dish bridge sessions found');
   throw new Error(`could not identify this session; pass --session <id> (${entries.length} live sessions)`);
+}
+
+/**
+ * Identify the session this CLI is running inside: explicit flag, env stamp,
+ * then process ancestry against the bridge registry, then a unique cwd match.
+ */
+function discoverSession(explicit?: string, options: { noneMessage?: string } = {}): unknown {
+  return discoverSessionWithSource(explicit, options).id;
 }
 
 /** Discovery that shrugs instead of throwing (publishing works without an id). */
@@ -805,7 +820,7 @@ function renderTranscript(input: unknown, options: TranscriptOptions = {}) {
 export {
   makeFail, print, parseCommandLine,
   registryEntries, registryRouteId, sessionHarnessId, nativeSessionId,
-  discoverSession, discoverSessionQuietly, fleetCallerId,
+  discoverSession, discoverSessionWithSource, discoverSessionQuietly, fleetCallerId,
   TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit,
   fleetHosts, hostSupports, parseRef, resolveHostPart, entryForHostName, resolveSessionRef,
   resolveSessionClientSide, stableSessionRef,

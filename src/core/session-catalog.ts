@@ -13,6 +13,7 @@ import type { DiscoveryCandidate, SessionSource } from './session-source';
 import type { CacheRetentionConfig } from './cache-retention';
 import { decodeFastModeState, type SessionFields } from './session-api';
 import { AGY_BRAIN_PROFILE_ID, inspectAgyTranscriptActivity } from './agy-brain';
+import { validLaunchSourceBasis, type LaunchSourceBasis } from './session-provenance';
 
 /** Already computed by lifecycle policy; presentation advice is never an ownership proof. */
 export interface CatalogAdvice {
@@ -52,6 +53,7 @@ export interface SessionCatalogInput {
   readonly active: readonly CatalogLiveObservation[];
   readonly history: readonly CatalogHistoryObservation[];
   readonly launchParents: ReadonlyMap<SessionId, SessionId>;
+  readonly launchSourceBases?: ReadonlyMap<SessionId, LaunchSourceBasis>;
   readonly routines: ReadonlyMap<SessionId, CatalogRoutineAnnotation>;
   readonly indexing: boolean;
   readonly discoveryTruncated: boolean;
@@ -191,6 +193,15 @@ function decodeLaunchParents(value: unknown): ReadonlyMap<SessionId, SessionId> 
     try { parents.set(canonicalSessionId(child), canonicalCallerId(raw.sourceSessionId)); } catch { /* Invalid hint. */ }
   }
   return parents;
+}
+function decodeLaunchSourceBases(value: unknown): ReadonlyMap<SessionId, LaunchSourceBasis> {
+  const bases = new Map<SessionId, LaunchSourceBasis>();
+  if (!isRecord(value)) return bases;
+  for (const [child, raw] of Object.entries(value)) {
+    if (!isRecord(raw) || !validLaunchSourceBasis(raw.sourceBasis)) continue;
+    try { bases.set(canonicalSessionId(child), raw.sourceBasis); } catch { /* Invalid hint. */ }
+  }
+  return bases;
 }
 function decodeRoutineAnnotations(value: unknown): ReadonlyMap<SessionId, CatalogRoutineAnnotation> {
   const routines = new Map<SessionId, CatalogRoutineAnnotation>();
@@ -359,6 +370,10 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
     session.parentId = resolvedParentId;
     session.parentSource = nativeParent ? session.parentSessionSource || 'pi-session-header'
       : launchParent ? 'pi-dish-launch' : null;
+    if (session.parentSource === 'pi-dish-launch') {
+      const basis = input.launchSourceBases?.get(session.id);
+      if (basis) session.parentLaunchBasis = basis;
+    }
     const parent = resolvedParentId ? byId.get(resolvedParentId) : undefined;
     const allowUnresolvedFamily = input.activeOnly || !!(resolvedParentId && parseHostQualifiedCaller(resolvedParentId));
     session.familyParentId = parent ? parent.id : (allowUnresolvedFamily ? resolvedParentId : null);
@@ -374,7 +389,7 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
 }
 
 export = {
-  registeredSessionObservation, rpcSessionObservation, primeSessionObservation, decodeLaunchParents, decodeRoutineAnnotations,
-  withSessionContext, subsessionLabel, buildActiveSession, buildSourceSession, buildHistoricalSession, composeSessionCatalog,
-  decodeDirToCwd,
+  registeredSessionObservation, rpcSessionObservation, primeSessionObservation, decodeLaunchParents, decodeLaunchSourceBases,
+  decodeRoutineAnnotations, withSessionContext, subsessionLabel, buildActiveSession, buildSourceSession, buildHistoricalSession,
+  composeSessionCatalog, decodeDirToCwd,
 };

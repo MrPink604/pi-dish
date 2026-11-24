@@ -26,6 +26,7 @@ __export(pi_dish_client_exports, {
   defaultBase: () => defaultBase,
   discoverSession: () => discoverSession,
   discoverSessionQuietly: () => discoverSessionQuietly,
+  discoverSessionWithSource: () => discoverSessionWithSource,
   entryForHostName: () => entryForHostName,
   errorBody: () => errorBody,
   errorMessage: () => errorMessage,
@@ -337,15 +338,15 @@ function nativeSessionId(routeId) {
   if (!raw.startsWith("~sk1_")) return raw;
   return decodeRouteId(raw)?.nativeSessionId || null;
 }
-function discoverSession(explicit, options = {}) {
-  if (explicit) return explicit;
-  if (process.env.PI_DISH_SESSION_ID) return process.env.PI_DISH_SESSION_ID;
+function discoverSessionWithSource(explicit, options = {}) {
+  if (explicit) return { id: explicit, source: "explicit" };
+  if (process.env.PI_DISH_SESSION_ID) return { id: process.env.PI_DISH_SESSION_ID, source: "env" };
   const entries = registryEntries();
   const ancestors = ancestorPids();
   const byPid = entries.filter((entry) => typeof entry.pid === "number" && Number.isInteger(entry.pid) && ancestors.has(entry.pid));
   if (byPid.length) {
     byPid.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-    return registryRouteId(byPid[0]);
+    return { id: registryRouteId(byPid[0]), source: "pid" };
   }
   const cwd = path.resolve(process.cwd());
   const byCwd = entries.filter((entry) => {
@@ -353,9 +354,12 @@ function discoverSession(explicit, options = {}) {
     const resolved = typeof entry.cwd === "string" ? path.resolve(entry.cwd) : Reflect.apply(path.resolve, path, [entry.cwd]);
     return resolved === cwd;
   });
-  if (byCwd.length === 1) return registryRouteId(byCwd[0]);
+  if (byCwd.length === 1) return { id: registryRouteId(byCwd[0]), source: "cwd" };
   if (!entries.length) throw new Error(options.noneMessage || "no live pi-dish bridge sessions found");
   throw new Error(`could not identify this session; pass --session <id> (${entries.length} live sessions)`);
+}
+function discoverSession(explicit, options = {}) {
+  return discoverSessionWithSource(explicit, options).id;
 }
 function discoverSessionQuietly(explicit) {
   try {
@@ -773,6 +777,7 @@ function renderTranscript(input, options = {}) {
   defaultBase,
   discoverSession,
   discoverSessionQuietly,
+  discoverSessionWithSource,
   entryForHostName,
   errorBody,
   errorMessage,

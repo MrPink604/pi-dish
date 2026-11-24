@@ -46,6 +46,7 @@ export interface SessionFields<Timestamp = string | number> {
     subagentLive?: boolean;
     parentId?: string | null;
     parentSource?: string | null;
+    parentLaunchBasis?: string | null;
     familyParentId?: string | null;
     routine?: string;
     routineId?: string;

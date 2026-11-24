@@ -377,53 +377,53 @@ export interface ResolvedProvenanceSession {
   name: string;
   harnessId: string | null;
   isActive: boolean | null;
-  turnInProgress: boolean;
-  compacting: boolean;
-  askPending: boolean;
   parentId: string | null;
   parentSource: string | null;
+  parentLaunchBasis: string | null;
 }
 
 export interface AuthorizedDescendant {
   target: ResolvedProvenanceSession;
-  /** Canonical ref for `pi-dish-sessions close` (`host/id` or `id`). */
+  /** Exact route host returned by `resolve` (`null` for self, or exact remote name). */
+  host: string | null;
+  /** Exact route session id returned by `resolve`. */
+  id: string;
+  /** Display ref (`host/id` or `id`) for reporting; close uses `(host, id)` directly with `--exact`. */
   ref: string;
   /** Owned worker at the root of the verified `pi-dish-launch` chain. */
   ancestor: WorkerRecord;
 }
 
+export type DescendantAuthorization =
+  | { ok: true; descendant: AuthorizedDescendant }
+  | { ok: false; reason: 'not_descendant' | 'unverifiable'; detail?: string };
+
+export type ProvenanceResolveResult =
+  | { ok: true; session: ResolvedProvenanceSession }
+  | { ok: false; kind: 'not_found' | 'unverifiable'; detail?: string };
+
+export type FleetHostsResult =
+  | { ok: true; hosts: readonly FleetHostInfo[] }
+  | { ok: false; detail?: string };
+
 export interface ProvenanceLookupPorts {
-  resolve(ref: string): Promise<ResolvedProvenanceSession | null>;
-  hosts(): Promise<readonly FleetHostInfo[]>;
-}
-
-export interface ActiveDescendant {
-  session: ResolvedProvenanceSession;
-  ref: string;
-  depth: number;
-  busy: boolean;
-}
-
-export interface DescendantScanResult {
-  descendants: ActiveDescendant[];
-  unreachableHosts: string[];
-}
-
-export interface DescendantScanPorts extends ProvenanceLookupPorts {
-  listActive(host: string | null): Promise<ResolvedProvenanceSession[]>;
+  resolve(ref: string, options?: { host?: string | null }): Promise<ProvenanceResolveResult>;
+  hosts(): Promise<FleetHostsResult>;
 }
 
 function safeCanonicalSessionId(id: string): string {
   try { return canonicalSessionId(id); } catch { return id; }
 }
 
+function canonicalRouteHost(host: string | null | undefined): string | null {
+  return !host || host === 'self' ? null : host;
+}
+
 function normalizeHostName(host: string | null | undefined, hosts?: readonly FleetHostInfo[]): string | null {
   if (!host || host === 'self') return null;
   if (hosts?.length) {
     const lower = host.toLowerCase();
-    for (const entry of hosts) {
-      if (entry.self && (entry.label?.toLowerCase() === lower || entry.hostId?.toLowerCase() === lower)) return null;
-    }
+    // Exact remote name always beats host ids and display labels (matches pi-dish-client resolveHostPart).
     const byName = hosts.find(entry => !entry.self && entry.name === host);
     if (byName) return byName.name;
     const byId = hosts.find(entry => entry.hostId?.toLowerCase() === lower);
@@ -461,34 +461,55 @@ export function findOwnedWorkerByIdentity(
 }
 
 type LaunchParent =
-  | { hostKnown: true; host: string | null; id: string; resolveRef: string }
+  | { hostKnown: true; host: string | null; id: string }
   | { hostKnown: false; hostId: string; id: string; resolveRef: string };
+
+type LaunchParentResult =
+  | { ok: true; parent: LaunchParent }
+  | { ok: false; detail?: string };
 
 /**
  * Extract the server-recorded `pi-dish-launch` parent edge of a session.
- * Rejects self-claimed JSONL headers (`pi-session-header`) and non-launch hints.
+ * Rejects self-claimed JSONL headers (`pi-session-header`), cwd-fallback discovery
+ * edges (`cwd`), explicit caller-supplied `--session` edges (`explicit`), and non-launch hints.
  */
 function launchParentOf(
-  session: Pick<ResolvedProvenanceSession, 'host' | 'id' | 'parentId' | 'parentSource'>,
+  session: Pick<ResolvedProvenanceSession, 'host' | 'id' | 'parentId' | 'parentSource' | 'parentLaunchBasis'>,
   hosts?: readonly FleetHostInfo[],
-): LaunchParent | null {
-  if (session.parentSource !== 'pi-dish-launch' || !session.parentId) return null;
-  const selfHost = normalizeHostName(session.host, hosts);
+): LaunchParentResult {
+  if (session.parentSource !== 'pi-dish-launch' || !session.parentId) {
+    if (session.parentSource === 'pi-session-header') {
+      return { ok: false, detail: 'parent link is a session header rather than pi-dish launch provenance' };
+    }
+    return { ok: false };
+  }
+  if (session.parentLaunchBasis !== null) {
+    if (session.parentLaunchBasis === 'cwd') {
+      return { ok: false, detail: 'parent was inferred from a matching working directory rather than verified process/env identity' };
+    }
+    if (session.parentLaunchBasis === 'explicit') {
+      return { ok: false, detail: 'parent was supplied explicitly rather than verified from process/env identity' };
+    }
+    if (session.parentLaunchBasis !== 'pid' && session.parentLaunchBasis !== 'env') {
+      return { ok: false, detail: `parent provenance basis "${session.parentLaunchBasis}" is not verified process/env identity` };
+    }
+  }
+  const selfHost = canonicalRouteHost(session.host);
   const selfId = safeCanonicalSessionId(session.id);
   const qualified = parseHostQualifiedCaller(session.parentId);
   if (qualified) {
     const parentId = safeCanonicalSessionId(qualified.sessionId);
     const mapped = hosts ? resolveHostUuid(qualified.hostId, hosts) : { known: false as const };
     if (mapped.known) {
-      if (mapped.host === selfHost && parentId === selfId) return null;
-      return { hostKnown: true, host: mapped.host, id: parentId, resolveRef: fullWorkerRef(parentId, mapped.host) };
+      if (mapped.host === selfHost && parentId === selfId) return { ok: false };
+      return { ok: true, parent: { hostKnown: true, host: mapped.host, id: parentId } };
     }
-    return { hostKnown: false, hostId: qualified.hostId, id: parentId, resolveRef: `${qualified.hostId}:${parentId}` };
+    return { ok: true, parent: { hostKnown: false, hostId: qualified.hostId, id: parentId, resolveRef: `${qualified.hostId}:${parentId}` } };
   }
   let parentId: string;
-  try { parentId = canonicalSessionId(session.parentId); } catch { return null; }
-  if (parentId === selfId) return null;
-  return { hostKnown: true, host: selfHost, id: parentId, resolveRef: fullWorkerRef(parentId, selfHost) };
+  try { parentId = canonicalSessionId(session.parentId); } catch { return { ok: false }; }
+  if (parentId === selfId) return { ok: false };
+  return { ok: true, parent: { hostKnown: true, host: selfHost, id: parentId } };
 }
 
 function parseResolvedSession(raw: unknown, fallbackHost: string | null | undefined): ResolvedProvenanceSession | null {
@@ -512,11 +533,9 @@ function parseResolvedSession(raw: unknown, fallbackHost: string | null | undefi
     name: typeof session.name === 'string' && session.name ? session.name : id,
     harnessId: typeof session.harnessId === 'string' && session.harnessId ? session.harnessId : null,
     isActive: typeof session.isActive === 'boolean' ? session.isActive : null,
-    turnInProgress: session.turnInProgress === true,
-    compacting: session.compacting === true,
-    askPending: session.askPending === true,
     parentId: typeof session.parentId === 'string' && session.parentId ? session.parentId : null,
     parentSource: typeof session.parentSource === 'string' && session.parentSource ? session.parentSource : null,
+    parentLaunchBasis: typeof session.parentLaunchBasis === 'string' && session.parentLaunchBasis ? session.parentLaunchBasis : null,
   };
 }
 
@@ -539,218 +558,129 @@ function parseFleetHosts(raw: unknown): FleetHostInfo[] {
   return out;
 }
 
-function parseActiveRows(raw: unknown, host: string | null): ResolvedProvenanceSession[] {
-  if (!isRecord(raw) || !Array.isArray(raw.active)) return [];
-  const rows: ResolvedProvenanceSession[] = [];
-  for (const item of raw.active) {
-    if (!isRecord(item) || typeof item.id !== 'string' || !item.id || item.isActive === false) continue;
-    rows.push({
-      host,
-      id: item.id,
-      name: typeof item.name === 'string' && item.name ? item.name : item.id,
-      harnessId: typeof item.harnessId === 'string' && item.harnessId ? item.harnessId : null,
-      isActive: true,
-      turnInProgress: item.turnInProgress === true,
-      compacting: item.compacting === true,
-      askPending: item.askPending === true,
-      parentId: typeof item.parentId === 'string' && item.parentId ? item.parentId : null,
-      parentSource: typeof item.parentSource === 'string' && item.parentSource ? item.parentSource : null,
-    });
-  }
-  return rows;
-}
-
 /**
  * Authorize closing a session that is not directly in `memory.workers` by walking
  * its server-recorded `pi-dish-launch` parent chain up to an owned worker (open or closed).
- * Fails closed on non-launch parents (e.g. `pi-session-header`), cycles, missing hops, or host mismatches.
+ * Fails closed on non-launch parents (e.g. `pi-session-header`), cwd-fallback or explicit
+ * parent edges, cycles, missing hops, host mismatches, or unreachable provenance hops.
  */
 export async function authorizeDescendantClose(
   memory: BotMemory | undefined,
   wanted: string,
   lookup: ProvenanceLookupPorts,
-): Promise<AuthorizedDescendant | null> {
-  if (!Object.keys(memory?.workers ?? {}).length) return null;
-  const target = await lookup.resolve(wanted);
-  if (!target || target.harnessId === 'bot') return null;
+): Promise<DescendantAuthorization> {
+  if (!Object.keys(memory?.workers ?? {}).length) return { ok: false, reason: 'not_descendant' };
+  const targetResult = await lookup.resolve(wanted);
+  if (!targetResult.ok) {
+    if (targetResult.kind === 'unverifiable') {
+      return { ok: false, reason: 'unverifiable', detail: targetResult.detail };
+    }
+    return { ok: false, reason: 'not_descendant' };
+  }
+  const target = targetResult.session;
+  if (target.harnessId === 'bot') {
+    return { ok: false, reason: 'not_descendant', detail: 'bot sessions cannot be closed as worker descendants' };
+  }
 
   let fleet: readonly FleetHostInfo[] | undefined;
-  const ensureHosts = async (): Promise<readonly FleetHostInfo[]> => {
-    if (fleet === undefined) fleet = await lookup.hosts();
-    return fleet;
+  const ensureHosts = async (): Promise<FleetHostsResult> => {
+    if (fleet !== undefined) return { ok: true, hosts: fleet };
+    const result = await lookup.hosts();
+    if (result.ok) fleet = result.hosts;
+    return result;
   };
 
-  const visited = new Set<string>([`${target.host ?? ''}\0${safeCanonicalSessionId(target.id)}`]);
+  // Preserve the exact route host returned by `resolve`; never re-run display-label normalization on it.
+  const targetHost = canonicalRouteHost(target.host);
+  const visited = new Set<string>([`${targetHost ?? ''}\0${safeCanonicalSessionId(target.id)}`]);
   let current: ResolvedProvenanceSession = target;
 
   for (let depth = 0; depth < MAX_DESCENDANT_DEPTH; depth++) {
-    if (current.parentSource !== 'pi-dish-launch' || !current.parentId) return null;
-    if (parseHostQualifiedCaller(current.parentId)) await ensureHosts();
-    const parent = launchParentOf(current, fleet);
-    if (!parent) return null;
+    if (current.parentSource === 'pi-dish-launch' && current.parentId && parseHostQualifiedCaller(current.parentId)) {
+      const hostsResult = await ensureHosts();
+      if (!hostsResult.ok) {
+        return { ok: false, reason: 'unverifiable', detail: hostsResult.detail || 'could not read fleet hosts to verify cross-host provenance' };
+      }
+    }
+    const parentResult = launchParentOf(current, fleet);
+    if (!parentResult.ok) {
+      return { ok: false, reason: 'not_descendant', ...(parentResult.detail ? { detail: parentResult.detail } : {}) };
+    }
+    const parent = parentResult.parent;
 
     if (parent.hostKnown) {
       const owned = findOwnedWorkerByIdentity(memory, parent.host, parent.id, fleet);
       if (owned) {
-        const targetHost = normalizeHostName(target.host, fleet);
-        return { target, ref: fullWorkerRef(target.id, targetHost), ancestor: owned[1] };
+        return {
+          ok: true,
+          descendant: {
+            target,
+            host: targetHost,
+            id: target.id,
+            ref: fullWorkerRef(target.id, targetHost),
+            ancestor: owned[1],
+          },
+        };
       }
       const visitKey = `${parent.host ?? ''}\0${parent.id}`;
-      if (visited.has(visitKey)) return null;
+      if (visited.has(visitKey)) {
+        return { ok: false, reason: 'not_descendant', detail: 'launch provenance contains a cycle' };
+      }
       visited.add(visitKey);
     } else {
       const visitKey = `uuid:${parent.hostId.toLowerCase()}\0${parent.id}`;
-      if (visited.has(visitKey)) return null;
+      if (visited.has(visitKey)) {
+        return { ok: false, reason: 'not_descendant', detail: 'launch provenance contains a cycle' };
+      }
       visited.add(visitKey);
     }
 
-    const resolvedParent = await lookup.resolve(parent.resolveRef);
-    if (!resolvedParent) return null;
-    if (safeCanonicalSessionId(resolvedParent.id) !== parent.id) return null;
-    if (parent.hostKnown && normalizeHostName(resolvedParent.host, fleet) !== normalizeHostName(parent.host, fleet)) {
-      return null;
+    const resolvedParentResult = parent.hostKnown
+      ? await lookup.resolve(parent.id, { host: parent.host })
+      : await lookup.resolve(parent.resolveRef);
+    if (!resolvedParentResult.ok) {
+      if (resolvedParentResult.kind === 'unverifiable' || !parent.hostKnown) {
+        return {
+          ok: false,
+          reason: 'unverifiable',
+          detail: resolvedParentResult.detail || 'could not resolve parent session in provenance chain',
+        };
+      }
+      return { ok: false, reason: 'not_descendant', detail: 'parent session in provenance chain was not found' };
+    }
+    const resolvedParent = resolvedParentResult.session;
+    if (safeCanonicalSessionId(resolvedParent.id) !== parent.id) {
+      return { ok: false, reason: 'unverifiable', detail: 'resolved parent session id did not match recorded provenance' };
+    }
+    const resolvedParentHost = canonicalRouteHost(resolvedParent.host);
+    if (parent.hostKnown && resolvedParentHost !== parent.host) {
+      return { ok: false, reason: 'unverifiable', detail: 'resolved parent host did not match recorded provenance' };
     }
 
     if (!parent.hostKnown) {
-      const resolvedHost = normalizeHostName(resolvedParent.host, fleet);
-      const owned = findOwnedWorkerByIdentity(memory, resolvedHost, resolvedParent.id, fleet);
+      const owned = findOwnedWorkerByIdentity(memory, resolvedParentHost, resolvedParent.id, fleet);
       if (owned) {
-        const targetHost = normalizeHostName(target.host, fleet);
-        return { target, ref: fullWorkerRef(target.id, targetHost), ancestor: owned[1] };
+        return {
+          ok: true,
+          descendant: {
+            target,
+            host: targetHost,
+            id: target.id,
+            ref: fullWorkerRef(target.id, targetHost),
+            ancestor: owned[1],
+          },
+        };
       }
-      const visitKey = `${resolvedHost ?? ''}\0${safeCanonicalSessionId(resolvedParent.id)}`;
-      if (visited.has(visitKey)) return null;
+      const visitKey = `${resolvedParentHost ?? ''}\0${safeCanonicalSessionId(resolvedParent.id)}`;
+      if (visited.has(visitKey)) {
+        return { ok: false, reason: 'not_descendant', detail: 'launch provenance contains a cycle' };
+      }
       visited.add(visitKey);
     }
 
     current = resolvedParent;
   }
-  return null;
-}
-
-/**
- * Find all active `pi-dish-launch` descendant sessions of `(rootHost, rootId)` across reachable fleet hosts,
- * sorted deepest-first so cascade teardown closes leaves before intermediate parents.
- */
-export async function findActiveDescendants(
-  rootHost: string | null,
-  rootId: string,
-  scanPorts: DescendantScanPorts,
-): Promise<DescendantScanResult> {
-  const fleet = await scanPorts.hosts();
-  const normalizedRootHost = normalizeHostName(rootHost, fleet);
-  const canonicalRootId = safeCanonicalSessionId(rootId);
-  const unreachableHosts: string[] = [];
-  const hostsToScan: (string | null)[] = [];
-  const seenScan = new Set<string>();
-  const addScanHost = (host: string | null) => {
-    const key = host ?? '';
-    if (!seenScan.has(key)) { seenScan.add(key); hostsToScan.push(host); }
-  };
-
-  if (fleet.length) {
-    for (const entry of fleet) {
-      if (entry.reachable) addScanHost(entry.self ? null : entry.name);
-      else if (!entry.self && entry.name) unreachableHosts.push(entry.name);
-    }
-    if (!unreachableHosts.includes(normalizedRootHost ?? '')) addScanHost(normalizedRootHost);
-  } else {
-    addScanHost(normalizedRootHost);
-  }
-
-  const activeByKey = new Map<string, ResolvedProvenanceSession>();
-  const listed = await Promise.all(hostsToScan.map(async (host) => {
-    try {
-      return { host, rows: await scanPorts.listActive(host), ok: true as const };
-    } catch {
-      return { host, rows: [] as ResolvedProvenanceSession[], ok: false as const };
-    }
-  }));
-  for (const outcome of listed) {
-    if (!outcome.ok) {
-      unreachableHosts.push(outcome.host ?? '(self)');
-      continue;
-    }
-    for (const row of outcome.rows) {
-      const host = normalizeHostName(row.host, fleet);
-      const id = safeCanonicalSessionId(row.id);
-      activeByKey.set(`${host ?? ''}\0${id}`, { ...row, host });
-    }
-  }
-
-  const resolvedCache = new Map<string, ResolvedProvenanceSession | null>();
-  const resolveCached = async (ref: string): Promise<ResolvedProvenanceSession | null> => {
-    if (resolvedCache.has(ref)) return resolvedCache.get(ref) ?? null;
-    const resolved = await scanPorts.resolve(ref);
-    resolvedCache.set(ref, resolved);
-    return resolved;
-  };
-
-  const descendants: ActiveDescendant[] = [];
-  for (const candidate of activeByKey.values()) {
-    if (candidate.harnessId === 'bot') continue;
-    const candidateId = safeCanonicalSessionId(candidate.id);
-    if (candidate.host === normalizedRootHost && candidateId === canonicalRootId) continue;
-    if (candidate.parentSource !== 'pi-dish-launch' || !candidate.parentId) continue;
-
-    const visited = new Set<string>([`${candidate.host ?? ''}\0${candidateId}`]);
-    let current: ResolvedProvenanceSession = candidate;
-    let matchedDepth: number | null = null;
-
-    for (let depth = 1; depth <= MAX_DESCENDANT_DEPTH; depth++) {
-      const parent = launchParentOf(current, fleet);
-      if (!parent) break;
-
-      if (parent.hostKnown) {
-        const parentHost = normalizeHostName(parent.host, fleet);
-        if (parentHost === normalizedRootHost && parent.id === canonicalRootId) {
-          matchedDepth = depth;
-          break;
-        }
-        const key = `${parentHost ?? ''}\0${parent.id}`;
-        if (visited.has(key)) break;
-        visited.add(key);
-
-        const activeParent = activeByKey.get(key);
-        if (activeParent) {
-          current = activeParent;
-          continue;
-        }
-        const resolvedParent = await resolveCached(parent.resolveRef);
-        if (!resolvedParent || safeCanonicalSessionId(resolvedParent.id) !== parent.id
-          || normalizeHostName(resolvedParent.host, fleet) !== parentHost) break;
-        current = { ...resolvedParent, host: parentHost };
-      } else {
-        const uuidKey = `uuid:${parent.hostId.toLowerCase()}\0${parent.id}`;
-        if (visited.has(uuidKey)) break;
-        visited.add(uuidKey);
-
-        const resolvedParent = await resolveCached(parent.resolveRef);
-        if (!resolvedParent || safeCanonicalSessionId(resolvedParent.id) !== parent.id) break;
-        const resolvedHost = normalizeHostName(resolvedParent.host, fleet);
-        if (resolvedHost === normalizedRootHost && safeCanonicalSessionId(resolvedParent.id) === canonicalRootId) {
-          matchedDepth = depth;
-          break;
-        }
-        const key = `${resolvedHost ?? ''}\0${safeCanonicalSessionId(resolvedParent.id)}`;
-        if (visited.has(key)) break;
-        visited.add(key);
-        current = { ...resolvedParent, host: resolvedHost };
-      }
-    }
-
-    if (matchedDepth !== null) {
-      descendants.push({
-        session: candidate,
-        ref: fullWorkerRef(candidate.id, candidate.host),
-        depth: matchedDepth,
-        busy: candidate.turnInProgress || candidate.compacting || candidate.askPending,
-      });
-    }
-  }
-
-  descendants.sort((a, b) => b.depth - a.depth || a.ref.localeCompare(b.ref));
-  return { descendants, unreachableHosts };
+  return { ok: false, reason: 'unverifiable', detail: `provenance chain exceeded ${MAX_DESCENDANT_DEPTH} hops` };
 }
 
 export interface ClosedWindow {
@@ -1048,8 +978,7 @@ const PREAMBLE = [
   'do not poll for it. A worker may end a turn while background work runs and report again when it finishes. It is',
   'watched until it is closed or 24 hours pass, and the last report says so. Tell the user the ref when you start one',
   'and the outcome when it reports. Once you have what you need from a worker, close it with the sessions tool',
-  '(action close); you can close workers you started and sessions descended from them (pass cascade: true to also',
-  'close idle descendants). A spawn whose outcome is unknown is never retried for you:',
+  '(action close); you can close workers you started and idle sessions descended from them. A spawn whose outcome is unknown is never retried for you:',
   'look for the session with the sessions tool before starting another. The sessions tool lists, reads, searches,',
   'messages and closes sessions and reports the fleet\'s hosts and their load.',
   '',
@@ -1678,44 +1607,52 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   }
 
   /**
-   * Closes a worker this bot started or a verified `pi-dish-launch` descendant of one; any other ref is refused.
-   * With `cascade: true`, also closes idle (not mid-turn) active descendants under the target, leaving busy ones running.
+   * Closes a worker this bot started, or an idle verified `pi-dish-launch` descendant of one;
+   * busy descendants, unverifiable live/provenance states, and all other refs are refused with the reason.
    */
   async function closeWorker(
     wanted: string,
-    cascade: boolean,
     api: Durable.ToolExecutionApi,
     callContext: Context,
   ): Promise<Durable.ToolExecutionResult> {
     const signal = callContext.abortSignal;
     const memory = await api.snapshot(MemoryDoc, api.conversationId, callContext);
-    let cachedHosts: readonly FleetHostInfo[] | undefined;
-    const scanPorts: DescendantScanPorts = {
-      async resolve(ref) {
+    const NOT_FOUND_RESOLVE_RE = /Session not found|id prefix must be at least 4 characters/i;
+    const BUSY_CLOSE_RE = /Session is busy:|Waiting for |New activity arrived|already being closed|being restarted/i;
+    const UNVERIFIABLE_CLOSE_RE = /Live safety state is (?:unknown|unverifiable)|cannot verify live idle state|does not support idle-guarded close|Live connection is not available/i;
+
+    let cachedHosts: FleetHostsResult | undefined;
+    const lookupPorts: ProvenanceLookupPorts = {
+      async resolve(ref, options) {
+        const argv = ['resolve', ref, ...(options?.host ? ['--host', options.host] : []), '--json', '--fields', 'all'];
         try {
-          const parsed: unknown = JSON.parse(await sessions(['resolve', ref, '--json', '--fields', 'all'], signal));
-          const fallbackHost = parseHostQualifiedCaller(ref) ? undefined : splitWorkerRef(ref).host;
-          return parseResolvedSession(parsed, fallbackHost);
-        } catch {
-          return null;
+          const parsed: unknown = JSON.parse(await sessions(argv, signal));
+          const fallbackHost = options && 'host' in options
+            ? (options.host ?? null)
+            : (parseHostQualifiedCaller(ref) ? undefined : splitWorkerRef(ref).host);
+          const session = parseResolvedSession(parsed, fallbackHost);
+          if (!session) return { ok: false, kind: 'unverifiable', detail: 'unexpected response from sessions resolve' };
+          return { ok: true, session };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (NOT_FOUND_RESOLVE_RE.test(message)) return { ok: false, kind: 'not_found', detail: message };
+          return { ok: false, kind: 'unverifiable', detail: message };
         }
       },
       async hosts() {
         if (cachedHosts !== undefined) return cachedHosts;
         try {
-          cachedHosts = parseFleetHosts(JSON.parse(await sessions(['hosts', '--json'], signal)));
-        } catch {
-          cachedHosts = [];
+          cachedHosts = { ok: true, hosts: parseFleetHosts(JSON.parse(await sessions(['hosts', '--json'], signal))) };
+        } catch (error) {
+          cachedHosts = { ok: false, detail: error instanceof Error ? error.message : String(error) };
         }
         return cachedHosts;
       },
-      async listActive(host) {
-        const argv = ['list', '--active', '--full', '--json', ...(host ? ['--host', host] : [])];
-        return parseActiveRows(JSON.parse(await sessions(argv, signal)), host);
-      },
     };
 
-    const closeTrackedWorker = async (dispatchId: string, worker: WorkerRecord): Promise<boolean> => {
+    const found = ownWorker(memory, wanted);
+    if (found) {
+      const [dispatchId, worker] = found;
       const mark = (closing: boolean) => api.commit(async (tx) => {
         const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
         if (!draft) return;
@@ -1745,102 +1682,60 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
         if (draft) draft.closedAt ??= new Date().toISOString();
       }, callContext);
-      return alreadyClosed;
-    };
-
-    const closeUntrackedRef = async (ref: string, knownInactive: boolean): Promise<boolean> => {
-      if (knownInactive) return true;
-      try {
-        await sessions(['close', ref], signal);
-        return false;
-      } catch (error) {
-        const resolved = await scanPorts.resolve(ref);
-        if (resolved?.isActive === false) return true;
-        throw error;
-      }
-    };
-
-    let targetRef: string;
-    let targetHost: string | null;
-    let targetId: string;
-    let alreadyClosed: boolean;
-    let leadText: string;
-
-    const found = ownWorker(memory, wanted);
-    if (found) {
-      const [dispatchId, worker] = found;
-      alreadyClosed = await closeTrackedWorker(dispatchId, worker);
-      targetRef = worker.ref;
-      targetHost = worker.host;
-      targetId = worker.sessionId;
-      leadText = alreadyClosed
+      const leadText = alreadyClosed
         ? `Worker "${worker.name}" (${worker.ref}) had already been closed; it is now marked closed in your records.`
         : `Closed worker "${worker.name}" (${worker.ref}).`;
-    } else {
-      const descendant = await authorizeDescendantClose(memory, wanted, scanPorts);
-      if (!descendant) {
-        const open = Object.values(memory?.workers ?? {}).filter(worker => !worker.closedAt).map(worker => worker.ref);
-        return refusal(`Refused: ${wanted} is not a worker you started or descended from one, and you can close only your own workers and their descendants. Open workers: ${open.join(', ') || 'none'}.`);
+      return both(leadText, { action: 'close', ref: worker.ref, alreadyClosed });
+    }
+
+    const auth = await authorizeDescendantClose(memory, wanted, lookupPorts);
+    if (!auth.ok) {
+      if (auth.reason === 'unverifiable') {
+        return refusal(`Refused: cannot verify whether ${wanted} is a descendant of your workers (${auth.detail || 'provenance lookup failed'}).`);
       }
-      targetRef = descendant.ref;
-      targetHost = descendant.target.host;
-      targetId = descendant.target.id;
-      alreadyClosed = await closeUntrackedRef(targetRef, descendant.target.isActive === false);
-      leadText = alreadyClosed
-        ? `Descendant session "${descendant.target.name}" (${targetRef}, under worker "${descendant.ancestor.name}") had already been closed.`
-        : `Closed descendant session "${descendant.target.name}" (${targetRef}, under worker "${descendant.ancestor.name}").`;
+      const open = Object.values(memory?.workers ?? {}).filter(worker => !worker.closedAt).map(worker => worker.ref);
+      const why = auth.detail ? ` (${auth.detail})` : '';
+      return refusal(`Refused: ${wanted} is not a worker you started or descended from one${why}. Open workers: ${open.join(', ') || 'none'}.`);
     }
 
-    if (!cascade) {
-      return both(leadText, { action: 'close', ref: targetRef, alreadyClosed });
+    const { target, host: exactHost, id: exactId, ref: displayRef, ancestor } = auth.descendant;
+    if (target.isActive === false) {
+      return both(
+        `Descendant session "${target.name}" (${displayRef}, under worker "${ancestor.name}") had already been closed.`,
+        { action: 'close', ref: displayRef, alreadyClosed: true },
+      );
     }
 
-    const { descendants, unreachableHosts } = await findActiveDescendants(targetHost, targetId, scanPorts);
-    const closedDescendants: string[] = [];
-    const skippedBusy: string[] = [];
-    const failedDescendants: { ref: string; error: string }[] = [];
-    const latestMemory = await api.snapshot(MemoryDoc, api.conversationId, callContext);
-
-    for (const descendant of descendants) {
-      if (descendant.busy) {
-        skippedBusy.push(descendant.ref);
-        continue;
+    const closeArgv = ['close', exactId, ...(exactHost ? ['--host', exactHost] : []), '--exact', '--if-idle'];
+    try {
+      await sessions(closeArgv, signal);
+      return both(
+        `Closed descendant session "${target.name}" (${displayRef}, under worker "${ancestor.name}").`,
+        { action: 'close', ref: displayRef, alreadyClosed: false },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (BUSY_CLOSE_RE.test(message)) {
+        return refusal(`Refused: descendant session "${target.name}" (${displayRef}) is busy and was not closed (${message}).`);
       }
-      try {
-        const tracked = findOwnedWorkerByIdentity(latestMemory, descendant.session.host, descendant.session.id, cachedHosts);
-        if (tracked) await closeTrackedWorker(tracked[0], tracked[1]);
-        else await closeUntrackedRef(descendant.ref, false);
-        closedDescendants.push(descendant.ref);
-      } catch (error) {
-        failedDescendants.push({ ref: descendant.ref, error: error instanceof Error ? error.message : String(error) });
+      if (UNVERIFIABLE_CLOSE_RE.test(message)) {
+        return refusal(`Refused: cannot verify that descendant session "${target.name}" (${displayRef}) is idle (${message}).`);
       }
+      if (/Session not active/i.test(message)) {
+        return both(
+          `Descendant session "${target.name}" (${displayRef}, under worker "${ancestor.name}") had already been closed.`,
+          { action: 'close', ref: displayRef, alreadyClosed: true },
+        );
+      }
+      const rechecked = await lookupPorts.resolve(exactId, { host: exactHost });
+      if (rechecked.ok && rechecked.session.isActive === false) {
+        return both(
+          `Descendant session "${target.name}" (${displayRef}, under worker "${ancestor.name}") had already been closed.`,
+          { action: 'close', ref: displayRef, alreadyClosed: true },
+        );
+      }
+      return refusal(`Refused: cannot verify that descendant session "${target.name}" (${displayRef}) is idle (${message}).`);
     }
-
-    const parts = [leadText];
-    if (closedDescendants.length) {
-      parts.push(`Cascade closed ${closedDescendants.length} idle descendant${closedDescendants.length === 1 ? '' : 's'}: ${closedDescendants.join(', ')}.`);
-    }
-    if (skippedBusy.length) {
-      parts.push(`Left ${skippedBusy.length} busy (mid-turn) descendant${skippedBusy.length === 1 ? '' : 's'} running: ${skippedBusy.join(', ')}.`);
-    }
-    if (failedDescendants.length) {
-      parts.push(`Failed to close ${failedDescendants.length} descendant${failedDescendants.length === 1 ? '' : 's'}: ${failedDescendants.map(item => `${item.ref} (${item.error})`).join(', ')}.`);
-    }
-    if (!closedDescendants.length && !skippedBusy.length && !failedDescendants.length) {
-      parts.push('No active descendants found.');
-    }
-    if (unreachableHosts.length) {
-      parts.push(`Could not check descendants on unreachable host${unreachableHosts.length === 1 ? '' : 's'}: ${unreachableHosts.join(', ')}.`);
-    }
-    return both(parts.join(' '), {
-      action: 'close',
-      ref: targetRef,
-      alreadyClosed,
-      closedDescendants,
-      skippedBusy,
-      ...(failedDescendants.length ? { failedDescendants } : {}),
-      ...(unreachableHosts.length ? { unreachableHosts } : {}),
-    });
   }
 
   /**
@@ -1971,7 +1866,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   };
   const sessionsTool = durable.defineTool({
     name: 'sessions',
-    description: 'pi-dish sessions and hosts: list live sessions, read or search transcripts, send a message, close a worker you started or its descendants (cascade: true closes idle descendants), list hosts, or show host load. In scripts, wait blocks until a session settles.',
+    description: 'pi-dish sessions and hosts: list live sessions, read or search transcripts, send a message, close a worker you started or an idle descendant of one, list hosts, or show host load. In scripts, wait blocks until a session settles.',
     parameters: obj({
       action: oneOf(['list', 'read', 'search', 'send', 'close', 'hosts', 'load', 'wait'] as const),
       ref: opt(str({ description: 'Session ref, for read, send, close and wait' })),
@@ -1981,7 +1876,6 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       limit: opt(num({ description: 'Rows or messages to show' })),
       since: opt(num({ description: 'For wait: settle only once the transcript holds more than this many messages; omitted: a fresh worker\'s first answer, or an idle session\'s last' })),
       timeout: opt(num({ description: `For wait: seconds to wait, at most ${WAIT_MAX_SECS}; default ${WAIT_DEFAULT_SECS}. Past it the call fails` })),
-      cascade: opt(bool({ description: 'For close: also close idle descendants' })),
     }),
     structuredOutputSchema: union([
       obj({ action: lit('list'), sessions: arr(obj(sessionRowSchema)), total: num() }),
@@ -2002,15 +1896,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         memoryUsedPercent: opt(num()), diskUsedPercent: opt(num()),
       }),
       obj({ action: lit('send'), ref: str(), response: anyValue({ description: 'The host\'s answer: held and until when it holds the message' }) }),
-      obj({
-        action: lit('close'),
-        ref: str(),
-        alreadyClosed: bool(),
-        closedDescendants: opt(arr(str())),
-        skippedBusy: opt(arr(str())),
-        failedDescendants: opt(arr(obj({ ref: str(), error: str() }))),
-        unreachableHosts: opt(arr(str())),
-      }),
+      obj({ action: lit('close'), ref: str(), alreadyClosed: bool() }),
       obj({
         action: lit('wait'), ref: str(), state: oneOf(['finished', 'waiting'] as const), totalMessages: num(),
         text: str({ description: 'Its final answer; for a failed turn the error' }),
@@ -2027,7 +1913,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         if (!value) throw new Error(`${args.action} needs ${field}`);
         return value;
       };
-      if (args.action === 'close') return closeWorker(need(args.ref, 'ref'), args.cascade === true, api, callContext);
+      if (args.action === 'close') return closeWorker(need(args.ref, 'ref'), api, callContext);
       if (args.action === 'wait') return waitFor(need(args.ref, 'ref'), args.since, args.timeout, api, callContext);
       if (args.action === 'send') {
         const rawRef = need(args.ref, 'ref');

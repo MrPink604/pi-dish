@@ -15,7 +15,7 @@ export interface SessionOperationObservations {
     /** Catalog and transcript observations only; admission belongs to this owner. */
     getActiveSessions(): readonly ActiveSessionObservation[];
     readSessionCwd(source: SessionSource): unknown;
-    recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string): void;
+    recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string, sourceBasis?: string | null): void;
 }
 export interface CreateSessionOptions {
     harness?: unknown;
@@ -25,6 +25,7 @@ export interface CreateSessionOptions {
     cwd?: unknown;
     target?: HarnessLaunchTarget | null;
     sourceSessionId?: string | null;
+    sourceBasis?: string | null;
     /** HTTP `private` flag; only harnesses with a private root support it. */
     private?: boolean;
 }
@@ -114,11 +115,15 @@ export interface SessionOperations {
     createSession(options: CreateSessionOptions): Promise<string>;
     startSessionSpawn(options: CreateSessionOptions): string;
     getSessionSpawn(spawnId: string): SessionSpawnOperation | undefined;
-    recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId?: string): string | null;
+    recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId?: string, sourceBasis?: string | null): string | null;
     resumeSessionById(requestedId: unknown, options?: ResumeSessionOptions): Promise<ResumeSessionResult>;
     probeRecoveryLive(record: RecoveryRecord): Promise<LiveSession | null>;
-    closeSession(sessionId: unknown): Promise<SessionOperationOutcome>;
-    closeSessionById(sessionId: unknown): Promise<SessionOperationResponse>;
+    closeSession(sessionId: unknown, options?: {
+        beforeAction?: BeforeLifecycleAction | null;
+    }): Promise<SessionOperationOutcome>;
+    closeSessionById(sessionId: unknown, options?: {
+        beforeAction?: BeforeLifecycleAction | null;
+    }): Promise<SessionOperationResponse>;
     restartSession(sessionId: string, options?: {
         beforeAction?: BeforeLifecycleAction | null;
     }): Promise<SessionOperationOutcome>;

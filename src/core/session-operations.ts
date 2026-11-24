@@ -33,7 +33,7 @@ export interface SessionOperationObservations {
   /** Catalog and transcript observations only; admission belongs to this owner. */
   getActiveSessions(): readonly ActiveSessionObservation[];
   readSessionCwd(source: SessionSource): unknown;
-  recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string): void;
+  recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string, sourceBasis?: string | null): void;
 }
 
 export interface CreateSessionOptions {
@@ -44,6 +44,7 @@ export interface CreateSessionOptions {
   cwd?: unknown;
   target?: HarnessLaunchTarget | null;
   sourceSessionId?: string | null;
+  sourceBasis?: string | null;
   /** HTTP `private` flag; only harnesses with a private root support it. */
   private?: boolean;
 }
@@ -136,11 +137,11 @@ export interface SessionOperations {
   createSession(options: CreateSessionOptions): Promise<string>;
   startSessionSpawn(options: CreateSessionOptions): string;
   getSessionSpawn(spawnId: string): SessionSpawnOperation | undefined;
-  recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId?: string): string | null;
+  recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId?: string, sourceBasis?: string | null): string | null;
   resumeSessionById(requestedId: unknown, options?: ResumeSessionOptions): Promise<ResumeSessionResult>;
   probeRecoveryLive(record: RecoveryRecord): Promise<LiveSession | null>;
-  closeSession(sessionId: unknown): Promise<SessionOperationOutcome>;
-  closeSessionById(sessionId: unknown): Promise<SessionOperationResponse>;
+  closeSession(sessionId: unknown, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationOutcome>;
+  closeSessionById(sessionId: unknown, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationResponse>;
   restartSession(sessionId: string, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationOutcome>;
   restartSessionById(sessionId: string, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationResponse>;
   /** Graceful stop that keeps recovery intent and resumability; never an explicit close. */
@@ -210,9 +211,14 @@ export function createSessionOperations(observations: SessionOperationObservatio
     return id;
   }
 
-  function recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId = crypto.randomUUID()): string | null {
+  function recordSessionLaunch(
+    sessionId: string,
+    sourceSessionId: string,
+    operationId = crypto.randomUUID(),
+    sourceBasis?: string | null,
+  ): string | null {
     try {
-      observations.recordLaunchProvenance(sessionId, sourceSessionId, operationId);
+      observations.recordLaunchProvenance(sessionId, sourceSessionId, operationId, sourceBasis);
       return operationId;
     } catch (error) {
       console.warn(`Failed to record session launch provenance: ${errorMessage(error)}`);
@@ -236,7 +242,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
         return createSession(options);
       })
       .then(sessionId => {
-        if (options.sourceSessionId) recordSessionLaunch(sessionId, options.sourceSessionId, spawnId);
+        if (options.sourceSessionId) recordSessionLaunch(sessionId, options.sourceSessionId, spawnId, options.sourceBasis);
         operation = { status: 'ready', createdAt, sessionId };
         sessionSpawnOperations.set(spawnId, operation);
       })
@@ -376,21 +382,27 @@ export function createSessionOperations(observations: SessionOperationObservatio
     finally { if (closeFlights.get(id) === flight) closeFlights.delete(id); }
   }
 
-  async function closeSession(sessionId: unknown): Promise<SessionOperationOutcome> {
+  async function closeSession(
+    sessionId: unknown,
+    { beforeAction = null }: { beforeAction?: BeforeLifecycleAction | null } = {},
+  ): Promise<SessionOperationOutcome> {
     const identity = routeIdentity(sessionId);
     if (!identity) return noAction(400, 'Invalid session ID');
     const id = routeSessionId(identity.harnessId, identity.nativeSessionId);
     if (restartFlights.has(id)) return noAction(409, 'The session is being restarted.');
     const existing = closeFlights.get(id);
-    if (existing) return existing;
+    if (existing) return beforeAction ? noAction(409, 'The session is already being closed.') : existing;
     return withCloseFlight(id, async () => {
       let previous: RecoveryControl | undefined;
       let result: SessionOperationOutcome | undefined;
+      // Hold HTTP prompt/steer/follow-up admission while an idle-guarded close verifies live state and stops the session.
+      const lockedForGuard = !!beforeAction && !bounceActionLocks.has(id);
+      if (lockedForGuard) bounceActionLocks.add(id);
       try {
         previous = recoveryStore.getControl(identity.harnessId, identity.nativeSessionId);
         // Only explicit close retires recovery intent, durably before effects.
         recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { closed: true });
-        result = await performSessionClose(id);
+        result = await performSessionClose(id, { beforeAction });
         if (result.kind !== 'stopped' && !result.closeIntent?.preserve) {
           recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { closed: previous.closed });
         }
@@ -400,6 +412,9 @@ export function createSessionOperations(observations: SessionOperationObservatio
           try { recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { closed: previous.closed }); }
           catch (rollbackError) { console.error(`Recovery close-intent rollback failed: ${errorMessage(rollbackError)}`); }
         }
+        if (error instanceof LifecycleInterruption) {
+          return noAction(409, error.message, error);
+        }
         if (result?.kind === 'cleanup-failed') {
           return { kind: 'cleanup-failed', stopped: result.stopped, status: 500, error: errorMessage(error), cause: error };
         }
@@ -407,6 +422,15 @@ export function createSessionOperations(observations: SessionOperationObservatio
           return { kind: 'stop-uncertain', status: 500, error: errorMessage(error), cause: error };
         }
         return noAction(500, errorMessage(error), error);
+      } finally {
+        if (lockedForGuard) {
+          bounceActionLocks.delete(id);
+          const waiters = bounceUnlockWaiters.get(id);
+          if (waiters) {
+            bounceUnlockWaiters.delete(id);
+            for (const wake of waiters) wake();
+          }
+        }
       }
     });
   }
@@ -788,7 +812,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
   return {
     createSession, startSessionSpawn, getSessionSpawn: spawnId => sessionSpawnOperations.get(spawnId), recordSessionLaunch,
     resumeSessionById, probeRecoveryLive, closeSession, restartSession, hibernateSession,
-    closeSessionById: async sessionId => sessionOperationResponse(await closeSession(sessionId)),
+    closeSessionById: async (sessionId, options) => sessionOperationResponse(await closeSession(sessionId, options)),
     restartSessionById: async (sessionId, options) => sessionOperationResponse(await restartSession(sessionId, options)),
     beginBounceAction, endBounceAction, waitBounceActionUnlock, admitHttpAction,
   };

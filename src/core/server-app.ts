@@ -52,7 +52,7 @@ import { createRecoveryRuntime, createTmuxLossLimiter, recoveryMode, watchTmuxSe
 import type { RecoveryOutcome, TmuxServerLossEvent, TmuxServerWatch, WatchedTmuxServerSessions } from './recovery-runner';
 import { inspectProcessAncestry, processIdentity, processIdentityAlive } from './process-identity';
 import type { ProcessIdentity } from './contracts';
-import { createSessionBounceRuntime, createSessionLifecycleActions } from './session-bounces';
+import { createIdleCloseGuard, createSessionBounceRuntime, createSessionLifecycleActions } from './session-bounces';
 import { createSessionHibernation } from './session-hibernation';
 import { createPushNotifier } from './push-notifications';
 import { createCiWatcher, readCiConfig, type CiWatcher } from './ci-watcher';
@@ -394,7 +394,7 @@ export function startServer(rootDirectory: string): Server {
     launch: sessionLaunch,
     getActiveSessions: catalog.getActiveSessions,
     readSessionCwd,
-    recordLaunchProvenance: (id, sourceId, operationId) => sessionProvenance.recordLaunch(id, sourceId, operationId),
+    recordLaunchProvenance: (id, sourceId, operationId, sourceBasis) => sessionProvenance.recordLaunch(id, sourceId, operationId, sourceBasis),
   });
   const featureHandlers = createFeatureHandlers({
     catalog, ownership, findSessionSource,
@@ -600,10 +600,19 @@ export function startServer(rootDirectory: string): Server {
 
   app.post('/api/sessions/:id/abort', mutationHandlers.abort);
 
+  const idleCloseGuard = createIdleCloseGuard({
+    ownership,
+    hasHeldMessages: id => messageHold.hasPending(id),
+  });
   app.post('/api/sessions/:id/close', async (req: ApplicationRequest, res: ApplicationResponse) => {
-    const { status, body } = await sessionOperations.closeSessionById(req.params.id);
+    const body = requestBody(req);
+    if (body.ifIdle !== undefined && typeof body.ifIdle !== 'boolean') {
+      return res.status(400).json({ error: 'ifIdle must be a boolean' });
+    }
+    const beforeAction = body.ifIdle === true ? idleCloseGuard(req.params.id) : null;
+    const { status, body: resultBody } = await sessionOperations.closeSessionById(req.params.id, { beforeAction });
     if (status >= 200 && status < 300) hibernation.forget(req.params.id);
-    res.status(status).json(body);
+    res.status(status).json(resultBody);
   });
 
   // Permanent: removes the closed session's transcript (and OMP subagent folder).

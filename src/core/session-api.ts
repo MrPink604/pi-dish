@@ -50,6 +50,7 @@ export interface SessionFields<Timestamp = string | number> {
   subagentLive?: boolean;
   parentId?: string | null;
   parentSource?: string | null;
+  parentLaunchBasis?: string | null;
   familyParentId?: string | null;
   routine?: string;
   routineId?: string;
@@ -149,6 +150,7 @@ const fieldDecoders: FieldDecoders = {
   lastActivity: value => value === null || typeof value === 'string' || finite(value) ? value : undefined,
   turnInProgress: optionalBoolean, askPending: optionalBoolean, compacting: optionalBoolean, cwd: nullableString,
   subagentLive: optionalBoolean, parentId: nullableString, parentSource: nullableString,
+  parentLaunchBasis: nullableString,
   familyParentId: nullableString, routine: optionalString, routineId: optionalString,
   routineInvocationId: optionalString, searchSnippet: optionalString, searchScore: optionalNumber,
   hibernation: optionalHibernation, private: optionalBoolean,

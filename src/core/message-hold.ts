@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { dishDir, replaceFileDurably } from './dish-store';
+import { tryCanonicalSessionId } from './session-key';
 import type { LiveSession } from './session-ownership';
 
 export interface PeerSender { id: string; ref: string; name: string }
@@ -16,6 +17,7 @@ interface HoldPorts {
 }
 export interface MessageHold {
   enqueue(sessionId: string, delivery: Delivery, message: string, sender: PeerSender): { held: true; until: string };
+  hasPending(sessionId: string): boolean;
   start(): void;
   wake(sessionId: string): void;
   stop(): void;
@@ -152,6 +154,10 @@ export function createMessageHold(ports: HoldPorts): MessageHold {
       batches = updated;
       schedule();
       return { held: true, until: new Date(until).toISOString() };
+    },
+    hasPending(sessionId: string): boolean {
+      const target = tryCanonicalSessionId(sessionId);
+      return batches.some(batch => batch.sessionId === sessionId || tryCanonicalSessionId(batch.sessionId) === target);
     },
     start(): void { running = true; schedule(); },
     wake(sessionId: string): void {

@@ -15,7 +15,7 @@ import {
 import { resolveSessionRefAmong } from './helper-refs.js';
 import { normalizeModels } from './session-api';
 import {
-  composeSessionCatalog, decodeLaunchParents, decodeRoutineAnnotations,
+  composeSessionCatalog, decodeLaunchParents, decodeLaunchSourceBases, decodeRoutineAnnotations,
   primeSessionObservation, registeredSessionObservation, rpcSessionObservation, withSessionContext,
 } from './session-catalog';
 import sessionProvenance = require('./session-provenance');
@@ -324,7 +324,9 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     const liveChildren = liveSubsessionCandidates(active.map(observation => ({
       id: observation.id, harnessId: observation.harnessId, sessionFile: observation.claimedFile,
     })));
-    const launchParents = decodeLaunchParents(sessionProvenance.readLaunches());
+    const launches = sessionProvenance.readLaunches();
+    const launchParents = decodeLaunchParents(launches);
+    const launchSourceBases = decodeLaunchSourceBases(launches);
     const history: CatalogHistoryObservation[] = [];
     let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
     if (activeOnly) {
@@ -424,6 +426,7 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     return composeSessionCatalog({
       active, history, activeOnly, indexing, discoveryTruncated, discoverySkipped, hidePrivate: !includePrivate,
       launchParents,
+      launchSourceBases,
       routines: decodeRoutineAnnotations(routinesStore.invocationsBySessionId()),
     }, options);
   }

@@ -150,7 +150,7 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
       sessions: true, search: true, usage: true, spawns: true,
       shares: true, pages: true, comments: true, skills: true, harnesses: true,
       resolve: true, docs: true, routines: true, recovery: true, sessionBounces: true,
-      refAliases: true, cacheLifetimes: true, hostHealth: true, push: true, privateUnlock: true,
+      refAliases: true, cacheLifetimes: true, hostHealth: true, push: true, privateUnlock: true, ifIdleClose: true,
       // The page-form protocol (owner view, receipts, fingerprints); bump the name on a breaking change.
       [PAGE_FORMS_CAPABILITY]: true,
       // Review decks under /api/sessions/:id/reviews (src/core/reviews.ts).

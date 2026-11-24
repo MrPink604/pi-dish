@@ -725,4 +725,90 @@ test('peer-session CLI list --active excludes closed bridge ancestors returned i
   assert.equal(fullJson.total, 3);
 });
 
+test('peer-session CLI close --exact --if-idle skips resolve, checks ifIdleClose fail-closed, and spawn sends requestedBySource', async t => {
+  const requests: { method?: string; url?: string; body: Record<string, unknown> | null; sourceHeader?: string | string[] }[] = [];
+  let remoteIfIdleCap = true;
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      let body: Record<string, unknown> | null = null;
+      try { body = record(JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null')); } catch {}
+      requests.push({ method: req.method, url: req.url, body, sourceHeader: req.headers['x-pi-dish-session-source'] });
+      res.setHeader('Content-Type', 'application/json');
+      if (req.url === '/api/hosts') {
+        res.end(JSON.stringify({
+          hosts: [
+            // Local label collides with remote name "framework" to verify exact host routing.
+            { self: true, name: null, label: 'framework', reachable: true, capabilities: { sessions: true, ifIdleClose: true } },
+            { self: false, name: 'framework', label: 'framework-remote', reachable: true, capabilities: { sessions: true, ...(remoteIfIdleCap ? { ifIdleClose: true } : {}) } },
+          ],
+        }));
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/api/harnesses') {
+        res.end(JSON.stringify({ harnesses: [{ id: 'pi', label: 'Pi', available: true }] }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/sessions/new') {
+        res.statusCode = 202;
+        res.end(JSON.stringify({ pending: true, spawnId: 'spawn-basis' }));
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/api/session-spawns/spawn-basis') {
+        res.end(JSON.stringify({ status: 'ready', sessionId: 'child-1' }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/hosts/framework/api/sessions/exact-remote-id/close') {
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const base = await listenServer(server);
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+
+  // Spawn records env vs explicit discovery basis in body and header.
+  await run(['spawn', '--cwd', '/work', '--json'], base);
+  const envSpawn = present(requests.find(r => r.url === '/api/sessions/new'));
+  assert.equal(present(envSpawn.body).requestedBySource, 'env');
+  assert.equal(envSpawn.sourceHeader, 'env');
+
+  await run(['spawn', '--session', 'explicit-caller', '--cwd', '/work', '--json'], base);
+  const explicitSpawn = present(requests.filter(r => r.url === '/api/sessions/new').at(-1));
+  assert.equal(present(explicitSpawn.body).requestedBySource, 'explicit');
+  assert.equal(explicitSpawn.sourceHeader, 'explicit');
+
+  // Exact idle-guarded close goes straight to the remote route without resolve or local fallback.
+  requests.length = 0;
+  await run(['close', 'exact-remote-id', '--host', 'framework', '--exact', '--if-idle'], base);
+  assert.equal(requests.some(r => r.url?.includes('/resolve') || r.url === '/api/sessions'), false, '--exact must not call resolve or list');
+  assert.equal(requests.some(r => r.url === '/api/sessions/exact-remote-id/close'), false, 'must not hit local host');
+  const closeReq = present(requests.find(r => r.url === '/hosts/framework/api/sessions/exact-remote-id/close'));
+  assert.deepEqual(closeReq.body, { ifIdle: true });
+
+  // Older remote without ifIdleClose capability fails closed without posting /close.
+  remoteIfIdleCap = false;
+  requests.length = 0;
+  await assert.rejects(
+    () => run(['close', 'exact-remote-id', '--host', 'framework', '--exact', '--if-idle'], base),
+    (error: unknown) => {
+      assert.match(String(record(error).stderr ?? ''), /cannot verify live idle state: framework does not support idle-guarded close/);
+      return true;
+    },
+  );
+  assert.equal(requests.some(r => r.url?.endsWith('/close')), false, 'must never send /close when ifIdleClose is unsupported');
+
+  // --exact rejects host-prefixed refs to prevent label/alias resolution.
+  await assert.rejects(
+    () => run(['close', 'framework/exact-remote-id', '--exact', '--if-idle'], base),
+    (error: unknown) => {
+      assert.match(String(record(error).stderr ?? ''), /--exact takes a bare route id/);
+      return true;
+    },
+  );
+});
+
 export {};
