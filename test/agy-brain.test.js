@@ -519,3 +519,35 @@ test('parseAgyBrainEntries resolves 3-deep sub-subagent parents to real brain tr
     assert.equal(agyBrain.hasActiveAgyBrainWork(escapeRootId), false, 'symlinked transcript outside brain root is ignored');
     assert.equal(agyBrain.hasActiveAgyBrainWork(rootId, new Set(), { remaining: 1 }), false, 'node budget bounds recursive walk');
 });
+test('parseAgyBrainEntries clears unclosed pendingCalls on USER_INPUT so subsequent tool results align', () => {
+    const convId = 'ffffffff-1111-4111-8111-111111111111';
+    const transcript = (0, test_types_js_1.present)(agyBrain.agyBrainTranscriptPath(convId), 'transcript path');
+    writeJsonl(transcript, [
+        { step_index: 0, type: 'USER_INPUT', status: 'DONE', created_at: '2026-11-20T12:00:00Z', content: 'First prompt' },
+        {
+            step_index: 1,
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            created_at: '2026-11-20T12:00:01Z',
+            tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('aborted-cmd') } }],
+        },
+        // No tool result arrives for aborted-cmd before the next user prompt.
+        { step_index: 2, type: 'USER_INPUT', status: 'DONE', created_at: '2026-11-20T12:01:00Z', content: 'Second prompt' },
+        {
+            step_index: 3,
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            created_at: '2026-11-20T12:01:01Z',
+            tool_calls: [{ name: 'read_file', args: { Path: JSON.stringify('/repo/ok.ts') } }],
+        },
+        { step_index: 4, type: 'GENERIC', status: 'DONE', created_at: '2026-11-20T12:01:02Z', content: 'file body' },
+    ]);
+    const entries = (0, test_types_js_1.records)(agyBrain.parseAgyBrainEntries(fs.readFileSync(transcript, 'utf8'), transcript));
+    const messages = entries.filter(e => e.type === 'message').map(e => (0, test_types_js_1.record)(e.message));
+    const secondAssistant = messages.filter(m => m.role === 'assistant')[1];
+    const readCall = (0, test_types_js_1.records)(secondAssistant.content).find(b => b.type === 'toolCall');
+    const toolResult = messages.find(m => m.role === 'toolResult');
+    assert.ok(readCall && toolResult, 'second turn tool call and tool result exist');
+    assert.equal(toolResult.toolCallId, readCall.id, 'tool result matches second turn read_file, not aborted run_command');
+    assert.equal(toolResult.toolName, readCall.name);
+});

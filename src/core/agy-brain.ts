@@ -695,6 +695,8 @@ export function parseAgyBrainEntries(
     const type = text(step.type);
 
     if (type === 'USER_INPUT') {
+      // A new user prompt starts a fresh turn; discard any unclosed tool calls from an aborted turn.
+      pendingCalls.length = 0;
       const body = stripUserRequestWrapper(text(step.content));
       if (!body) continue;
       push('message', {
