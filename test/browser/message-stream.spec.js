@@ -284,3 +284,65 @@ wakeTest.describe('production wake recovery', () => {
         });
     }
 });
+(0, fixtures_js_1.test)('stop() preserves status written by other components and by terminal stream_error / session_ended events', async ({ page, fleet }) => {
+    await setup(page, fleet);
+    // 1. When status writes to #status and another component overwrites it, stop() must not wipe #status.
+    await page.evaluate(() => {
+        const statusEl = fixtureElement(document.getElementById('status'), '#status');
+        window.streamStatus.length = 0;
+        const domStream = PiDishBrowser.createMessageStream({
+            document,
+            sessionState: fixtureApp.features.sessionState,
+            endpoint: () => ({ base: 'http://original', token: null }),
+            ticket: () => Promise.resolve('t'),
+            source: url => {
+                const s = new EventTarget();
+                Object.assign(s, { url, readyState: 0, close() { this.readyState = 2; } });
+                window.streamSources.push(s);
+                return s;
+            },
+            activity: fixtureApp.features.sessionActivity,
+            renderer: fixtureApp.features.messageRenderer,
+            streaming: fixtureApp.features.streamingRenderer,
+            tools: fixtureApp.features.liveToolsController,
+            delivery: fixtureApp.features.promptDelivery,
+            extensionUI: fixtureApp.features.extensionUI,
+            sideChat: { apply() { } },
+            status: (msg, type) => {
+                statusEl.textContent = msg;
+                window.streamStatus.push([msg, type]);
+            },
+            catchup() { }, refresh() { }, artifacts() { }, pinned: () => false, follow: () => false,
+            scroll() { }, jump() { }, highlight() { }, select() { }, deleteCached() { },
+            loadSessions: () => Promise.resolve(),
+        });
+        domStream.start();
+        const first = window.streamSources.at(-1);
+        first.onerror?.call(first, new Event('error'));
+        // Another component updates #status after the stream error.
+        statusEl.textContent = 'Model changed';
+        domStream.stop();
+        // 2. stream_error and session_ended arriving while activeErrorStatus is set must not have their status wiped by stop().
+        domStream.start();
+        const errSource = window.streamSources.at(-1);
+        errSource.onerror?.call(errSource, new Event('error'));
+        // Re-starting on the same selection uses disconnect() (keeping activeErrorStatus set) until the replacement opens.
+        domStream.start();
+        const second = window.streamSources.at(-1);
+        second.dispatchEvent(new MessageEvent('stream_error', { data: JSON.stringify({ error: 'Session not active' }) }));
+        window.streamStatus.push(['after-stream-error', statusEl.textContent]);
+        domStream.start();
+        const errSource2 = window.streamSources.at(-1);
+        errSource2.onerror?.call(errSource2, new Event('error'));
+        domStream.start();
+        const third = window.streamSources.at(-1);
+        third.dispatchEvent(new MessageEvent('session_ended', { data: '{}' }));
+        window.streamStatus.push(['after-session-ended', statusEl.textContent]);
+        domStream.dispose();
+    });
+    const statusLog = await page.evaluate(() => window.streamStatus);
+    (0, fixtures_js_1.expect)(await page.locator('#status').textContent()).toBe('Session ended');
+    (0, fixtures_js_1.expect)(statusLog).toContainEqual(['after-stream-error', 'Session not active']);
+    (0, fixtures_js_1.expect)(statusLog).toContainEqual(['after-session-ended', 'Session ended']);
+    (0, fixtures_js_1.expect)(statusLog.filter(entry => entry[0] === '')).toEqual([]);
+});

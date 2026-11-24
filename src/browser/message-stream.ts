@@ -63,13 +63,30 @@ export function createMessageStream(options: {
 }) {
   const { document, sessionState, renderer, tools } = options;
   let source: EventSource | null = null, reconnect: ReturnType<typeof setTimeout> | null = null, connectionGeneration = 0, disposed = false;
-  let current: { owner: SelectionOwner; base: string } | null = null, failures = 0, opened = false, statusActive = false;
+  let current: { owner: SelectionOwner; base: string } | null = null, failures = 0, opened = false;
+  let activeErrorStatus: string | null = null, statusObservedInDom = false;
   let lastActivityAt = -Infinity, resyncOnInit = false;
   function ownsConnection(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number) {
     return !disposed && generation === connectionGeneration && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === target.base;
   }
-  function setErrorStatus(message: string) { statusActive = true; options.status(message, 'error'); }
-  function clearErrorStatus() { if (statusActive) { statusActive = false; options.status(''); } }
+  function setErrorStatus(message: string) {
+    activeErrorStatus = message;
+    options.status(message, 'error');
+    const el = document.getElementById('status');
+    statusObservedInDom = !!el && el.textContent === message;
+  }
+  function clearErrorStatus() {
+    if (activeErrorStatus === null) return;
+    const expected = activeErrorStatus;
+    const observed = statusObservedInDom;
+    activeErrorStatus = null;
+    statusObservedInDom = false;
+    if (observed) {
+      const el = document.getElementById('status');
+      if (el && el.textContent !== expected) return;
+    }
+    options.status('');
+  }
   function disconnect() { connectionGeneration++; clearTimeout(reconnect ?? undefined); reconnect = null; source?.close(); source = null; }
   function stop() {
     disconnect();
@@ -174,9 +191,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
       opened = true;
       lastActivityAt = Date.now();
       failures = 0;
-      statusActive = false;
       if (target.base === '') options.originFailure?.(null);
-      options.status('');
+      clearErrorStatus();
     };
 
     addOwnedListener('init', (e) => {
@@ -200,6 +216,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     });
 
     addOwnedListener('stream_error', (e) => {
+      activeErrorStatus = null;
+      statusObservedInDom = false;
       try {
         const data = parseRecord(e.data || '{}');
         options.status(typeof data.error === 'string' && data.error || 'Stream error', 'error');
@@ -419,6 +437,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     });
 
     addOwnedListener('session_ended', () => {
+      activeErrorStatus = null;
+      statusObservedInDom = false;
       options.activity.endAbort(sessionKey(hostId, sessionId));
       options.activity.setCompacting(false);
       options.activity.setTurn(false);
