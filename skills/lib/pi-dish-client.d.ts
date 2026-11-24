@@ -170,7 +170,7 @@ declare function requestText(base: string, pathname: string, init?: RequestOptio
 declare function hostPath(host: unknown, pathname: string): string;
 declare function api(base: string, host: unknown, pathname: string, init?: RequestOptions): Promise<HttpResult>;
 declare function jsonInit(body: unknown, headers?: Record<string, string>): RequestOptions;
-declare function fleetHosts(base: string): Promise<unknown[] | null>;
+declare function fleetHosts(base: string, signal?: AbortSignal): Promise<unknown[] | null>;
 /** Absent capability means unsupported — mixed-version fleets are the norm. */
 declare function hostSupports(value: unknown, capability: string): boolean;
 /**
@@ -196,13 +196,13 @@ declare function entryForHostName(base: string, host: unknown): Promise<FleetHos
  * Resolve locally for hosts that predate /api/sessions/resolve or its ref
  * aliases: a short alias becomes the full route id the host does understand.
  */
-declare function resolveSessionClientSide(base: string, host: unknown, id: string, exactOnly?: boolean): Promise<SessionRow>;
+declare function resolveSessionClientSide(base: string, host: unknown, id: string, exactOnly?: boolean, init?: RequestOptions): Promise<SessionRow>;
 /**
  * Resolve a ref to `{ host, id, session, ref }`. A full id resolves to
  * itself, so existing callers passing bare ids are unaffected; `ref` is the
  * short handle the owning host recommends for it, when it serves one.
  */
-declare function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: string | null): Promise<ResolvedSession>;
+declare function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: string | null, init?: RequestOptions): Promise<ResolvedSession>;
 /**
  * Merge per-host search results into one ranked list. The client is the
  * aggregator: there is no server-side merged endpoint, and there must not be

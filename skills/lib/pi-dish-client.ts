@@ -323,7 +323,10 @@ function httpError(status: number, data: unknown, statusText?: string) {
 async function request(base: string, pathname: string, init: RequestOptions = {}): Promise<HttpResult> {
   const response = await fetch(new URL(pathname, base), { ...init, headers: authHeaders(init.headers) });
   let data: unknown;
-  try { data = await response.json(); } catch { data = null; }
+  try { data = await response.json(); } catch (error) {
+    if (init.signal?.aborted) throw init.signal.reason ?? error;
+    data = null;
+  }
   if (!response.ok) throw httpError(response.status, data);
   return { data, status: response.status };
 }
@@ -380,9 +383,9 @@ function jsonInit(body: unknown, headers: Record<string, string> = {}): RequestO
 // Memoized per process: ref resolution, capability gating and `--host`
 // validation all want the same list, and a fleet probe is not free.
 let fleetPromise: Promise<unknown[] | null> | null = null;
-function fleetHosts(base: string): Promise<unknown[] | null> {
+function fleetHosts(base: string, signal?: AbortSignal): Promise<unknown[] | null> {
   if (!fleetPromise) {
-    fleetPromise = request(base, '/api/hosts')
+    fleetPromise = request(base, '/api/hosts', signal ? { signal } : undefined)
       .then(({ data }) => wireArray(record(data ?? {}).hosts))
       // A server too old (or too closed) to answer is not an error here: the
       // callers all degrade to capability-absent behaviour.
@@ -526,8 +529,8 @@ function sessionCatalog(data: unknown) {
  * Resolve locally for hosts that predate /api/sessions/resolve or its ref
  * aliases: a short alias becomes the full route id the host does understand.
  */
-async function resolveSessionClientSide(base: string, host: unknown, id: string, exactOnly?: boolean): Promise<SessionRow> {
-  const { data } = await api(base, host, '/api/sessions');
+async function resolveSessionClientSide(base: string, host: unknown, id: string, exactOnly?: boolean, init?: RequestOptions): Promise<SessionRow> {
+  const { data } = await api(base, host, '/api/sessions', init);
   const catalog = [...sessionCatalog(data).values()];
   if (!exactOnly && String(id).length < 4) throw new Error('id prefix must be at least 4 characters');
   const { session, matches } = resolveSessionRefAmong(catalog, id, { exactOnly });
@@ -541,7 +544,7 @@ async function resolveSessionClientSide(base: string, host: unknown, id: string,
  * itself, so existing callers passing bare ids are unaffected; `ref` is the
  * short handle the owning host recommends for it, when it serves one.
  */
-async function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: string | null): Promise<ResolvedSession> {
+async function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: string | null, init?: RequestOptions): Promise<ResolvedSession> {
   const ref = parseRef(rawRef);
   let host: unknown = hostFlag || null;
   let entry: FleetHost | null = null;
@@ -566,7 +569,7 @@ async function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: strin
 
   if (hostSupports(entry, 'resolve')) {
     try {
-      const response = await api(base, host, `/api/sessions/resolve?id=${encodeURIComponent(ref.id)}`);
+      const response = await api(base, host, `/api/sessions/resolve?id=${encodeURIComponent(ref.id)}`, init);
       const data: ResolveResponse = record(response.data ?? {});
       if (isSessionRow(data.session)) {
         // The provenance form is machine-produced and whole: the server's
@@ -587,7 +590,7 @@ async function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: strin
       if (errorStatus(e) !== 404) throw e;
     }
   }
-  const session = await resolveSessionClientSide(base, host, ref.id, ref.hostIdForm);
+  const session = await resolveSessionClientSide(base, host, ref.id, ref.hostIdForm, init);
   return { host, id: session.id, session };
 }
 

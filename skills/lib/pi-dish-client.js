@@ -381,7 +381,8 @@ async function request(base, pathname, init = {}) {
   let data;
   try {
     data = await response.json();
-  } catch {
+  } catch (error) {
+    if (init.signal?.aborted) throw init.signal.reason ?? error;
     data = null;
   }
   if (!response.ok) throw httpError(response.status, data);
@@ -426,9 +427,9 @@ function jsonInit(body, headers = {}) {
   return { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body || {}) };
 }
 var fleetPromise = null;
-function fleetHosts(base) {
+function fleetHosts(base, signal) {
   if (!fleetPromise) {
-    fleetPromise = request(base, "/api/hosts").then(({ data }) => wireArray(record2(data ?? {}).hosts)).catch(() => null);
+    fleetPromise = request(base, "/api/hosts", signal ? { signal } : void 0).then(({ data }) => wireArray(record2(data ?? {}).hosts)).catch(() => null);
   }
   return fleetPromise;
 }
@@ -539,8 +540,8 @@ function sessionCatalog(data) {
   for (const session of list) if (session?.id && !byId.has(session.id)) byId.set(session.id, session);
   return byId;
 }
-async function resolveSessionClientSide(base, host, id, exactOnly) {
-  const { data } = await api(base, host, "/api/sessions");
+async function resolveSessionClientSide(base, host, id, exactOnly, init) {
+  const { data } = await api(base, host, "/api/sessions", init);
   const catalog = [...sessionCatalog(data).values()];
   if (!exactOnly && String(id).length < 4) throw new Error("id prefix must be at least 4 characters");
   const { session, matches } = resolveSessionRefAmong(catalog, id, { exactOnly });
@@ -548,7 +549,7 @@ async function resolveSessionClientSide(base, host, id, exactOnly) {
   if (matches.length > 1) throw ambiguousRefError(id, matches);
   throw new Error(`Session not found: ${id}`);
 }
-async function resolveSessionRef(base, rawRef, hostFlag) {
+async function resolveSessionRef(base, rawRef, hostFlag, init) {
   const ref = parseRef(rawRef);
   let host = hostFlag || null;
   let entry = null;
@@ -568,7 +569,7 @@ async function resolveSessionRef(base, rawRef, hostFlag) {
   }
   if (hostSupports(entry, "resolve")) {
     try {
-      const response = await api(base, host, `/api/sessions/resolve?id=${encodeURIComponent(ref.id)}`);
+      const response = await api(base, host, `/api/sessions/resolve?id=${encodeURIComponent(ref.id)}`, init);
       const data = record2(response.data ?? {});
       if (isSessionRow(data.session)) {
         if (ref.hostIdForm && data.session.id !== ref.id) throw new Error(`Session not found: ${ref.id}`);
@@ -582,7 +583,7 @@ async function resolveSessionRef(base, rawRef, hostFlag) {
       if (errorStatus(e) !== 404) throw e;
     }
   }
-  const session = await resolveSessionClientSide(base, host, ref.id, ref.hostIdForm);
+  const session = await resolveSessionClientSide(base, host, ref.id, ref.hostIdForm, init);
   return { host, id: session.id, session };
 }
 function activityMs(value) {

@@ -751,6 +751,243 @@ test('mixed-version peer without /api/reviews/:id falls back through launch prov
   assert.deepEqual(record(record(JSON.parse(run.stdout())).answers).quick_mag, { value: 'tab', default: true });
 });
 
+test('unqualified --session carries on to peers on local miss or pre-reviews local 404, while host-qualified stays pinned', async t => {
+  const reviewId = 'rv_1122334455667788';
+  const SHARED_SESSION = '2026-11-23T12-00-00-shared01';
+  let localMode: 'no-such-review' | 'pre-reviews' = 'no-such-review';
+  let peerCalls = 0;
+  const fake = http.createServer((req, res) => {
+    const url = req.url ?? '';
+    res.setHeader('Content-Type', 'application/json');
+    if (url === '/api/host') return res.end(JSON.stringify({ hostId: '22222222-3333-4444-8555-666666666666', label: 'framework', capabilities: { reviewsV1: true } }));
+    if (url === '/api/hosts') {
+      return res.end(JSON.stringify({
+        hosts: [
+          { self: true, name: null, hostId: '22222222-3333-4444-8555-666666666666', label: 'framework', reachable: true, capabilities: localMode === 'pre-reviews' ? {} : { reviewsV1: true, resolve: true } },
+          { name: 'beelink', hostId: '11111111-2222-4333-8444-555555555555', label: 'beelink', reachable: true, capabilities: { reviewsV1: true, resolve: true } },
+        ],
+      }));
+    }
+    if (url === `/api/sessions/${SHARED_SESSION}/reviews/${reviewId}`) {
+      res.statusCode = 404;
+      if (localMode === 'pre-reviews') { res.setHeader('Content-Type', 'text/plain'); return res.end('Not found'); }
+      return res.end(JSON.stringify({ error: 'no such review' }));
+    }
+    if (url.startsWith('/hosts/beelink/')) peerCalls++;
+    if (url === `/hosts/beelink/api/sessions/resolve?id=${SHARED_SESSION}`) {
+      return res.end(JSON.stringify({ session: { id: SHARED_SESSION, name: 'Shared on beelink' } }));
+    }
+    if (url === `/hosts/beelink/api/sessions/${SHARED_SESSION}/reviews/${reviewId}`) {
+      return res.end(JSON.stringify({
+        review: { id: reviewId, sessionId: SHARED_SESSION, status: 'submitted' },
+        result: { reviewId, status: 'submitted', answers: { quick_mag: { value: 'vial', default: false } } },
+      }));
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>(resolve => fake.close(() => resolve())));
+  const address = fake.address();
+  assert.ok(address && typeof address !== 'string');
+  const fakeBase = `http://127.0.0.1:${address.port}`;
+
+  // 1. Local session exists but has no such review -> unqualified --session discovers it on beelink.
+  const fromPeer = cli(['answers', reviewId, '--session', SHARED_SESSION], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: 'other-local' });
+  assert.equal(await fromPeer.exited, 0, fromPeer.stderr());
+  assert.equal(record(JSON.parse(fromPeer.stdout())).reviewId, reviewId);
+  assert.ok(peerCalls > 0);
+
+  // 2. Pre-reviews local server (bodiless 404) -> unqualified --session still discovers it on beelink.
+  localMode = 'pre-reviews';
+  const fromPreReviews = cli(['answers', reviewId, '--session', SHARED_SESSION], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: 'other-local' });
+  assert.equal(await fromPreReviews.exited, 0, fromPreReviews.stderr());
+  assert.equal(record(JSON.parse(fromPreReviews.stdout())).reviewId, reviewId);
+
+  // 3. Explicitly host-qualified (`self/<session>` and `--host self`) stays pinned and never asks peers.
+  localMode = 'no-such-review';
+  peerCalls = 0;
+  const pinnedRef = cli(['answers', reviewId, '--session', `self/${SHARED_SESSION}`], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: 'other-local' });
+  assert.equal(await pinnedRef.exited, 1);
+  assert.match(pinnedRef.stderr(), /no such review/);
+  assert.equal(peerCalls, 0, 'host-qualified --session self/<id> must stay pinned');
+
+  const pinnedFlag = cli(['answers', reviewId, '--host', 'self', '--session', SHARED_SESSION], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: 'other-local' });
+  assert.equal(await pinnedFlag.exited, 1);
+  assert.match(pinnedFlag.stderr(), /no such review/);
+  assert.equal(peerCalls, 0, '--host self must stay pinned');
+});
+
+test('empty or malformed HTTP 200 peer is skipped in favor of a valid peer, and fails non-zero when none is valid', async t => {
+  const reviewId = 'rv_2233445566778899';
+  const OWNER_SESSION = '2026-11-23T12-30-00-valid001';
+  let goodEnabled = true;
+  let badBody: unknown = {};
+  const fake = http.createServer((req, res) => {
+    const url = req.url ?? '';
+    res.setHeader('Content-Type', 'application/json');
+    if (url === '/api/hosts') {
+      return res.end(JSON.stringify({
+        hosts: [
+          { self: true, name: null, hostId: '22222222-3333-4444-8555-666666666666', label: 'framework', reachable: true, capabilities: { reviewsV1: true } },
+          { name: 'badpeer', hostId: '33333333-4444-4555-8666-777777777777', label: 'badpeer', reachable: true, capabilities: { reviewsV1: true } },
+          ...(goodEnabled ? [{ name: 'goodpeer', hostId: '44444444-5555-4666-8777-888888888888', label: 'goodpeer', reachable: true, capabilities: { reviewsV1: true } }] : []),
+        ],
+      }));
+    }
+    if (url === `/api/reviews/${reviewId}`) { res.statusCode = 404; return res.end(JSON.stringify({ error: 'no such review' })); }
+    if (url === `/hosts/badpeer/api/reviews/${reviewId}`) return res.end(JSON.stringify(badBody));
+    if (url === `/hosts/goodpeer/api/reviews/${reviewId}`) {
+      return res.end(JSON.stringify({
+        review: { id: reviewId, sessionId: OWNER_SESSION, status: 'submitted' },
+        result: { reviewId, status: 'submitted', answers: { quick_mag: { value: 'tab', default: true } } },
+      }));
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: 'no such review' }));
+  });
+  await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>(resolve => fake.close(() => resolve())));
+  const address = fake.address();
+  assert.ok(address && typeof address !== 'string');
+  const fakeBase = `http://127.0.0.1:${address.port}`;
+
+  // 1. First peer returns empty HTTP 200 {}, second peer returns valid review -> valid peer wins.
+  const skippedEmpty = cli(['answers', reviewId], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: '' });
+  assert.equal(await skippedEmpty.exited, 0, skippedEmpty.stderr());
+  assert.equal(record(JSON.parse(skippedEmpty.stdout())).reviewId, reviewId);
+
+  // 2. First peer returns mismatched review id -> skipped, valid peer wins.
+  badBody = {
+    review: { id: 'rv_0000000000000000', sessionId: OWNER_SESSION, status: 'submitted' },
+    result: { reviewId: 'rv_0000000000000000', status: 'submitted', answers: {} },
+  };
+  const skippedWrongId = cli(['answers', reviewId], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: '' });
+  assert.equal(await skippedWrongId.exited, 0, skippedWrongId.stderr());
+  assert.equal(record(JSON.parse(skippedWrongId.stdout())).reviewId, reviewId);
+
+  // 3. Only the empty-200 peer exists -> never prints {} or exits 0.
+  goodEnabled = false;
+  badBody = {};
+  const onlyBad = cli(['answers', reviewId], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: '' });
+  assert.equal(await onlyBad.exited, 1);
+  assert.equal(onlyBad.stdout().trim(), '');
+  assert.match(onlyBad.stderr(), /badpeer \(malformed review response/);
+});
+
+test('stalled peer bodies obey the end-to-end discovery deadline and wait --timeout counts discovery time', async t => {
+  const reviewId = 'rv_33445566778899aa';
+  const OWNER_SESSION = '2026-11-23T13-00-00-owner001';
+  let goodPeerMode: 'absent' | 'submitted' | 'slow-open' = 'submitted';
+  const openSockets = new Set<net.Socket>();
+  const fake = http.createServer((req, res) => {
+    const url = req.url ?? '';
+    res.setHeader('Content-Type', 'application/json');
+    if (url === '/api/hosts') {
+      return res.end(JSON.stringify({
+        hosts: [
+          { self: true, name: null, hostId: '22222222-3333-4444-8555-666666666666', label: 'framework', reachable: true, capabilities: { reviewsV1: true, resolve: true } },
+          { name: 'stalled', hostId: '55555555-6666-4777-8888-999999999999', label: 'stalled', reachable: true, capabilities: { reviewsV1: true, resolve: true } },
+          ...(goodPeerMode !== 'absent'
+            ? [{ name: 'beelink', hostId: '11111111-2222-4333-8444-555555555555', label: 'beelink', reachable: true, capabilities: { reviewsV1: true, resolve: true } }]
+            : []),
+        ],
+      }));
+    }
+    // Stalled peer flushes 200 headers and never finishes the body (both lookup and --session resolve).
+    if (url === `/hosts/stalled/api/reviews/${reviewId}` || url.startsWith('/hosts/stalled/api/sessions/resolve')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.flushHeaders();
+      res.write('{');
+      if (req.socket) openSockets.add(req.socket);
+      req.on('close', () => { if (req.socket) openSockets.delete(req.socket); });
+      return;
+    }
+    if (url === `/hosts/beelink/api/sessions/resolve?id=${OWNER_SESSION}`) {
+      return res.end(JSON.stringify({ session: { id: OWNER_SESSION, name: 'Beelink owner' } }));
+    }
+    if (url === `/hosts/beelink/api/reviews/${reviewId}` || url === `/hosts/beelink/api/sessions/${OWNER_SESSION}/reviews/${reviewId}`) {
+      if (goodPeerMode === 'slow-open') {
+        const timer = setTimeout(() => {
+          if (res.destroyed) return;
+          res.end(JSON.stringify({
+            review: { id: reviewId, sessionId: OWNER_SESSION, status: 'open' },
+            result: { reviewId, status: 'open', answers: {} },
+          }));
+        }, 450);
+        timer.unref();
+        return;
+      }
+      return res.end(JSON.stringify({
+        review: { id: reviewId, sessionId: OWNER_SESSION, status: 'submitted' },
+        result: { reviewId, status: 'submitted', answers: { quick_mag: { value: 'vial', default: false } } },
+      }));
+    }
+    if (url.startsWith(`/hosts/beelink/api/sessions/${OWNER_SESSION}/reviews/${reviewId}/wait`)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.flushHeaders();
+      const timer = setTimeout(() => {
+        if (!res.writableEnded && !res.destroyed) res.end(JSON.stringify({ result: { reviewId, status: 'open' } }));
+      }, 5000);
+      timer.unref();
+      req.on('close', () => clearTimeout(timer));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: url.includes('/sessions/') && !url.includes('/reviews/') ? 'Session not found' : 'no such review' }));
+  });
+  await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    for (const sock of openSockets) { try { sock.destroy(); } catch {} }
+    await new Promise<void>(resolve => fake.close(() => resolve()));
+  });
+  const address = fake.address();
+  assert.ok(address && typeof address !== 'string');
+  const fakeBase = `http://127.0.0.1:${address.port}`;
+
+  // 1. Stalled peer does not delay a healthy peer on either bare lookup or --session fan-out.
+  const tFast = Date.now();
+  const fastBare = cli(['answers', reviewId], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: '' });
+  assert.equal(await fastBare.exited, 0, fastBare.stderr());
+  assert.equal(record(JSON.parse(fastBare.stdout())).reviewId, reviewId);
+  assert.ok(Date.now() - tFast < 3000, 'healthy peer won without waiting for stalled peer');
+
+  const tSess = Date.now();
+  const fastSess = cli(['answers', reviewId, '--session', OWNER_SESSION], undefined, { PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: '' });
+  assert.equal(await fastSess.exited, 0, fastSess.stderr());
+  assert.equal(record(JSON.parse(fastSess.stdout())).reviewId, reviewId);
+  assert.ok(Date.now() - tSess < 3000, '--session fan-out did not wait for stalled peer');
+
+  // 2. When only a stalled peer exists, both --session and bare lookup abort its stalled body at the deadline.
+  goodPeerMode = 'absent';
+  const tSessionTimeout = Date.now();
+  const stalledSession = cli(['answers', reviewId, '--session', OWNER_SESSION], undefined, {
+    PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: '', PI_DISH_REVIEW_LOOKUP_TIMEOUT_MS: '350',
+  });
+  assert.equal(await stalledSession.exited, 1);
+  assert.match(stalledSession.stderr(), /stalled \(timed out/);
+  assert.ok(Date.now() - tSessionTimeout < 3000, '--session stalled body aborted at discovery deadline');
+
+  // 3. Bare `wait --timeout 1` caps discovery at 1s (NOT 15s) even without overriding lookup timeout.
+  const tWaitStalled = Date.now();
+  const stalledWait = cli(['wait', reviewId, '--timeout', '1'], undefined, {
+    PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: '',
+  });
+  assert.equal(await stalledWait.exited, 1);
+  assert.match(stalledWait.stderr(), /stalled \(timed out/);
+  assert.ok(Date.now() - tWaitStalled < 3500, 'bare wait --timeout 1 capped discovery at 1s instead of 15s');
+
+  // 4. Discovery latency is counted against `wait --timeout`: 450ms discovery + remaining wait ends right around 1s.
+  goodPeerMode = 'slow-open';
+  const tWaitBudget = Date.now();
+  const budgetedWait = cli(['wait', reviewId, '--timeout', '1'], undefined, {
+    PI_DISH_URL: fakeBase, PI_DISH_SESSION_ID: '',
+  });
+  assert.equal(await budgetedWait.exited, 0, budgetedWait.stderr());
+  assert.match(budgetedWait.stdout(), /No answer within 1 s/);
+  assert.ok(Date.now() - tWaitBudget < 2500, 'discovery time counted against wait --timeout');
+});
+
 test('CLI wait retries dropped or malformed responses and exits non-zero when retries run out', async () => {
   const reviewId = 'rv_0123456789abcdef';
   let attempts = 0;

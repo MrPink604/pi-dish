@@ -67,7 +67,9 @@ paths, or https URLs. See skills/pi-dish-review/SKILL.md.`;
 const CLIENT_HEADERS: Record<string, string> = { 'X-Pi-Dish-Client': '1' };
 const REVIEW_ID_RE = /^rv_[0-9a-f]{16}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PEER_LOOKUP_TIMEOUT_MS = 15_000;
+const VALID_STATUSES = new Set(['open', 'submitted', 'cancelled']);
+const LOOKUP_TIMEOUT_MS = process.env.PI_DISH_REVIEW_LOOKUP_TIMEOUT_MS && Number.isFinite(Number(process.env.PI_DISH_REVIEW_LOOKUP_TIMEOUT_MS))
+  ? Math.max(50, Number(process.env.PI_DISH_REVIEW_LOOKUP_TIMEOUT_MS)) : 15_000;
 const WAIT_RETRY_MS = process.env.PI_DISH_REVIEW_WAIT_RETRY_MS && Number.isFinite(Number(process.env.PI_DISH_REVIEW_WAIT_RETRY_MS))
   ? Math.max(0, Number(process.env.PI_DISH_REVIEW_WAIT_RETRY_MS)) : 2000;
 const WAIT_MAX_RETRIES = process.env.PI_DISH_REVIEW_WAIT_RETRIES && Number.isFinite(Number(process.env.PI_DISH_REVIEW_WAIT_RETRIES))
@@ -78,14 +80,20 @@ const OPEN_LATER = 'the deck stays open in the transcript; the answers will arri
 type ReviewCommand = 'wait' | 'answers' | 'cancel';
 interface ExplicitHost { host: string | null; entry: FleetHost | null }
 interface SearchReport { asked: string[]; unreachable: string[]; unsupported: string[]; failed: string[]; staleLookup: string[] }
+interface ValidReviewPayload { review: Record<string, unknown>; result: Record<string, unknown>; sessionId: string }
+interface DiscoveryBudget {
+  readonly signal: AbortSignal;
+  abort(reason?: unknown): void;
+  dispose(): void;
+}
 
 // Populated lazily only when /api/hosts or /api/host is queried, so local fast paths
 // and retry-only error paths never issue extra HTTP requests.
 let cachedFleet: unknown[] | null | undefined;
 let cachedSelfLabel: string | null | undefined;
 
-async function loadFleet(base: string): Promise<unknown[] | null> {
-  if (cachedFleet === undefined) cachedFleet = await fleetHosts(base);
+async function loadFleet(base: string, signal?: AbortSignal): Promise<unknown[] | null> {
+  if (cachedFleet === undefined) cachedFleet = await fleetHosts(base, signal);
   if (cachedSelfLabel === undefined && cachedFleet) {
     const self = cachedFleet.find(entry => fleetHost(entry).self);
     const label = self ? fleetHost(self).label : null;
@@ -97,7 +105,9 @@ async function loadFleet(base: string): Promise<unknown[] | null> {
 async function ensureSelfLabel(base: string, host: string | null, error: unknown): Promise<void> {
   if (host !== null || cachedSelfLabel !== undefined || typeof errorStatus(error) !== 'number') return;
   try {
-    const label = record((await api(base, null, '/api/host', peerInit({}))).data ?? {}).label;
+    const init: RequestOptions = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? { signal: AbortSignal.timeout(Math.min(2000, LOOKUP_TIMEOUT_MS)) } : {};
+    const label = record((await api(base, null, '/api/host', init)).data ?? {}).label;
     cachedSelfLabel = typeof label === 'string' && label ? label : null;
   } catch { cachedSelfLabel = null; }
 }
@@ -108,16 +118,58 @@ const whereAsked = (base: string, host: string | null) =>
 const reviewsPath = (sessionId: unknown, rest = '') =>
   `/api/sessions/${encodeURIComponent(String(sessionId))}/reviews${rest}`;
 const isBodiless404 = (error: unknown) => errorStatus(error) === 404 && !errorBody(error).error;
+const isNoSuchReview = (error: unknown) => errorStatus(error) === 404 && errorBody(error).error === 'no such review';
 const peerSupportsReviews = (entry: FleetHost) => !entry.capabilities || hostSupports(entry, 'reviewsV1');
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 
 function isSessionMissing(error: unknown): boolean {
   const status = errorStatus(error), msg = errorBody(error).error;
   return (status === 404 && msg === 'Session not found') || (status === 400 && msg === 'Invalid session ID');
 }
 
-function peerInit(headers: Record<string, string> = CLIENT_HEADERS): RequestOptions {
-  if (typeof AbortSignal === 'undefined' || typeof AbortSignal.timeout !== 'function') return { headers };
-  return { headers, signal: AbortSignal.timeout(PEER_LOOKUP_TIMEOUT_MS) };
+/** Strict validation so an empty/partial/mismatched HTTP 200 never passes as a valid review. */
+function parseReviewPayload(payload: unknown, expectedReviewId: string): ValidReviewPayload | null {
+  if (!isPlainObject(payload)) return null;
+  const rev = payload.review, res = payload.result;
+  if (!isPlainObject(rev) || !isPlainObject(res)) return null;
+  if (rev.id !== expectedReviewId || res.reviewId !== expectedReviewId) return null;
+  if (typeof rev.sessionId !== 'string' || !rev.sessionId) return null;
+  if (typeof rev.status !== 'string' || !VALID_STATUSES.has(rev.status)) return null;
+  if (typeof res.status !== 'string' || !VALID_STATUSES.has(res.status)) return null;
+  if (res.status === 'submitted' && !isPlainObject(res.answers)) return null;
+  return { review: rev, result: res, sessionId: rev.sessionId };
+}
+
+function parseCancelledReview(payload: unknown, expectedReviewId: string): Record<string, unknown> | null {
+  if (!isPlainObject(payload) || !isPlainObject(payload.review)) return null;
+  const rev = payload.review;
+  return rev.id === expectedReviewId && rev.status === 'cancelled' ? rev : null;
+}
+
+/** One end-to-end AbortSignal budget covering headers and body reads across all discovery calls. */
+function createDiscoveryBudget(waitDeadline: number): DiscoveryBudget {
+  const remaining = Math.min(LOOKUP_TIMEOUT_MS, Math.max(0, waitDeadline - Date.now()));
+  const controller = new AbortController();
+  const label = remaining < 1000 ? `${Math.round(remaining)}ms` : `${Math.round(remaining / 100) / 10}s`;
+  const abortTimedOut = () => controller.abort(new Error(`timed out after ${label}`));
+  if (remaining <= 0) {
+    abortTimedOut();
+    return { signal: controller.signal, abort: () => {}, dispose: () => {} };
+  }
+  const timer = setTimeout(abortTimedOut, remaining);
+  timer.unref();
+  return {
+    signal: controller.signal,
+    abort(reason?: unknown) { clearTimeout(timer); controller.abort(reason); },
+    dispose() { clearTimeout(timer); },
+  };
+}
+
+function withSignal(signal: AbortSignal | undefined, headers: Record<string, string> = CLIENT_HEADERS): RequestOptions {
+  return signal ? { headers, signal } : { headers };
 }
 
 function formatSearchReport(base: string, report: SearchReport): string {
@@ -163,10 +215,11 @@ function parseReviewTarget(raw: string): { hostPart: string | null; reviewId: st
 async function resolveExplicitHost(
   base: string,
   specifiers: Array<{ source: string; hostPart: string | null | undefined }>,
+  signal?: AbortSignal,
 ): Promise<ExplicitHost | null> {
   const active = specifiers.filter((item): item is { source: string; hostPart: string } => !!item.hostPart);
   if (!active.length) return null;
-  await loadFleet(base);
+  await loadFleet(base, signal);
   let chosen: { source: string; hostPart: string; host: string | null; entry: FleetHost | null } | null = null;
   for (const item of active) {
     let resolved;
@@ -193,9 +246,8 @@ function readSpec(source: string): unknown {
   try { return JSON.parse(text); } catch (error) { throw new Error(`${source} is not valid JSON: ${errorMessage(error)}`); }
 }
 
-/** Long-polls until the review is answered or withdrawn; null once `timeoutSecs` pass with it still open. */
-async function waitFor(base: string, host: string | null, sessionId: unknown, reviewId: string, timeoutSecs: number | null): Promise<Record<string, unknown> | null> {
-  const deadline = timeoutSecs === null ? Infinity : Date.now() + timeoutSecs * 1000;
+/** Long-polls until the review is answered or withdrawn; null once `deadline` passes with it still open. */
+async function waitFor(base: string, host: string | null, sessionId: unknown, reviewId: string, deadline: number): Promise<Record<string, unknown> | null> {
   let failures = 0;
   let lastError: unknown = null;
   for (;;) {
@@ -205,28 +257,41 @@ async function waitFor(base: string, host: string | null, sessionId: unknown, re
       return null;
     }
     const poll = Math.max(1, Math.min(50, Math.ceil(remaining / 1000)));
+    const init: RequestOptions = { headers: CLIENT_HEADERS };
+    let pollTimedOut = false;
+    let timer: NodeJS.Timeout | null = null;
+    if (Number.isFinite(deadline)) {
+      const controller = new AbortController();
+      init.signal = controller.signal;
+      timer = setTimeout(() => { pollTimedOut = true; controller.abort(new Error('wait poll timed out')); }, remaining);
+      timer.unref();
+    }
     try {
-      const { data } = await api(base, host, reviewsPath(sessionId, `/${encodeURIComponent(reviewId)}/wait?timeout=${poll}`), { headers: CLIENT_HEADERS });
-      const raw = data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>).result : null;
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('wait response ended without a review result');
-      const result = raw as Record<string, unknown>;
-      if (result.status === 'cancelled') return result;
-      if (result.status === 'submitted') {
-        if (!result.answers || typeof result.answers !== 'object' || Array.isArray(result.answers)) {
-          throw new Error('wait response reported submitted without answers');
-        }
-        return result;
+      const { data } = await api(base, host, reviewsPath(sessionId, `/${encodeURIComponent(reviewId)}/wait?timeout=${poll}`), init);
+      const raw = isPlainObject(data) ? data.result : null;
+      if (!isPlainObject(raw)) throw new Error('wait response ended without a review result');
+      if (raw.reviewId !== undefined && raw.reviewId !== reviewId) throw new Error(`wait response returned review "${String(raw.reviewId)}" instead of "${reviewId}"`);
+      if (raw.status === 'cancelled') return raw;
+      if (raw.status === 'submitted') {
+        if (!isPlainObject(raw.answers)) throw new Error('wait response reported submitted without answers');
+        return raw;
       }
-      if (result.status !== 'open') throw new Error(`wait response had unexpected status "${String(result.status)}"`);
+      if (raw.status !== 'open') throw new Error(`wait response had unexpected status "${String(raw.status)}"`);
       failures = 0;
       lastError = null;
     } catch (error) {
+      if (pollTimedOut && deadline - Date.now() <= 0) {
+        if (failures > 0 && lastError !== null) throw lastError;
+        return null;
+      }
       // A restarting pi-dish refuses connections or drops a flushed wait; a 4xx is final.
       const status = errorStatus(error);
       if (typeof status === 'number' && status >= 400 && status < 500) throw error;
       lastError = error;
       if (++failures > WAIT_MAX_RETRIES) throw error;
       await sleep(WAIT_RETRY_MS);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 }
@@ -240,31 +305,33 @@ function answeredText(result: Record<string, unknown>): string {
 
 async function executeReviewCommand(
   base: string, host: string | null, sessionId: unknown, reviewId: string,
-  command: ReviewCommand, timeout: number | null, json: boolean,
+  command: ReviewCommand, timeoutSecs: number | null, waitDeadline: number, json: boolean,
+  signal?: AbortSignal,
 ): Promise<void> {
   const item = reviewsPath(sessionId, `/${encodeURIComponent(reviewId)}`);
   if (command === 'wait') {
-    const result = await waitFor(base, host, sessionId, reviewId, timeout);
-    if (!result) return print({ reviewId, status: 'open' }, json, `No answer within ${timeout} s: ${OPEN_LATER}`);
+    const result = await waitFor(base, host, sessionId, reviewId, waitDeadline);
+    if (!result) return print({ reviewId, status: 'open' }, json, `No answer within ${timeoutSecs} s: ${OPEN_LATER}`);
     return print(result, json, answeredText(result));
   }
   if (command === 'answers') {
-    const { data } = await api(base, host, item, { headers: CLIENT_HEADERS });
-    return print(record(record(data ?? {}).result ?? {}), true, '');
+    const { data } = await api(base, host, item, withSignal(signal));
+    const parsed = parseReviewPayload(data, reviewId);
+    if (!parsed) throw new Error(`malformed review response for ${reviewId}`);
+    return print(parsed.result, true, '');
   }
-  const { data } = await api(base, host, `${item}/cancel`, jsonInit({}, CLIENT_HEADERS));
-  return print(record(record(data ?? {}).review ?? {}), json, `review ${reviewId} withdrawn.`);
+  const { data } = await api(base, host, `${item}/cancel`, { ...jsonInit({}, CLIENT_HEADERS), ...(signal ? { signal } : {}) });
+  const review = parseCancelledReview(data, reviewId);
+  if (!review) throw new Error(`malformed cancel response for ${reviewId}`);
+  return print(review, json, `review ${reviewId} withdrawn.`);
 }
 
-async function finishLookupHit(
-  base: string, host: string | null, payload: unknown, reviewId: string,
-  command: ReviewCommand, timeout: number | null, json: boolean,
+async function finishValidatedHit(
+  base: string, host: string | null, hit: ValidReviewPayload, reviewId: string,
+  command: ReviewCommand, timeoutSecs: number | null, waitDeadline: number, json: boolean,
 ): Promise<void> {
-  const body = record(payload ?? {});
-  if (command === 'answers') return print(record(body.result ?? {}), true, '');
-  const ownerSessionId = typeof record(body.review ?? {}).sessionId === 'string' ? String(record(body.review ?? {}).sessionId) : '';
-  if (!ownerSessionId) throw new Error(`review lookup for ${reviewId} returned no sessionId`);
-  await executeReviewCommand(base, host, ownerSessionId, reviewId, command, timeout, json);
+  if (command === 'answers') return print(hit.result, true, '');
+  await executeReviewCommand(base, host, hit.sessionId, reviewId, command, timeoutSecs, waitDeadline, json);
 }
 
 /**
@@ -274,13 +341,14 @@ async function finishLookupHit(
  */
 async function tryLaunchParents(
   base: string, localSessionId: unknown, hosts: ReadonlySet<string | null>,
-  reviewId: string, command: ReviewCommand, timeout: number | null, json: boolean,
+  reviewId: string, command: ReviewCommand, timeoutSecs: number | null, waitDeadline: number,
+  json: boolean, signal: AbortSignal,
 ): Promise<{ done: true } | { done: false; host?: string | null; error?: unknown }> {
   const selfId = typeof localSessionId === 'string' ? localSessionId : String(localSessionId ?? '');
-  if (!selfId || !hosts.size) return { done: false };
+  if (!selfId || !hosts.size || signal.aborted) return { done: false };
   const parents: Array<{ host: string | null; sessionId: string }> = [];
   try {
-    const catalog = record((await api(base, null, '/api/sessions?active=1')).data ?? {});
+    const catalog = record((await api(base, null, '/api/sessions?active=1', { signal })).data ?? {});
     const byId = new Map<string, Record<string, unknown>>();
     for (const row of [...sessionRows(catalog.active), ...sessionRows(catalog.children), ...sessionRows(catalog.previous)]) {
       const r = record(row);
@@ -305,9 +373,12 @@ async function tryLaunchParents(
     }
   } catch { return { done: false }; }
   for (const parent of parents) {
-    if (!hosts.has(parent.host)) continue;
+    if (!hosts.has(parent.host) || signal.aborted) continue;
     try {
-      await executeReviewCommand(base, parent.host, parent.sessionId, reviewId, command, timeout, json);
+      const { data } = await api(base, parent.host, reviewsPath(parent.sessionId, `/${encodeURIComponent(reviewId)}`), withSignal(signal));
+      const valid = parseReviewPayload(data, reviewId);
+      if (!valid) return { done: false, host: parent.host, error: new Error(`malformed review response for ${reviewId}`) };
+      await finishValidatedHit(base, parent.host, valid, reviewId, command, timeoutSecs, waitDeadline, json);
       return { done: true };
     } catch (error) {
       if (errorStatus(error) !== 404) return { done: false, host: parent.host, error };
@@ -316,10 +387,10 @@ async function tryLaunchParents(
   return { done: false };
 }
 
-async function resolveSessionOnHost(base: string, host: string | null, sessionRef: ParsedRef): Promise<string | null> {
+async function resolveSessionOnHost(base: string, host: string | null, sessionRef: ParsedRef, signal?: AbortSignal): Promise<string | null> {
   if (sessionRef.hostIdForm) return null;
   try {
-    return (await resolveSessionRef(base, sessionRef.id, host)).id;
+    return (await resolveSessionRef(base, sessionRef.id, host, signal ? { signal } : undefined)).id;
   } catch (error) {
     if (errorStatus(error) === 404 || /^(?:Session not found|id prefix must be at least 4 characters)/i.test(errorMessage(error))) {
       return null;
@@ -343,69 +414,139 @@ function partitionRemotePeers(hosts: unknown[] | null) {
   return { candidates, unreachable, unsupported };
 }
 
+/**
+ * Fan out across candidate peers under one shared deadline, returning as soon as
+ * the first valid review arrives (and aborting any slower/stalled probes).
+ */
+async function racePeers(
+  candidates: ReadonlyArray<{ name: string }>,
+  budget: DiscoveryBudget,
+  probe: (peerName: string) => Promise<{ host: string; hit: ValidReviewPayload } | null>,
+): Promise<{ winner: { host: string; hit: ValidReviewPayload } | null; failed: string[]; staleLookup: string[] }> {
+  if (!candidates.length) return { winner: null, failed: [], staleLookup: [] };
+  const failed: string[] = [];
+  const staleLookup: string[] = [];
+  let winner: { host: string; hit: ValidReviewPayload } | null = null;
+  await new Promise<void>(resolve => {
+    let remaining = candidates.length;
+    const finish = () => { if (--remaining === 0) resolve(); };
+    for (const peer of candidates) {
+      void probe(peer.name).then(found => {
+        if (found && !winner) {
+          winner = found;
+          budget.abort();
+          resolve();
+          return;
+        }
+        finish();
+      }, reason => {
+        if (winner) return;
+        if (isBodiless404(reason)) staleLookup.push(peer.name);
+        else if (errorStatus(reason) !== 404) failed.push(`${peer.name} (${errorMessage(reason)})`);
+        finish();
+      });
+    }
+  });
+  return { winner, failed, staleLookup };
+}
+
 async function runWithExplicitSession(
   base: string, explicitHost: ExplicitHost | null, sessionRef: ParsedRef,
-  reviewId: string, targetLabel: string, command: ReviewCommand, timeout: number | null, json: boolean,
+  reviewId: string, targetLabel: string, command: ReviewCommand,
+  timeoutSecs: number | null, waitDeadline: number, json: boolean,
 ): Promise<void> {
   const prefix = `${command} ${targetLabel}`;
-  const targetHost = explicitHost?.host ?? null;
 
-  // Try direct route on the chosen (or local) host first.
-  try {
-    return await executeReviewCommand(base, targetHost, sessionRef.id, reviewId, command, timeout, json);
-  } catch (firstError) {
-    if (!isSessionMissing(firstError)) return await failAtHost(base, targetHost, prefix, firstError);
-
-    // Try expanding a short ref/alias on the same host before giving up or fanning out.
-    let resolvedHere: string | null = null;
-    try { resolvedHere = await resolveSessionOnHost(base, targetHost, sessionRef); }
-    catch (resolveError) { return await failAtHost(base, targetHost, prefix, resolveError); }
-    if (resolvedHere && resolvedHere !== sessionRef.id) {
-      try { return await executeReviewCommand(base, targetHost, resolvedHere, reviewId, command, timeout, json); }
-      catch (retryError) { return await failAtHost(base, targetHost, prefix, retryError); }
-    }
-    if (explicitHost) {
+  // Explicitly host-qualified request stays pinned to that host.
+  if (explicitHost) {
+    const targetHost = explicitHost.host;
+    try {
+      return await executeReviewCommand(base, targetHost, sessionRef.id, reviewId, command, timeoutSecs, waitDeadline, json);
+    } catch (firstError) {
+      if (!isSessionMissing(firstError)) return await failAtHost(base, targetHost, prefix, firstError);
+      let resolvedHere: string | null = null;
+      try { resolvedHere = await resolveSessionOnHost(base, targetHost, sessionRef); }
+      catch (resolveError) { return await failAtHost(base, targetHost, prefix, resolveError); }
+      if (resolvedHere && resolvedHere !== sessionRef.id) {
+        try { return await executeReviewCommand(base, targetHost, resolvedHere, reviewId, command, timeoutSecs, waitDeadline, json); }
+        catch (retryError) { return await failAtHost(base, targetHost, prefix, retryError); }
+      }
       await ensureSelfLabel(base, targetHost, firstError);
       return fail(`${prefix}: Session not found: ${sessionRef.id} (${whereAsked(base, targetHost)})`);
     }
+  }
 
-    // No explicit host: look up the session across reachable fleet peers.
-    const { candidates, unreachable, unsupported } = partitionRemotePeers(await loadFleet(base));
-    const report: SearchReport = { asked: [selfDisplay()], unreachable, unsupported, failed: [], staleLookup: [] };
-    const matched: Array<{ host: string; id: string }> = [];
-    const settled = await Promise.allSettled(candidates.map(async peer => {
-      report.asked.push(peer.name);
-      const id = await resolveSessionOnHost(base, peer.name, sessionRef);
-      return id ? { host: peer.name, id } : null;
-    }));
-    settled.forEach((outcome, index) => {
-      if (outcome.status === 'fulfilled') { if (outcome.value) matched.push(outcome.value); }
-      else report.failed.push(`${candidates[index]!.name} (${errorMessage(outcome.reason)})`);
-    });
-    if (matched.length === 1) {
-      try { return await executeReviewCommand(base, matched[0]!.host, matched[0]!.id, reviewId, command, timeout, json); }
-      catch (peerError) { return await failAtHost(base, matched[0]!.host, prefix, peerError); }
-    }
-    if (matched.length > 1) {
-      const probes = await Promise.allSettled(matched.map(async hit => ({
-        hit, data: (await api(base, hit.host, reviewsPath(hit.id, `/${encodeURIComponent(reviewId)}`), peerInit(CLIENT_HEADERS))).data,
-      })));
-      const hits = probes.flatMap(outcome => outcome.status === 'fulfilled' ? [outcome.value] : []);
-      if (hits.length === 1) {
-        const winner = hits[0]!;
-        if (command === 'answers') return print(record(record(winner.data ?? {}).result ?? {}), true, '');
-        try { return await executeReviewCommand(base, winner.hit.host, winner.hit.id, reviewId, command, timeout, json); }
-        catch (peerError) { return await failAtHost(base, winner.hit.host, prefix, peerError); }
+  // Unqualified --session: try local first (fast path); any local 404/missing-session carries on to peers.
+  let localMatchedSession = false;
+  let localStaleReviews = false;
+  const localFailed: string[] = [];
+  const budget = createDiscoveryBudget(waitDeadline);
+  try {
+    try {
+      return await executeReviewCommand(base, null, sessionRef.id, reviewId, command, timeoutSecs, waitDeadline, json);
+    } catch (firstError) {
+      if (isNoSuchReview(firstError)) localMatchedSession = true;
+      else if (isBodiless404(firstError)) localStaleReviews = true;
+      else if (isSessionMissing(firstError)) {
+        let resolvedHere: string | null = null;
+        try { resolvedHere = await resolveSessionOnHost(base, null, sessionRef, budget.signal); }
+        catch (resolveError) {
+          if (errorStatus(resolveError) !== 404 && !/ambiguous session id prefix/i.test(errorMessage(resolveError))) {
+            return await failAtHost(base, null, prefix, resolveError);
+          }
+          localFailed.push(`${selfDisplay()} (${errorMessage(resolveError)})`);
+        }
+        if (resolvedHere && resolvedHere !== sessionRef.id) {
+          try { return await executeReviewCommand(base, null, resolvedHere, reviewId, command, timeoutSecs, waitDeadline, json); }
+          catch (retryError) {
+            if (isNoSuchReview(retryError)) localMatchedSession = true;
+            else if (isBodiless404(retryError)) localStaleReviews = true;
+            else return await failAtHost(base, null, prefix, retryError);
+          }
+        }
+      } else {
+        return await failAtHost(base, null, prefix, firstError);
       }
-      return fail(`${prefix}: session "${sessionRef.id}" exists on multiple hosts (${matched.map(m => m.host).join(', ')}); pass --host <name> (${formatSearchReport(base, report)})`);
     }
-    return fail(`${prefix}: Session not found: ${sessionRef.id} (${formatSearchReport(base, report)})`);
+
+    const hosts = await loadFleet(base, budget.signal);
+    const { candidates, unreachable, unsupported } = partitionRemotePeers(hosts);
+    const report: SearchReport = {
+      asked: [selfDisplay(), ...candidates.map(peer => peer.name)],
+      unreachable, unsupported, failed: [...localFailed], staleLookup: [],
+    };
+    if (!hosts && budget.signal.aborted) report.failed.push(`${selfDisplay()} (/api/hosts: ${errorMessage(budget.signal.reason)})`);
+    let peerMatchedSession = false;
+    const { winner, failed, staleLookup } = await racePeers(candidates, budget, async peerName => {
+      const peerSessionId = await resolveSessionOnHost(base, peerName, sessionRef, budget.signal);
+      if (!peerSessionId) return null;
+      peerMatchedSession = true;
+      const { data } = await api(base, peerName, reviewsPath(peerSessionId, `/${encodeURIComponent(reviewId)}`), withSignal(budget.signal));
+      const hit = parseReviewPayload(data, reviewId);
+      if (!hit) throw new Error(`malformed review response for ${reviewId}`);
+      return { host: peerName, hit };
+    });
+    report.failed.push(...failed);
+    report.staleLookup.push(...staleLookup);
+    if (winner) {
+      budget.dispose();
+      try { return await finishValidatedHit(base, winner.host, winner.hit, reviewId, command, timeoutSecs, waitDeadline, json); }
+      catch (peerError) { return await failAtHost(base, winner.host, prefix, peerError); }
+    }
+    if (localStaleReviews && !candidates.length) {
+      return fail(`this pi-dish predates review decks (no reviewsV1); update pi-dish (${formatSearchReport(base, report)})`);
+    }
+    const reason = localMatchedSession || peerMatchedSession ? 'no such review' : `Session not found: ${sessionRef.id}`;
+    return fail(`${prefix}: ${reason} (${formatSearchReport(base, report)})`);
+  } finally {
+    budget.dispose();
   }
 }
 
 async function runByReviewId(
   base: string, explicitHost: ExplicitHost | null,
-  reviewId: string, targetLabel: string, command: ReviewCommand, timeout: number | null, json: boolean,
+  reviewId: string, targetLabel: string, command: ReviewCommand,
+  timeoutSecs: number | null, waitDeadline: number, json: boolean,
 ): Promise<void> {
   const prefix = `${command} ${targetLabel}`;
   const localSessionId = discoverSessionQuietly();
@@ -414,30 +555,36 @@ async function runByReviewId(
   if (explicitHost) {
     const host = explicitHost.host;
     if (host === null && localSessionId) {
-      try { return await executeReviewCommand(base, null, localSessionId, reviewId, command, timeout, json); }
+      try { return await executeReviewCommand(base, null, localSessionId, reviewId, command, timeoutSecs, waitDeadline, json); }
       catch (error) { if (errorStatus(error) !== 404) return await failAtHost(base, null, prefix, error); }
     }
     if (explicitHost.entry && !peerSupportsReviews(explicitHost.entry)) {
       return fail(`this pi-dish predates review decks (no reviewsV1); update pi-dish (${whereAsked(base, host)})`);
     }
+    const budget = createDiscoveryBudget(waitDeadline);
     try {
-      const { data } = await api(base, host, `/api/reviews/${encodeURIComponent(reviewId)}`, { headers: CLIENT_HEADERS });
-      return await finishLookupHit(base, host, data, reviewId, command, timeout, json);
+      const { data } = await api(base, host, `/api/reviews/${encodeURIComponent(reviewId)}`, withSignal(budget.signal));
+      const hit = parseReviewPayload(data, reviewId);
+      if (!hit) throw new Error(`malformed review response for ${reviewId}`);
+      budget.dispose();
+      return await finishValidatedHit(base, host, hit, reviewId, command, timeoutSecs, waitDeadline, json);
     } catch (error) {
       if (isBodiless404(error)) {
-        const fallback = await tryLaunchParents(base, localSessionId, new Set([host]), reviewId, command, timeout, json);
+        const fallback = await tryLaunchParents(base, localSessionId, new Set([host]), reviewId, command, timeoutSecs, waitDeadline, json, budget.signal);
         if (fallback.done) return;
         if (fallback.error !== undefined) return await failAtHost(base, fallback.host ?? host, prefix, fallback.error);
         return fail(`${prefix}: ${whereAsked(base, host)} does not support review lookup by id; pass --session <id> or upgrade pi-dish there`);
       }
       return await failAtHost(base, host, prefix, error);
+    } finally {
+      budget.dispose();
     }
   }
 
   // Bare reviewId, no --session, no --host: try local caller's session first (0 extra HTTP calls on hit/non-404).
   let localError: unknown = null;
   if (localSessionId) {
-    try { return await executeReviewCommand(base, null, localSessionId, reviewId, command, timeout, json); }
+    try { return await executeReviewCommand(base, null, localSessionId, reviewId, command, timeoutSecs, waitDeadline, json); }
     catch (error) {
       if (errorStatus(error) !== 404) return await failAtHost(base, null, prefix, error);
       localError = error;
@@ -448,48 +595,61 @@ async function runByReviewId(
     return fail(`${prefix}: no such review (${whereAsked(base, null)})`);
   }
 
-  // Local lookup by review id (handles another session on this same host).
-  let localStaleLookup = false;
+  const budget = createDiscoveryBudget(waitDeadline);
   try {
-    const { data } = await api(base, null, `/api/reviews/${encodeURIComponent(reviewId)}`, { headers: CLIENT_HEADERS });
-    return await finishLookupHit(base, null, data, reviewId, command, timeout, json);
-  } catch (error) {
-    if (isBodiless404(error)) localStaleLookup = true;
-    else if (errorStatus(error) !== 404) return await failAtHost(base, null, prefix, error);
-  }
-
-  // Fleet lookup across reachable peers advertising reviewsV1.
-  const { candidates, unreachable, unsupported } = partitionRemotePeers(await loadFleet(base));
-  const report: SearchReport = {
-    asked: [selfDisplay()], unreachable, unsupported, failed: [], staleLookup: localStaleLookup ? [selfDisplay()] : [],
-  };
-  const staleHosts = new Set<string | null>(localStaleLookup ? [null] : []);
-  const settled = await Promise.allSettled(candidates.map(async peer => {
-    report.asked.push(peer.name);
-    const { data } = await api(base, peer.name, `/api/reviews/${encodeURIComponent(reviewId)}`, peerInit(CLIENT_HEADERS));
-    return { host: peer.name, data };
-  }));
-  for (let i = 0; i < settled.length; i++) {
-    const outcome = settled[i]!, peer = candidates[i]!;
-    if (outcome.status === 'fulfilled') {
-      try { return await finishLookupHit(base, outcome.value.host, outcome.value.data, reviewId, command, timeout, json); }
-      catch (error) { return await failAtHost(base, outcome.value.host, prefix, error); }
+    // Local lookup by review id (handles another session on this same host).
+    let localStaleLookup = false;
+    const localFailed: string[] = [];
+    try {
+      const { data } = await api(base, null, `/api/reviews/${encodeURIComponent(reviewId)}`, withSignal(budget.signal));
+      const hit = parseReviewPayload(data, reviewId);
+      if (hit) {
+        budget.dispose();
+        return await finishValidatedHit(base, null, hit, reviewId, command, timeoutSecs, waitDeadline, json);
+      }
+      localFailed.push(`${selfDisplay()} (malformed review response for ${reviewId})`);
+    } catch (error) {
+      if (isBodiless404(error)) localStaleLookup = true;
+      else if (errorStatus(error) !== 404) return await failAtHost(base, null, prefix, error);
     }
-    if (isBodiless404(outcome.reason)) { report.staleLookup.push(peer.name); staleHosts.add(peer.name); }
-    else if (errorStatus(outcome.reason) !== 404) report.failed.push(`${peer.name} (${errorMessage(outcome.reason)})`);
-  }
 
-  // Mixed-version fallback: check launch-provenance parents on hosts predating GET /api/reviews/:reviewId.
-  const fallback = await tryLaunchParents(base, localSessionId, staleHosts, reviewId, command, timeout, json);
-  if (fallback.done) return;
-  if (fallback.error !== undefined) return await failAtHost(base, fallback.host ?? null, prefix, fallback.error);
+    // Fleet lookup across reachable peers advertising reviewsV1, finishing on the first valid review.
+    const hosts = await loadFleet(base, budget.signal);
+    const { candidates, unreachable, unsupported } = partitionRemotePeers(hosts);
+    const report: SearchReport = {
+      asked: [selfDisplay(), ...candidates.map(peer => peer.name)],
+      unreachable, unsupported, failed: localFailed, staleLookup: localStaleLookup ? [selfDisplay()] : [],
+    };
+    if (!hosts && budget.signal.aborted) report.failed.push(`${selfDisplay()} (/api/hosts: ${errorMessage(budget.signal.reason)})`);
+    const { winner, failed, staleLookup } = await racePeers(candidates, budget, async peerName => {
+      const { data } = await api(base, peerName, `/api/reviews/${encodeURIComponent(reviewId)}`, withSignal(budget.signal));
+      const hit = parseReviewPayload(data, reviewId);
+      if (!hit) throw new Error(`malformed review response for ${reviewId}`);
+      return { host: peerName, hit };
+    });
+    report.failed.push(...failed);
+    report.staleLookup.push(...staleLookup);
+    if (winner) {
+      budget.dispose();
+      try { return await finishValidatedHit(base, winner.host, winner.hit, reviewId, command, timeoutSecs, waitDeadline, json); }
+      catch (error) { return await failAtHost(base, winner.host, prefix, error); }
+    }
 
-  if (localError && isBodiless404(localError) && !candidates.length) {
-    return fail(`this pi-dish predates review decks (no reviewsV1); update pi-dish (${formatSearchReport(base, report)})`);
+    // Mixed-version fallback: check launch-provenance parents on hosts predating GET /api/reviews/:reviewId.
+    const staleHosts = new Set<string | null>([...(localStaleLookup ? [null] : []), ...staleLookup]);
+    const fallback = await tryLaunchParents(base, localSessionId, staleHosts, reviewId, command, timeoutSecs, waitDeadline, json, budget.signal);
+    if (fallback.done) return;
+    if (fallback.error !== undefined) return await failAtHost(base, fallback.host ?? null, prefix, fallback.error);
+
+    if (localError && isBodiless404(localError) && !candidates.length) {
+      return fail(`this pi-dish predates review decks (no reviewsV1); update pi-dish (${formatSearchReport(base, report)})`);
+    }
+    const staleNote = report.staleLookup.length
+      ? `; ${report.staleLookup.join(', ')} predates review lookup by id (pass --session [host/]ID or upgrade pi-dish there)` : '';
+    return fail(`${prefix}: no such review (${formatSearchReport(base, report)}${staleNote})`);
+  } finally {
+    budget.dispose();
   }
-  const staleNote = report.staleLookup.length
-    ? `; ${report.staleLookup.join(', ')} predates review lookup by id (pass --session [host/]ID or upgrade pi-dish there)` : '';
-  return fail(`${prefix}: no such review (${formatSearchReport(base, report)}${staleNote})`);
 }
 
 async function main() {
@@ -554,8 +714,9 @@ async function main() {
     const summary = `Review "${review.title}" (${review.id}): ${cards} card${cards === 1 ? '' : 's'} for the user, inline in this session's pi-dish transcript.${page}`;
     if (!wait) return print(review, args.json, `${summary}\nThe answers arrive in this session as a "[review response: …]" message. End your turn now; do not repeat the questions in chat.`);
     if (!args.json) process.stdout.write(`${summary}\nWaiting for the answers…\n`);
+    const waitDeadline = timeout === null ? Infinity : Date.now() + timeout * 1000;
     let result;
-    try { result = await waitFor(base, host, sessionId, String(review.id), timeout); } catch (error) {
+    try { result = await waitFor(base, host, sessionId, String(review.id), waitDeadline); } catch (error) {
       await ensureSelfLabel(base, host, error);
       return fail(`stopped waiting for ${review.id} (${errorMessage(error)}; ${whereAsked(base, host)}); ${OPEN_LATER}`);
     }
@@ -567,6 +728,8 @@ async function main() {
     return fail(`unknown command: ${args.command} (use ask, wait, answers or cancel; run --help for usage)`);
   }
   if (!target) return fail(`${args.command} needs a review id`);
+
+  const waitDeadline = args.command === 'wait' && timeout !== null ? Date.now() + timeout * 1000 : Infinity;
 
   let parsedTarget: { hostPart: string | null; reviewId: string };
   try { parsedTarget = parseReviewTarget(target); } catch (error) { return fail(errorMessage(error)); }
@@ -581,9 +744,9 @@ async function main() {
   } catch (error) { return fail(errorMessage(error)); }
 
   if (parsedSession) {
-    return await runWithExplicitSession(base, explicitHost, parsedSession, parsedTarget.reviewId, target, args.command, timeout, args.json);
+    return await runWithExplicitSession(base, explicitHost, parsedSession, parsedTarget.reviewId, target, args.command, timeout, waitDeadline, args.json);
   }
-  return await runByReviewId(base, explicitHost, parsedTarget.reviewId, target, args.command, timeout, args.json);
+  return await runByReviewId(base, explicitHost, parsedTarget.reviewId, target, args.command, timeout, waitDeadline, args.json);
 }
 
 main();
