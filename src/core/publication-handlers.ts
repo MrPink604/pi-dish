@@ -974,14 +974,19 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     }
     if (req.query.content != null) {
       if (!file.image && !file.video && !file.model) return notFound();
+      const isSvg = !file.video && !file.model && file.image?.mimeType === 'image/svg+xml';
       const safeMime = file.video
         ? file.video.mimeType
         : file.model
           ? file.model.mimeType
-          : file.image && file.image.mimeType !== 'image/svg+xml'
+          : file.image
             ? file.image.mimeType : 'text/plain; charset=utf-8';
       res.setHeader('Cache-Control', 'public, no-cache');
       res.setHeader('X-Content-Type-Options', 'nosniff');
+      if (isSvg) {
+        // Appended to isolateArtifact's sandbox policy: removes script execution while allowing <img> rendering.
+        res.append('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+      }
       if (file.model) {
         const name = path.basename(root);
         const fallback = name.replace(/[^\x20-\x7e]|["\\;]/g, '_') || 'model.glb';

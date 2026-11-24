@@ -118,6 +118,10 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
       }
       res.setHeader('Cache-Control', 'private, no-cache');
       res.setHeader('X-Content-Type-Options', 'nosniff');
+      if (content.mimeType === 'image/svg+xml') {
+        // Render in <img> while blocking script execution and same-origin access if opened directly.
+        res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+      }
       sendRangedFile(req, res, resolved.absPath, { mimeType: content.mimeType, size: content.size, mtimeMs: content.mtime });
     } catch (error) {
       res.status(500).json({ error: record(error) ? error.message : undefined });

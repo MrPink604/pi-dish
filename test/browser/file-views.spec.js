@@ -321,6 +321,59 @@ const webmBytes = Buffer.from('GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECG
     await (0, fixtures_js_1.expect)(video).toBeVisible();
     (0, fixtures_js_1.expect)(await video.evaluate(node => node.paused)).toBe(true);
 });
+(0, fixtures_js_1.test)('SVG previews render as images while sandbox CSP blocks scripts on direct navigation and published pages', async ({ page, fleet, request }) => {
+    const svgMarkup = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60" viewBox="0 0 120 60">'
+        + '<rect width="120" height="60" fill="#22c55e"/>'
+        + '<script>window.__svgScriptRan = true;</script>'
+        + '</svg>';
+    // Upload into the session's own upload dir so /file and /file/content serve the real file.
+    const uploaded = await request.post(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/uploads?name=diagram.svg&type=image%2Fsvg%2Bxml`, { headers: { 'content-type': 'application/octet-stream' }, data: Buffer.from(svgMarkup, 'utf8') });
+    await (0, fixtures_js_1.expect)(uploaded).toBeOK();
+    const { path: uploadedPath } = await uploaded.json();
+    const contentUrl = `${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/file/content?path=${encodeURIComponent(uploadedPath)}`;
+    const contentRes = await request.get(contentUrl);
+    await (0, fixtures_js_1.expect)(contentRes).toBeOK();
+    (0, fixtures_js_1.expect)(contentRes.headers()['content-type']).toBe('image/svg+xml');
+    (0, fixtures_js_1.expect)(contentRes.headers()['x-content-type-options']).toBe('nosniff');
+    const fileCsp = contentRes.headers()['content-security-policy'] ?? '';
+    (0, fixtures_js_1.expect)(fileCsp).toContain("default-src 'none'");
+    (0, fixtures_js_1.expect)(fileCsp).toContain('sandbox');
+    (0, fixtures_js_1.expect)(fileCsp).not.toContain('allow-scripts');
+    (0, fixtures_js_1.expect)(fileCsp).not.toContain('allow-same-origin');
+    // 1. Inside #fileView, Chromium renders the SVG inside <img> with naturalWidth > 0.
+    await fleet.select(fleet.self);
+    await page.evaluate((p) => fixtureApp.features.fileViews.openFile(p), uploadedPath);
+    const img = page.locator('#fileViewBody img');
+    await (0, fixtures_js_1.expect)(img).toBeVisible();
+    await fixtures_js_1.expect.poll(() => img.evaluate(el => {
+        const image = el;
+        return { complete: image.complete, width: image.naturalWidth, height: image.naturalHeight };
+    })).toEqual({ complete: true, width: 120, height: 60 });
+    // 2. Opening the raw /file/content URL directly in a tab isolates the origin and blocks inline <script>.
+    const rawTab = await page.context().newPage();
+    await rawTab.goto(contentUrl);
+    (0, fixtures_js_1.expect)(await rawTab.evaluate(() => self.origin)).toBe('null');
+    (0, fixtures_js_1.expect)(await rawTab.evaluate(() => Reflect.get(globalThis, '__svgScriptRan'))).toBeUndefined();
+    await rawTab.close();
+    // 3. A standalone published SVG file page renders the <img> and serves ?content=1 with image/svg+xml + strict sandbox CSP.
+    const pubFile = (0, node_path_1.join)(fleet.self.home, 'published-diagram.svg');
+    (0, node_fs_1.writeFileSync)(pubFile, svgMarkup);
+    const publishedRes = await request.post(`${fleet.self.base}/api/pages`, { data: { path: pubFile, renderer: 'file' } });
+    await (0, fixtures_js_1.expect)(publishedRes).toBeOK();
+    const { path: pubUrl } = await publishedRes.json();
+    const pubContentRes = await request.get(`${fleet.self.base}${pubUrl}?content=1`);
+    await (0, fixtures_js_1.expect)(pubContentRes).toBeOK();
+    (0, fixtures_js_1.expect)(pubContentRes.headers()['content-type']).toBe('image/svg+xml');
+    (0, fixtures_js_1.expect)(pubContentRes.headers()['x-content-type-options']).toBe('nosniff');
+    (0, fixtures_js_1.expect)(pubContentRes.headers()['content-security-policy'] ?? '').toContain("default-src 'none'");
+    await page.goto(`${fleet.self.base}${pubUrl}`);
+    const pubImg = page.locator('img');
+    await (0, fixtures_js_1.expect)(pubImg).toBeVisible();
+    await fixtures_js_1.expect.poll(() => pubImg.evaluate(el => {
+        const image = el;
+        return { complete: image.complete, width: image.naturalWidth, height: image.naturalHeight };
+    })).toEqual({ complete: true, width: 120, height: 60 });
+});
 (0, fixtures_js_1.test)('file view disposal retires publish, copy and diff patch actions', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     await fileRoutes(page);

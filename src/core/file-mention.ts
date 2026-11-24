@@ -319,7 +319,7 @@ export function readFileForContent(absPath: string): FileContentResult {
     ? file.video.mimeType
     : file.model
       ? file.model.mimeType
-      : file.image && file.image.mimeType !== 'image/svg+xml'
+      : file.image
         ? file.image.mimeType
         : 'text/plain; charset=utf-8';
   return { mimeType, size: file.size, mtime: file.mtime };

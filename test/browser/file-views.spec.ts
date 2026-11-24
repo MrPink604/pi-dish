@@ -300,6 +300,69 @@ test('a standalone published video pauses on collapse without relaxing the sandb
   expect(await video.evaluate(node => (node as HTMLVideoElement).paused)).toBe(true);
 });
 
+test('SVG previews render as images while sandbox CSP blocks scripts on direct navigation and published pages', async ({ page, fleet, request }) => {
+  const svgMarkup = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60" viewBox="0 0 120 60">'
+    + '<rect width="120" height="60" fill="#22c55e"/>'
+    + '<script>window.__svgScriptRan = true;</script>'
+    + '</svg>';
+
+  // Upload into the session's own upload dir so /file and /file/content serve the real file.
+  const uploaded = await request.post(
+    `${fleet.self.base}/api/sessions/${ROOT}/uploads?name=diagram.svg&type=image%2Fsvg%2Bxml`,
+    { headers: { 'content-type': 'application/octet-stream' }, data: Buffer.from(svgMarkup, 'utf8') },
+  );
+  await expect(uploaded).toBeOK();
+  const { path: uploadedPath } = await uploaded.json() as { path: string };
+
+  const contentUrl = `${fleet.self.base}/api/sessions/${ROOT}/file/content?path=${encodeURIComponent(uploadedPath)}`;
+  const contentRes = await request.get(contentUrl);
+  await expect(contentRes).toBeOK();
+  expect(contentRes.headers()['content-type']).toBe('image/svg+xml');
+  expect(contentRes.headers()['x-content-type-options']).toBe('nosniff');
+  const fileCsp = contentRes.headers()['content-security-policy'] ?? '';
+  expect(fileCsp).toContain("default-src 'none'");
+  expect(fileCsp).toContain('sandbox');
+  expect(fileCsp).not.toContain('allow-scripts');
+  expect(fileCsp).not.toContain('allow-same-origin');
+
+  // 1. Inside #fileView, Chromium renders the SVG inside <img> with naturalWidth > 0.
+  await fleet.select(fleet.self);
+  await page.evaluate((p) => fixtureApp.features.fileViews.openFile(p), uploadedPath);
+  const img = page.locator('#fileViewBody img');
+  await expect(img).toBeVisible();
+  await expect.poll(() => img.evaluate(el => {
+    const image = el as HTMLImageElement;
+    return { complete: image.complete, width: image.naturalWidth, height: image.naturalHeight };
+  })).toEqual({ complete: true, width: 120, height: 60 });
+
+  // 2. Opening the raw /file/content URL directly in a tab isolates the origin and blocks inline <script>.
+  const rawTab = await page.context().newPage();
+  await rawTab.goto(contentUrl);
+  expect(await rawTab.evaluate(() => self.origin)).toBe('null');
+  expect(await rawTab.evaluate(() => Reflect.get(globalThis, '__svgScriptRan'))).toBeUndefined();
+  await rawTab.close();
+
+  // 3. A standalone published SVG file page renders the <img> and serves ?content=1 with image/svg+xml + strict sandbox CSP.
+  const pubFile = join(fleet.self.home, 'published-diagram.svg');
+  writeFileSync(pubFile, svgMarkup);
+  const publishedRes = await request.post(`${fleet.self.base}/api/pages`, { data: { path: pubFile, renderer: 'file' } });
+  await expect(publishedRes).toBeOK();
+  const { path: pubUrl } = await publishedRes.json() as { path: string };
+  const pubContentRes = await request.get(`${fleet.self.base}${pubUrl}?content=1`);
+  await expect(pubContentRes).toBeOK();
+  expect(pubContentRes.headers()['content-type']).toBe('image/svg+xml');
+  expect(pubContentRes.headers()['x-content-type-options']).toBe('nosniff');
+  expect(pubContentRes.headers()['content-security-policy'] ?? '').toContain("default-src 'none'");
+
+  await page.goto(`${fleet.self.base}${pubUrl}`);
+  const pubImg = page.locator('img');
+  await expect(pubImg).toBeVisible();
+  await expect.poll(() => pubImg.evaluate(el => {
+    const image = el as HTMLImageElement;
+    return { complete: image.complete, width: image.naturalWidth, height: image.naturalHeight };
+  })).toEqual({ complete: true, width: 120, height: 60 });
+});
+
 test('file view disposal retires publish, copy and diff patch actions', async ({ page, fleet }) => {
   await fleet.select(fleet.self); await fileRoutes(page); let writes = 0;
   await page.route('**/api/pages', route => { if (route.request().method() === 'POST') writes++; return route.fulfill({ json: [] }); });
