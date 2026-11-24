@@ -402,6 +402,10 @@ export function openKnowledgeBase({ remote, dir, today = () => new Date().toISOS
     return null;
   }
 
+  async function isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    return git(['merge-base', '--is-ancestor', ancestor, descendant]).then(() => true, () => false);
+  }
+
   function sharedPages(): SearchablePage[] {
     const found: SearchablePage[] = [];
     const index = path.join(dir, INDEX);
@@ -671,6 +675,19 @@ export function openKnowledgeBase({ remote, dir, today = () => new Date().toISOS
       const slug = path.basename(subRel, '.md');
       await ensureClone();
 
+      // Recover from any crash-interrupted rebase or uncommitted working-tree residue before syncing with origin,
+      // otherwise `git rebase` will refuse to run and wedge every subsequent write with 409.
+      await git(['rebase', '--abort']).catch(() => {});
+      if ((await git(['status', '--porcelain'])).trim()) {
+        const hasHead = await git(['rev-parse', '--verify', 'HEAD']).then(() => true, () => false);
+        if (hasHead) {
+          await git(['add', '-A']);
+          if ((await git(['status', '--porcelain'])).trim()) {
+            await git(['commit', '-q', '--author', 'pi-dish <bots@pi-dish.invalid>', '-m', 'pi-dish: recover uncommitted changes']);
+          }
+        }
+      }
+
       // Sync with origin before inspecting or modifying files. If origin is unreachable, proceed locally;
       // if origin is reachable and rebase conflicts, abort and throw 409 instead of stacking unpushable commits.
       const fetchedBefore = await git(['fetch', '-q', 'origin']).then(() => true, () => false);
@@ -803,40 +820,45 @@ export function openKnowledgeBase({ remote, dir, today = () => new Date().toISOS
       if (!pushResult.pushed && commit !== null) {
         const fetchedAfter = await git(['fetch', '-q', 'origin']).then(() => true, () => false);
         const remoteRef = fetchedAfter ? await resolveRemoteRef() : null;
-        if (fetchedAfter && remoteRef) {
+        // Only treat a push failure as a conflict when the remote actually moved ahead of HEAD.
+        // Non-conflict push errors (auth, hooks, read-only remote, transient push errors) must keep the local commit.
+        if (fetchedAfter && remoteRef && !(await isAncestor(remoteRef, 'HEAD'))) {
           const remoteTouchedRel = headBefore
             ? !!(await git(['diff', '--name-only', `${headBefore}..${remoteRef}`, '--', repoRel]).catch(() => '')).trim()
             : true;
-          let recovered = false;
-          let detail = pushResult.pushError ?? 'remote changed';
-          if (!(entry.mode === 'replace' && remoteTouchedRel)) {
+          let conflictDetail: string | null = null;
+          let rollbackRef = remoteRef;
+          if (entry.mode === 'replace' && remoteTouchedRel) {
+            conflictDetail = `${repoRel} was updated on the remote`;
+          } else {
             try {
               await git(['rebase', '-q', remoteRef]);
+              commit = (await git(['rev-parse', 'HEAD'])).trim();
               const retry = await push();
-              if (retry.pushed) {
-                commit = (await git(['rev-parse', 'HEAD'])).trim();
-                pushResult = retry;
-                recovered = true;
-              } else {
-                detail = retry.pushError ?? detail;
+              pushResult = retry;
+              if (!retry.pushed) {
+                const fetchedRetry = await git(['fetch', '-q', 'origin']).then(() => true, () => false);
+                const retryRemoteRef = fetchedRetry ? await resolveRemoteRef() : null;
+                if (fetchedRetry && retryRemoteRef && !(await isAncestor(retryRemoteRef, 'HEAD'))) {
+                  rollbackRef = retryRemoteRef;
+                  conflictDetail = retry.pushError ?? 'remote changed again while retrying push';
+                }
               }
             } catch (error) {
-              detail = error instanceof Error ? error.message : String(error);
+              conflictDetail = error instanceof Error ? error.message : String(error);
               await git(['rebase', '--abort']).catch(() => {});
             }
-          } else {
-            detail = `${repoRel} was updated on the remote`;
           }
-          if (!recovered) {
+          if (conflictDetail !== null) {
             await git(['rebase', '--abort']).catch(() => {});
             if (headBefore) {
               await git(['reset', '--hard', headBefore]).catch(() => {});
-              await git(['rebase', '-q', remoteRef]).catch(() => git(['rebase', '--abort']).catch(() => {}));
+              await git(['rebase', '-q', rollbackRef]).catch(() => git(['rebase', '--abort']).catch(() => {}));
             } else {
-              await git(['reset', '--hard', remoteRef]).catch(() => {});
+              await git(['reset', '--hard', rollbackRef]).catch(() => {});
             }
             throw new KnowledgeError(
-              `Conflict: "${repoRel}" changed on the remote while committing (${detail}). Call kb_read("${slug}") to read the latest version and retry.`,
+              `Conflict: "${repoRel}" changed on the remote while committing (${conflictDetail}). Call kb_read("${slug}") to read the latest version and retry.`,
               409,
             );
           }

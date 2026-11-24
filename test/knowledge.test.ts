@@ -562,6 +562,113 @@ test('two clones racing on the same page roll back cleanly with 409 and never st
   assert.match((await baseA.read('beelink')).text, /Another beelink fact\./);
 });
 
+test('non-conflict push failure keeps the local commit intact instead of resetting hard', async t => {
+  const { openClone, remote, remoteLog } = setup(t);
+  const baseA = openClone('clone-a');
+  const baseB = openClone('clone-b');
+  await baseA.write({
+    page: 'beelink', scope: 'shared', mode: 'append', text: 'Initial fact.', source: 'init',
+    summary: 'Beelink hub host', author: 'Fleet',
+  });
+  await baseB.read('beelink');
+
+  // 1. Remote rejects pushes (hook/auth/read-only) while fetch still succeeds: local commit must NOT be dropped.
+  const hook = path.join(remote, 'hooks', 'pre-receive');
+  fs.writeFileSync(hook, '#!/bin/sh\necho "push blocked by policy" >&2\nexit 1\n', { mode: 0o755 });
+  const localOnly = await baseA.write({
+    page: 'beelink', scope: 'shared', mode: 'append', text: 'Must not be lost on push error.', source: 'ops', author: 'Fleet',
+  });
+  assert.equal(localOnly.pushed, false);
+  assert.match(String(localOnly.pushError), /push blocked by policy/);
+  assert.match(String(localOnly.commit), /^[0-9a-f]{40}$/);
+  assert.equal(git(baseA.dir, 'rev-parse', 'HEAD').trim(), localOnly.commit);
+  assert.match((await baseA.read('beelink')).text, /Must not be lost on push error\./);
+
+  // Removing the remote block lets the next write push both the kept commit and the new one.
+  fs.unlinkSync(hook);
+  const afterRecovery = await baseA.write({
+    page: 'beelink', scope: 'shared', mode: 'append', text: 'Follow-up after push recovers.', source: 'ops', author: 'Fleet',
+  });
+  assert.equal(afterRecovery.pushed, true);
+  assert.equal(git(baseA.dir, 'rev-parse', 'HEAD').trim(), git(remote, 'rev-parse', 'main').trim());
+  assert.equal(remoteLog().filter(line => line.includes('add to topics/beelink.md')).length, 2);
+
+  // 2. Non-conflicting remote advance + non-conflict push failure on retry: clean rebase is kept locally.
+  const raceAndBlockScript = [
+    `git -C ${JSON.stringify(baseB.dir)} pull -q --rebase`,
+    `mkdir -p ${JSON.stringify(path.join(baseB.dir, 'topics'))}`,
+    `printf '# Tycho\\n\\nRemote note. (Source: clone-b. Added 2026-11-20 by Other.)\\n' > ${JSON.stringify(path.join(baseB.dir, 'topics', 'tycho.md'))}`,
+    `printf -- '- [Tycho](topics/tycho.md): GPU box\\n' >> ${JSON.stringify(path.join(baseB.dir, 'index.md'))}`,
+    `git -C ${JSON.stringify(baseB.dir)} add -A`,
+    `git -C ${JSON.stringify(baseB.dir)} -c user.name=Other -c user.email=other@example.invalid commit -q -m 'Other: start topics/tycho.md'`,
+    `git -C ${JSON.stringify(baseB.dir)} push -q origin HEAD`,
+    // Now install the remote pre-receive block so the post-rebase retry push fails without a second remote advance.
+    `printf '#!/bin/sh\\necho "retry push blocked" >&2\\nexit 1\\n' > ${JSON.stringify(hook)}`,
+    `chmod 755 ${JSON.stringify(hook)}`,
+  ].join('\n');
+  installOneShotPrePushRace(baseA.dir, raceAndBlockScript);
+
+  const rebasedLocal = await baseA.write({
+    page: 'beelink', scope: 'shared', mode: 'append', text: 'Rebased then blocked on push.', source: 'ops', author: 'Fleet',
+  });
+  assert.equal(rebasedLocal.pushed, false);
+  assert.match(String(rebasedLocal.pushError), /retry push blocked/);
+  assert.equal(git(baseA.dir, 'rev-parse', 'HEAD').trim(), rebasedLocal.commit);
+  assert.match((await baseA.read('tycho')).text, /Remote note\./);
+  assert.match((await baseA.read('beelink')).text, /Rebased then blocked on push\./);
+
+  fs.unlinkSync(hook);
+  const flushed = await baseA.write({
+    page: 'beelink', scope: 'shared', mode: 'append', text: 'Flushes rebased commit.', source: 'ops', author: 'Fleet',
+  });
+  assert.equal(flushed.pushed, true);
+  assert.equal(git(baseA.dir, 'rev-parse', 'HEAD').trim(), git(remote, 'rev-parse', 'main').trim());
+});
+
+test('crash-left dirty working tree or interrupted rebase does not wedge subsequent writes', async t => {
+  const { openClone, remote } = setup(t);
+  const baseA = openClone('clone-a');
+  const baseB = openClone('clone-b');
+  await baseA.write({
+    page: 'beelink', scope: 'shared', mode: 'append', text: 'Initial fact.', source: 'init',
+    summary: 'Beelink hub host', author: 'Fleet',
+  });
+  await baseB.read('beelink');
+
+  // Advance remote on a separate page via clone B.
+  await baseB.write({
+    page: 'tycho', scope: 'shared', mode: 'append', text: 'Tycho fact.', source: 'init',
+    summary: 'Tycho GPU host', author: 'Other',
+  });
+
+  // Simulate crash residue: dirty uncommitted edit on an existing page before commit.
+  fs.appendFileSync(path.join(baseA.dir, 'topics', 'beelink.md'), '\nUncommitted crash note. (Source: crash. Added 2026-11-20 by Fleet.)\n');
+  const recovered = await baseA.write({
+    page: 'beelink', scope: 'shared', mode: 'append', text: 'Post-crash write.', source: 'ops', author: 'Fleet',
+  });
+  assert.equal(recovered.pushed, true);
+  assert.equal(git(baseA.dir, 'rev-parse', 'HEAD').trim(), git(remote, 'rev-parse', 'main').trim());
+  const beelinkText = (await baseA.read('beelink')).text;
+  assert.match(beelinkText, /Uncommitted crash note\./);
+  assert.match(beelinkText, /Post-crash write\./);
+  assert.match((await baseA.read('tycho')).text, /Tycho fact\./);
+
+  // Simulate an interrupted rebase directory left in .git/rebase-merge.
+  const rebaseMergeDir = path.join(baseA.dir, '.git', 'rebase-merge');
+  const headSha = git(baseA.dir, 'rev-parse', 'HEAD').trim();
+  fs.mkdirSync(rebaseMergeDir, { recursive: true });
+  fs.writeFileSync(path.join(rebaseMergeDir, 'orig-head'), `${headSha}\n`);
+  fs.writeFileSync(path.join(rebaseMergeDir, 'head-name'), 'refs/heads/main\n');
+  fs.writeFileSync(path.join(rebaseMergeDir, 'onto'), `${headSha}\n`);
+
+  const afterStaleRebase = await baseA.write({
+    page: 'beelink', scope: 'shared', mode: 'append', text: 'After stale rebase abort.', source: 'ops', author: 'Fleet',
+  });
+  assert.equal(afterStaleRebase.pushed, true);
+  assert.ok(!fs.existsSync(rebaseMergeDir));
+  assert.match((await baseA.read('beelink')).text, /After stale rebase abort\./);
+});
+
 test('the routes say the knowledge base is off without a remote', async () => {
   const handlers = createKnowledgeHandlers(() => null);
   const answer = await callKnowledgeHandler(handlers.search, { query: { q: 'x' } });
