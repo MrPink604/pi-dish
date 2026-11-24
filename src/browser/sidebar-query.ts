@@ -82,8 +82,8 @@ export function createSidebarQuery(options: {
   }
   function setOpen(next: boolean) {
     const sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
-    sidebar.classList.toggle('open', next);
+    if (next && !sidebar) return;
+    sidebar?.classList.toggle('open', next);
     document.getElementById('sidebarOverlay')?.classList.toggle('active', next);
     document.body.classList.toggle('sidebar-open', next);
     for (const button of Array.from(document.querySelectorAll<HTMLElement>('button[data-toggle-sidebar]'))) {

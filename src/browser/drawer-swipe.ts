@@ -257,7 +257,9 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
 
   function onTouchMove(event: TouchEvent) {
     if (disposed || !active || !win) return;
-    if (event.touches.length !== 1 || !isDrawerLayout()) {
+    // Once the browser claims the touch sequence for native scrolling, touchmove
+    // is no longer cancelable; abort immediately so the drawer never steals it.
+    if (!event.cancelable || event.touches.length !== 1 || !isDrawerLayout()) {
       cancelGesture();
       return;
     }

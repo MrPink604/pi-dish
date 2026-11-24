@@ -247,6 +247,62 @@ test('vertical scroll near the left edge scrolls transcript and does not open dr
   expect(afterTop).toBeGreaterThan(beforeTop);
 });
 
+test('curved diagonal scroll across populated open drawer scrolls list without moving or closing drawer', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  await setMobileViewport(page);
+
+  await page.locator('.header-menu-btn').click();
+  await expect.poll(() => page.evaluate(() =>
+    fixtureElement(document.getElementById('sidebar'), '#sidebar').getBoundingClientRect().left)).toBe(0);
+
+  await page.evaluate(() => {
+    const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+    for (let i = 0; i < 35; i++) {
+      const item = document.createElement('div');
+      item.className = 'session-item';
+      item.textContent = `Populated session row ${i}`;
+      list.append(item);
+    }
+    list.scrollTop = 0;
+  });
+
+  // Record whether any drag transform or class is ever applied to #sidebar during the gesture.
+  await page.evaluate(() => {
+    const sidebar = fixtureElement(document.getElementById('sidebar'), '#sidebar');
+    const seen = { transform: false, dragging: false };
+    Reflect.set(window, '__drawerDragObserved', seen);
+    const observer = new MutationObserver(() => {
+      if (sidebar.style.transform) seen.transform = true;
+      if (sidebar.classList.contains('drawer-dragging')) seen.dragging = true;
+    });
+    observer.observe(sidebar, { attributes: true, attributeFilter: ['style', 'class'] });
+    Reflect.set(window, '__drawerDragObserver', observer);
+  });
+
+  await dispatchTouchSwipe(page, [
+    { x: 220, y: 520 },
+    { x: 192, y: 495 },
+    { x: 167, y: 480 },
+    { x: 120, y: 465 },
+    { x: 90, y: 460 },
+  ]);
+
+  const result = await page.evaluate(() => {
+    const observer = Reflect.get(window, '__drawerDragObserver');
+    if (observer instanceof MutationObserver) observer.disconnect();
+    const observed = Reflect.get(window, '__drawerDragObserved');
+    const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+    return { scrollTop: list.scrollTop, observed };
+  });
+
+  expect(result.scrollTop).toBeGreaterThan(0);
+  expect(result.observed).toEqual({ transform: false, dragging: false });
+  const state = await drawerState(page);
+  expect(state.open).toBe(true);
+  expect(state.dragging).toBe(false);
+  expect(state.inlineTransform).toBe('');
+});
+
 test('horizontal scroll in a code block is not hijacked in either direction', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await setMobileViewport(page);
@@ -488,13 +544,21 @@ test('version skew: missing overlay or sidebar markup never throws', async ({ pa
   ]);
   expect((await drawerState(page)).open).toBe(true);
 
-  // Cached/stripped DOM without #sidebar does not throw on swipe or toggle/open/close.
+  // Cached/stripped DOM without #sidebar does not throw, and close() still clears overlay/body/aria state.
   await page.evaluate(() => {
+    const overlay = document.createElement('div');
+    overlay.id = 'sidebarOverlay';
+    overlay.className = 'sidebar-overlay active';
+    document.body.append(overlay);
     document.getElementById('sidebar')?.remove();
     fixtureApp.features.sidebarQuery.toggle();
     fixtureApp.features.sidebarQuery.open();
     fixtureApp.features.sidebarQuery.close();
   });
+  const afterMissingClose = await drawerState(page);
+  expect(afterMissingClose.overlayActive).toBe(false);
+  expect(afterMissingClose.bodyOpen).toBe(false);
+  expect(afterMissingClose.ariaExpanded).toEqual(['false']);
   await dispatchTouchSwipe(page, [
     { x: 10, y: 400 },
     { x: 90, y: 401 },
