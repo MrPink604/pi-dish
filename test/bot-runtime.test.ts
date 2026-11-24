@@ -17,7 +17,9 @@ const runtimeModule: typeof import('../lib/bot-runtime') = require('../lib/bot-r
 const {
   openBotRuntime, settledWorker, newContextRefusal, composeHandoff, composeInstructions,
   formatKnowledgeIndex, formatKnowledgeIndexes, KB_INDEX_MAX_BYTES, workerRefMatches, findOwnedWorker,
+  authorizeDescendantClose,
 } = runtimeModule;
+const { encodeSessionKey, validSessionId }: typeof import('../lib/session-key') = require('../lib/session-key');
 const { openBotRegistry }: typeof import('../lib/bot-registry') = require('../lib/bot-registry');
 const { createBotHandlers, changeLines, ROOM_HOP_CAP }: typeof import('../lib/bot-handlers') = require('../lib/bot-handlers');
 const { turnEnd }: typeof import('../lib/session-api') = require('../lib/session-api');
@@ -703,6 +705,314 @@ test('closing an own worker that was already closed from outside marks it closed
   assert.notEqual(results[2].isError, true);
   assert.equal(textOf(results[2]), `Worker "check" (${WORKER_ID}) had already been closed; it is now marked closed in your records.`);
   assert.match(textOf(results[3]), /Open workers: none\.$/, 'it is no longer among the open workers');
+});
+
+test('a bot closes grandchildren, orphaned descendants after middle workers close, and cross-host descendants via launch provenance', async t => {
+  const BEELINK_UUID = '11111111-1111-4111-8111-111111111111';
+  const FRAMEWORK_UUID = '22222222-2222-4222-8222-222222222222';
+  const TYCHO_UUID = '33333333-3333-4333-8333-333333333333';
+  const coordId = '2026-11-24T01-00-00-000Z_aaaa1111-1111-4111-8111-111111111111';
+  const midId = '2026-11-24T01-01-00-000Z_bbbb2222-2222-4222-8222-222222222222';
+  const grandchildId = '2026-11-24T01-02-00-000Z_cccc3333-3333-4333-8333-333333333333';
+  const tychoChildId = '2026-11-24T01-03-00-000Z_dddd4444-4444-4444-8444-444444444444';
+  const localGreatGrandchildId = '2026-11-24T01-04-00-000Z_eeee5555-5555-4555-8555-555555555555';
+
+  assert.ok(validSessionId(BOT.id));
+  const botRoute = encodeSessionKey('bot', BOT.id);
+  const fleet = [
+    { self: true, name: null, label: 'beelink', hostId: BEELINK_UUID, reachable: true, capabilities: { resolve: true } },
+    { self: false, name: 'framework', label: 'framework', hostId: FRAMEWORK_UUID, reachable: true, capabilities: { resolve: true } },
+    { self: false, name: 'tycho', label: 'tycho', hostId: TYCHO_UUID, reachable: true, capabilities: { resolve: true } },
+  ];
+  const sessionsByKey = new Map<string, { host: string | null; session: Record<string, unknown> }>([
+    [`framework/${coordId}`, { host: 'framework', session: { id: coordId, name: 'coord', isActive: true, turnInProgress: false, parentId: `${BEELINK_UUID}:${botRoute}`, parentSource: 'pi-dish-launch' } }],
+    // Middle worker is already closed (inactive historical session), leaving grandchild orphaned.
+    [`framework/${midId}`, { host: 'framework', session: { id: midId, name: 'mid-worker', isActive: false, turnInProgress: false, parentId: coordId, parentSource: 'pi-dish-launch' } }],
+    [`framework/${grandchildId}`, { host: 'framework', session: { id: grandchildId, name: 'orphan-leaf', isActive: true, turnInProgress: false, parentId: midId, parentSource: 'pi-dish-launch' } }],
+    [`tycho/${tychoChildId}`, { host: 'tycho', session: { id: tychoChildId, name: 'tycho-worker', isActive: true, turnInProgress: false, parentId: `${FRAMEWORK_UUID}:${coordId}`, parentSource: 'pi-dish-launch' } }],
+    [localGreatGrandchildId, { host: null, session: { id: localGreatGrandchildId, name: 'local-leaf', isActive: true, turnInProgress: false, parentId: `${TYCHO_UUID}:${tychoChildId}`, parentSource: 'pi-dish-launch' } }],
+  ]);
+
+  const resolveMock = (ref: string) => {
+    const exact = sessionsByKey.get(ref);
+    if (exact) return { host: exact.host, id: exact.session.id, session: exact.session };
+    const slash = ref.indexOf('/');
+    const host = slash > 0 ? ref.slice(0, slash) : null;
+    const prefix = slash > 0 ? ref.slice(slash + 1) : ref;
+    for (const entry of sessionsByKey.values()) {
+      if (entry.host !== host) continue;
+      const id = String(entry.session.id);
+      if (id === prefix || id.includes(`_${prefix}`)) return { host: entry.host, id, session: entry.session };
+    }
+    throw new Error(`Session not found: ${ref}`);
+  };
+
+  const closed: string[] = [];
+  const port: SessionsPort = async args => {
+    if (args[0] === 'spawn') return JSON.stringify({ sessionId: coordId, harness: 'pi' });
+    if (args[0] === 'hosts') return JSON.stringify({ hosts: fleet });
+    if (args[0] === 'resolve') return JSON.stringify(resolveMock(args[1]));
+    if (args[0] === 'close') {
+      const entry = sessionsByKey.get(args[1]);
+      if (!entry || entry.session.isActive === false) throw new Error('Session not active');
+      entry.session.isActive = false;
+      closed.push(args[1]);
+      return '{"ok":true}';
+    }
+    throw new Error(`unexpected ${args.join(' ')}`);
+  };
+
+  const bot = await openTestBot(t, port, { pollMs: { first: 600_000, max: 600_000 } });
+  const close = (ref: string) => bot.faux.fauxAssistantMessage(
+    [bot.faux.fauxToolCall('sessions', { action: 'close', ref })], { stopReason: 'toolUse' },
+  );
+  bot.respond(
+    toolCall(bot, 'spawn_worker', { name: 'coord', host: 'framework', brief: 'Coordinate.' }),
+    // Close the root coordinator first so every remaining descendant is orphaned.
+    close('framework/aaaa1111'),
+    close('framework/cccc3333'),
+    close('tycho/dddd4444'),
+    close('eeee5555'),
+    bot.faux.fauxAssistantMessage('Closed all descendants.'),
+  );
+  await bot.runtime.prompt('Start coordinator, close it, then clean up its descendants', 'followUp');
+  await until(() => said(bot, 'Closed all descendants.'), 'all descendant closes complete');
+
+  assert.deepEqual(closed, [
+    `framework/${coordId}`,
+    `framework/${grandchildId}`,
+    `tycho/${tychoChildId}`,
+    localGreatGrandchildId,
+  ]);
+  const results = toolResults(bot);
+  assert.equal(results[1].isError, false);
+  assert.equal(results[2].isError, false);
+  assert.match(textOf(results[2]), new RegExp(`^Closed descendant session "orphan-leaf" \\(framework/${grandchildId}, under worker "coord"\\)\\.$`));
+  assert.equal(results[3].isError, false);
+  assert.match(textOf(results[3]), new RegExp(`^Closed descendant session "tycho-worker" \\(tycho/${tychoChildId}, under worker "coord"\\)\\.$`));
+  assert.equal(results[4].isError, false);
+  assert.match(textOf(results[4]), new RegExp(`^Closed descendant session "local-leaf" \\(${localGreatGrandchildId}, under worker "coord"\\)\\.$`));
+});
+
+test('a bot refuses closing unrelated sessions, same-cwd/name sessions, spoofed parent headers, claimed bot parents, wrong-host parents, and cycles', async t => {
+  const BEELINK_UUID = '11111111-1111-4111-8111-111111111111';
+  const FRAMEWORK_UUID = '22222222-2222-4222-8222-222222222222';
+  const TYCHO_UUID = '33333333-3333-4333-8333-333333333333';
+  const workerId = '2026-11-24T02-00-00-000Z_aaaa1111-1111-4111-8111-111111111111';
+  const sameCwdId = '2026-11-24T02-01-00-000Z_bbbb2222-2222-4222-8222-222222222222';
+  const headerSpoofId = '2026-11-24T02-02-00-000Z_cccc3333-3333-4333-8333-333333333333';
+  const childOfHeaderSpoofId = '2026-11-24T02-03-00-000Z_dddd4444-4444-4444-8444-444444444444';
+  const claimedBotParentId = '2026-11-24T02-04-00-000Z_eeee5555-5555-4555-8555-555555555555';
+  const wrongHostId = '2026-11-24T02-05-00-000Z_ffff6666-6666-4666-8666-666666666666';
+  const cycleA = '2026-11-24T02-06-00-000Z_12340001-0000-4000-8000-000000000001';
+  const cycleB = '2026-11-24T02-06-00-000Z_12340002-0000-4000-8000-000000000002';
+  assert.ok(validSessionId(BOT.id));
+  const botRoute = encodeSessionKey('bot', BOT.id);
+
+  const fleet = [
+    { self: true, name: null, label: 'beelink', hostId: BEELINK_UUID, reachable: true },
+    { self: false, name: 'framework', label: 'framework', hostId: FRAMEWORK_UUID, reachable: true },
+    { self: false, name: 'tycho', label: 'tycho', hostId: TYCHO_UUID, reachable: true },
+  ];
+  const sessionsByKey = new Map<string, { host: string | null; session: Record<string, unknown> }>([
+    [`framework/${workerId}`, { host: 'framework', session: { id: workerId, name: 'coord', cwd: '/repo/osbg', isActive: true, parentId: `${BEELINK_UUID}:${botRoute}`, parentSource: 'pi-dish-launch' } }],
+    // Unrelated session sharing the exact same cwd and name.
+    [`framework/${sameCwdId}`, { host: 'framework', session: { id: sameCwdId, name: 'coord', cwd: '/repo/osbg', isActive: true, parentId: null, parentSource: null } }],
+    // Session claiming worker as parent via editable JSONL header (or user /fork), NOT pi-dish-launch.
+    [`framework/${headerSpoofId}`, { host: 'framework', session: { id: headerSpoofId, name: 'user-fork', cwd: '/repo/osbg', isActive: true, parentId: workerId, parentSource: 'pi-session-header' } }],
+    // Launch child of that header-spoofed session: chain is broken by non-launch edge.
+    [`framework/${childOfHeaderSpoofId}`, { host: 'framework', session: { id: childOfHeaderSpoofId, name: 'child-of-fork', isActive: true, parentId: headerSpoofId, parentSource: 'pi-dish-launch' } }],
+    // Session spawned by an external caller claiming the bot directly as parent (never recorded in memory.workers).
+    [`framework/${claimedBotParentId}`, { host: 'framework', session: { id: claimedBotParentId, name: 'spoofed-bot-child', isActive: true, parentId: `${BEELINK_UUID}:${botRoute}`, parentSource: 'pi-dish-launch' } }],
+    [botRoute, { host: null, session: { id: botRoute, name: 'Fleet', harnessId: 'bot', isActive: true, parentId: null, parentSource: null } }],
+    // Bare parentId matching workerId on the WRONG host (tycho vs framework).
+    [`tycho/${wrongHostId}`, { host: 'tycho', session: { id: wrongHostId, name: 'wrong-host', isActive: true, parentId: workerId, parentSource: 'pi-dish-launch' } }],
+    // Provenance cycle on framework.
+    [`framework/${cycleA}`, { host: 'framework', session: { id: cycleA, name: 'cycle-a', isActive: true, parentId: cycleB, parentSource: 'pi-dish-launch' } }],
+    [`framework/${cycleB}`, { host: 'framework', session: { id: cycleB, name: 'cycle-b', isActive: true, parentId: cycleA, parentSource: 'pi-dish-launch' } }],
+  ]);
+
+  const closed: string[] = [];
+  const port: SessionsPort = async args => {
+    if (args[0] === 'spawn') return JSON.stringify({ sessionId: workerId, harness: 'pi' });
+    if (args[0] === 'hosts') return JSON.stringify({ hosts: fleet });
+    if (args[0] === 'resolve') {
+      const entry = sessionsByKey.get(args[1]);
+      if (!entry) throw new Error(`Session not found: ${args[1]}`);
+      return JSON.stringify({ host: entry.host, id: entry.session.id, session: entry.session });
+    }
+    if (args[0] === 'close') { closed.push(args[1]); return '{"ok":true}'; }
+    throw new Error(`unexpected ${args.join(' ')}`);
+  };
+
+  const bot = await openTestBot(t, port, { pollMs: { first: 600_000, max: 600_000 } });
+  const refusedTargets = [
+    `framework/${sameCwdId}`,
+    `framework/${headerSpoofId}`,
+    `framework/${childOfHeaderSpoofId}`,
+    `framework/${claimedBotParentId}`,
+    `tycho/${wrongHostId}`,
+    `framework/${cycleA}`,
+  ];
+  bot.respond(
+    toolCall(bot, 'spawn_worker', { name: 'coord', host: 'framework', cwd: '/repo/osbg', brief: 'Work.' }),
+    ...refusedTargets.map(ref => bot.faux.fauxAssistantMessage(
+      [bot.faux.fauxToolCall('sessions', { action: 'close', ref })], { stopReason: 'toolUse' },
+    )),
+    bot.faux.fauxAssistantMessage('All refused.'),
+  );
+  await bot.runtime.prompt('Try closing unrelated and spoofed sessions', 'followUp');
+  await until(() => said(bot, 'All refused.'), 'all refusals complete');
+
+  assert.deepEqual(closed, [], 'no unrelated or spoofed session may be closed');
+  const results = toolResults(bot).slice(1);
+  assert.equal(results.length, refusedTargets.length);
+  for (let i = 0; i < refusedTargets.length; i++) {
+    assert.equal(results[i].isError, true, `${refusedTargets[i]} must be refused`);
+    assert.match(textOf(results[i]), /^Refused: .* is not a worker you started or descended from one/, refusedTargets[i]);
+  }
+
+  // Unit check: authorizeDescendantClose also rejects target bots and prefix-hijacked parent hops.
+  const memory = { notebook: '', notebookSavedIn: -1, windows: [], workers: { w: workerRecord(workerId, 'framework') } };
+  const botTarget = await authorizeDescendantClose(memory, 'fake-bot', {
+    hosts: async () => fleet,
+    resolve: async () => ({
+      host: 'framework', id: 'fake-bot', name: 'Bot', harnessId: 'bot', isActive: true,
+      turnInProgress: false, compacting: false, askPending: false, parentId: workerId, parentSource: 'pi-dish-launch',
+    }),
+  });
+  assert.equal(botTarget, null, 'a bot session can never be closed via descendant authorization');
+  const hijackedHop = await authorizeDescendantClose(memory, 'framework/child', {
+    hosts: async () => fleet,
+    resolve: async ref => ref === 'framework/child'
+      ? { host: 'framework', id: 'child', name: 'child', harnessId: 'pi', isActive: true, turnInProgress: false, compacting: false, askPending: false, parentId: 'mid-short', parentSource: 'pi-dish-launch' }
+      : { host: 'framework', id: 'mid-short-different-session', name: 'other', harnessId: 'pi', isActive: true, turnInProgress: false, compacting: false, askPending: false, parentId: workerId, parentSource: 'pi-dish-launch' },
+  });
+  assert.equal(hijackedHop, null, 'a parent hop whose resolved id differs from the recorded parentId is refused');
+});
+
+test('sessions close with cascade: true closes idle descendants deepest-first and leaves busy, forked, and unrelated sessions untouched', async t => {
+  const BEELINK_UUID = '11111111-1111-4111-8111-111111111111';
+  const FRAMEWORK_UUID = '22222222-2222-4222-8222-222222222222';
+  const TYCHO_UUID = '33333333-3333-4333-8333-333333333333';
+  const coord1 = '2026-11-24T03-00-00-000Z_aaaa1111-1111-4111-8111-111111111111';
+  const coord1Child = '2026-11-24T03-00-01-000Z_aaaa2222-2222-4222-8222-222222222222';
+  const coord2 = '2026-11-24T03-01-00-000Z_bbbb1111-1111-4111-8111-111111111111';
+  const idleChild = '2026-11-24T03-01-01-000Z_bbbb2222-2222-4222-8222-222222222222';
+  const closedMid = '2026-11-24T03-01-02-000Z_bbbb3333-3333-4333-8333-333333333333';
+  const idleGrandchild = '2026-11-24T03-01-03-000Z_bbbb4444-4444-4444-8444-444444444444';
+  const tychoIdleGrandchild = '2026-11-24T03-01-04-000Z_bbbb5555-5555-4555-8555-555555555555';
+  const busyChild = '2026-11-24T03-01-05-000Z_bbbb6666-6666-4666-8666-666666666666';
+  const compactingChild = '2026-11-24T03-01-06-000Z_bbbb7777-7777-4777-8777-777777777777';
+  const askPendingChild = '2026-11-24T03-01-07-000Z_bbbb8888-8888-4888-8888-888888888888';
+  const userFork = '2026-11-24T03-01-08-000Z_cccc1111-1111-4111-8111-111111111111';
+  const unrelated = '2026-11-24T03-01-09-000Z_dddd1111-1111-4111-8111-111111111111';
+
+  const fleet = [
+    { self: true, name: null, label: 'beelink', hostId: BEELINK_UUID, reachable: true },
+    { self: false, name: 'framework', label: 'framework', hostId: FRAMEWORK_UUID, reachable: true },
+    { self: false, name: 'tycho', label: 'tycho', hostId: TYCHO_UUID, reachable: true },
+  ];
+  const allSessions = new Map<string, { host: string | null; session: Record<string, unknown> }>([
+    [`framework/${coord1}`, { host: 'framework', session: { id: coord1, name: 'coord-1', isActive: true, turnInProgress: false, parentId: null, parentSource: null } }],
+    [`framework/${coord1Child}`, { host: 'framework', session: { id: coord1Child, name: 'coord-1-child', isActive: true, turnInProgress: false, parentId: coord1, parentSource: 'pi-dish-launch' } }],
+    [`framework/${coord2}`, { host: 'framework', session: { id: coord2, name: 'coord-2', isActive: true, turnInProgress: false, parentId: null, parentSource: null } }],
+    [`framework/${idleChild}`, { host: 'framework', session: { id: idleChild, name: 'idle-child', isActive: true, turnInProgress: false, parentId: coord2, parentSource: 'pi-dish-launch' } }],
+    [`framework/${closedMid}`, { host: 'framework', session: { id: closedMid, name: 'closed-mid', isActive: false, turnInProgress: false, parentId: coord2, parentSource: 'pi-dish-launch' } }],
+    [`framework/${idleGrandchild}`, { host: 'framework', session: { id: idleGrandchild, name: 'idle-gc', isActive: true, turnInProgress: false, parentId: closedMid, parentSource: 'pi-dish-launch' } }],
+    [`tycho/${tychoIdleGrandchild}`, { host: 'tycho', session: { id: tychoIdleGrandchild, name: 'tycho-gc', isActive: true, turnInProgress: false, parentId: `${FRAMEWORK_UUID}:${closedMid}`, parentSource: 'pi-dish-launch' } }],
+    [`framework/${busyChild}`, { host: 'framework', session: { id: busyChild, name: 'busy-child', isActive: true, turnInProgress: true, parentId: coord2, parentSource: 'pi-dish-launch' } }],
+    [`framework/${compactingChild}`, { host: 'framework', session: { id: compactingChild, name: 'compacting-child', isActive: true, compacting: true, parentId: coord2, parentSource: 'pi-dish-launch' } }],
+    [`framework/${askPendingChild}`, { host: 'framework', session: { id: askPendingChild, name: 'ask-child', isActive: true, askPending: true, parentId: coord2, parentSource: 'pi-dish-launch' } }],
+    [`framework/${userFork}`, { host: 'framework', session: { id: userFork, name: 'user-fork', isActive: true, turnInProgress: false, parentId: coord2, parentSource: 'pi-session-header' } }],
+    [`framework/${unrelated}`, { host: 'framework', session: { id: unrelated, name: 'unrelated', isActive: true, turnInProgress: false, parentId: null, parentSource: null } }],
+  ]);
+
+  const spawnQueue = [coord1, coord2];
+  const closed: string[] = [];
+  const port: SessionsPort = async args => {
+    if (args[0] === 'spawn') return JSON.stringify({ sessionId: spawnQueue.shift(), harness: 'pi' });
+    if (args[0] === 'hosts') return JSON.stringify({ hosts: fleet });
+    if (args[0] === 'list') {
+      const hostIdx = args.indexOf('--host');
+      const host = hostIdx >= 0 ? args[hostIdx + 1] : null;
+      const active = [...allSessions.values()]
+        .filter(entry => entry.host === host && entry.session.isActive === true)
+        .map(entry => entry.session);
+      return JSON.stringify({ active, previous: [], children: [], total: active.length });
+    }
+    if (args[0] === 'resolve') {
+      const entry = allSessions.get(args[1]);
+      if (!entry) throw new Error(`Session not found: ${args[1]}`);
+      return JSON.stringify({ host: entry.host, id: entry.session.id, session: entry.session });
+    }
+    if (args[0] === 'close') {
+      const entry = allSessions.get(args[1]);
+      if (!entry || entry.session.isActive === false) throw new Error('Session not active');
+      entry.session.isActive = false;
+      closed.push(args[1]);
+      return '{"ok":true}';
+    }
+    throw new Error(`unexpected ${args.join(' ')}`);
+  };
+
+  const bot = await openTestBot(t, port, { pollMs: { first: 600_000, max: 600_000 } });
+  bot.respond(
+    toolCall(bot, 'spawn_worker', { name: 'coord-1', host: 'framework', brief: 'Work 1.' }),
+    toolCall(bot, 'spawn_worker', { name: 'coord-2', host: 'framework', brief: 'Work 2.' }),
+    // Default close (no cascade): must NOT close coord1Child.
+    bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('sessions', { action: 'close', ref: `framework/${coord1}` })], { stopReason: 'toolUse' }),
+    // Opt-in cascade close via codemode so we verify both text and structured output.
+    script(bot, `return await tools.sessions({ action: "close", ref: "framework/${coord2}", cascade: true });`),
+    bot.faux.fauxAssistantMessage('First cascade done.'),
+    // Re-running cascade close on an already-closed worker after busyChild finishes sweeps the remaining idle orphan.
+    bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('sessions', { action: 'close', ref: `framework/${coord2}`, cascade: true })], { stopReason: 'toolUse' }),
+    bot.faux.fauxAssistantMessage('Cascade done.'),
+  );
+  await bot.runtime.prompt('Close coord-1 normally, then cascade close coord-2', 'followUp');
+  await until(() => said(bot, 'First cascade done.'), 'first cascade completes');
+  allSessions.get(`framework/${busyChild}`)!.session.turnInProgress = false;
+  await bot.runtime.prompt('Sweep remaining idle descendants of coord-2', 'followUp');
+  await until(() => said(bot, 'Cascade done.'), 'second cascade completes');
+
+  // Verify default close left coord1Child open.
+  assert.equal(allSessions.get(`framework/${coord1Child}`)!.session.isActive, true, 'non-cascade close must not close descendants');
+  // Verify user fork and unrelated session stayed open.
+  assert.equal(allSessions.get(`framework/${userFork}`)!.session.isActive, true, 'pi-session-header fork must never be closed by cascade');
+  assert.equal(allSessions.get(`framework/${unrelated}`)!.session.isActive, true, 'unrelated session must never be closed by cascade');
+  // Verify compacting and askPending children stayed open.
+  assert.equal(allSessions.get(`framework/${compactingChild}`)!.session.isActive, true, 'compacting descendant must stay open');
+  assert.equal(allSessions.get(`framework/${askPendingChild}`)!.session.isActive, true, 'askPending descendant must stay open');
+
+  // Verify first cascade structured output and deepest-first order.
+  const cascadeStructured = returned(toolResults(bot)[3]) as Record<string, unknown>;
+  assert.equal(cascadeStructured.action, 'close');
+  assert.equal(cascadeStructured.ref, `framework/${coord2}`);
+  assert.equal(cascadeStructured.alreadyClosed, false);
+  assert.deepEqual(cascadeStructured.closedDescendants, [
+    `framework/${idleGrandchild}`,
+    `tycho/${tychoIdleGrandchild}`,
+    `framework/${idleChild}`,
+  ], 'depth-2 idle descendants close before depth-1 idle child');
+  assert.deepEqual(cascadeStructured.skippedBusy, [
+    `framework/${busyChild}`,
+    `framework/${compactingChild}`,
+    `framework/${askPendingChild}`,
+  ]);
+
+  // Verify second cascade on already-closed coord-2 swept busyChild once it became idle.
+  const secondCascadeText = textOf(toolResults(bot)[4]);
+  assert.match(secondCascadeText, /had already been closed/);
+  assert.match(secondCascadeText, new RegExp(`Cascade closed 1 idle descendant: framework/${busyChild}\\.`));
+  assert.match(secondCascadeText, /Left 2 busy \(mid-turn\) descendants running:/);
+  assert.deepEqual(closed, [
+    `framework/${coord1}`,
+    `framework/${coord2}`,
+    `framework/${idleGrandchild}`,
+    `tycho/${tychoIdleGrandchild}`,
+    `framework/${idleChild}`,
+    `framework/${busyChild}`,
+  ]);
 });
 
 test('the settle rule waits for the turn to end and for new messages', () => {

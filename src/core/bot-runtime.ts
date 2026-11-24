@@ -41,7 +41,7 @@ import { sessionRefAliases } from './helper-refs';
 import type { ProtocolRecord } from './wire-protocol';
 import { loadCacheRetentionConfig, type CacheRetentionConfig } from './cache-retention';
 import { readDishSettings } from './dish-store';
-import { encodeSessionKey, validSessionId } from './session-key';
+import { canonicalSessionId, encodeSessionKey, parseHostQualifiedCaller, validSessionId } from './session-key';
 import {
   composeIdleDraftRequest,
   idleRolloverConfig,
@@ -360,6 +360,399 @@ export function findOwnedWorker(
   return direct.length === 1 ? direct[0] : undefined;
 }
 
+/** Maximum launch-provenance hops walked when verifying or scanning descendants of an owned worker. */
+const MAX_DESCENDANT_DEPTH = 16;
+
+export interface FleetHostInfo {
+  self: boolean;
+  name: string | null;
+  label: string | null;
+  hostId: string | null;
+  reachable: boolean;
+}
+
+export interface ResolvedProvenanceSession {
+  host: string | null;
+  id: string;
+  name: string;
+  harnessId: string | null;
+  isActive: boolean | null;
+  turnInProgress: boolean;
+  compacting: boolean;
+  askPending: boolean;
+  parentId: string | null;
+  parentSource: string | null;
+}
+
+export interface AuthorizedDescendant {
+  target: ResolvedProvenanceSession;
+  /** Canonical ref for `pi-dish-sessions close` (`host/id` or `id`). */
+  ref: string;
+  /** Owned worker at the root of the verified `pi-dish-launch` chain. */
+  ancestor: WorkerRecord;
+}
+
+export interface ProvenanceLookupPorts {
+  resolve(ref: string): Promise<ResolvedProvenanceSession | null>;
+  hosts(): Promise<readonly FleetHostInfo[]>;
+}
+
+export interface ActiveDescendant {
+  session: ResolvedProvenanceSession;
+  ref: string;
+  depth: number;
+  busy: boolean;
+}
+
+export interface DescendantScanResult {
+  descendants: ActiveDescendant[];
+  unreachableHosts: string[];
+}
+
+export interface DescendantScanPorts extends ProvenanceLookupPorts {
+  listActive(host: string | null): Promise<ResolvedProvenanceSession[]>;
+}
+
+function safeCanonicalSessionId(id: string): string {
+  try { return canonicalSessionId(id); } catch { return id; }
+}
+
+function normalizeHostName(host: string | null | undefined, hosts?: readonly FleetHostInfo[]): string | null {
+  if (!host || host === 'self') return null;
+  if (hosts?.length) {
+    const lower = host.toLowerCase();
+    for (const entry of hosts) {
+      if (entry.self && (entry.label?.toLowerCase() === lower || entry.hostId?.toLowerCase() === lower)) return null;
+    }
+    const byName = hosts.find(entry => !entry.self && entry.name === host);
+    if (byName) return byName.name;
+    const byId = hosts.find(entry => entry.hostId?.toLowerCase() === lower);
+    if (byId) return byId.self ? null : byId.name;
+    const byLabel = hosts.find(entry => entry.label?.toLowerCase() === lower);
+    if (byLabel) return byLabel.self ? null : byLabel.name;
+  }
+  return host;
+}
+
+function resolveHostUuid(hostId: string, hosts: readonly FleetHostInfo[]): { known: true; host: string | null } | { known: false } {
+  const lower = hostId.toLowerCase();
+  const entry = hosts.find(candidate => candidate.hostId?.toLowerCase() === lower);
+  if (!entry) return { known: false };
+  if (!entry.self && !entry.name) return { known: false };
+  return { known: true, host: entry.self ? null : entry.name };
+}
+
+/** Find one owned worker (open or closed) by exact canonical session id and normalized host. */
+export function findOwnedWorkerByIdentity(
+  memory: BotMemory | undefined,
+  host: string | null,
+  sessionId: string,
+  hosts?: readonly FleetHostInfo[],
+): [string, WorkerRecord] | undefined {
+  if (!sessionId) return undefined;
+  const targetHost = normalizeHostName(host, hosts);
+  const targetId = safeCanonicalSessionId(sessionId);
+  for (const entry of Object.entries(memory?.workers ?? {})) {
+    const worker = entry[1];
+    if (normalizeHostName(worker.host, hosts) !== targetHost) continue;
+    if (safeCanonicalSessionId(worker.sessionId) === targetId) return entry;
+  }
+  return undefined;
+}
+
+type LaunchParent =
+  | { hostKnown: true; host: string | null; id: string; resolveRef: string }
+  | { hostKnown: false; hostId: string; id: string; resolveRef: string };
+
+/**
+ * Extract the server-recorded `pi-dish-launch` parent edge of a session.
+ * Rejects self-claimed JSONL headers (`pi-session-header`) and non-launch hints.
+ */
+function launchParentOf(
+  session: Pick<ResolvedProvenanceSession, 'host' | 'id' | 'parentId' | 'parentSource'>,
+  hosts?: readonly FleetHostInfo[],
+): LaunchParent | null {
+  if (session.parentSource !== 'pi-dish-launch' || !session.parentId) return null;
+  const selfHost = normalizeHostName(session.host, hosts);
+  const selfId = safeCanonicalSessionId(session.id);
+  const qualified = parseHostQualifiedCaller(session.parentId);
+  if (qualified) {
+    const parentId = safeCanonicalSessionId(qualified.sessionId);
+    const mapped = hosts ? resolveHostUuid(qualified.hostId, hosts) : { known: false as const };
+    if (mapped.known) {
+      if (mapped.host === selfHost && parentId === selfId) return null;
+      return { hostKnown: true, host: mapped.host, id: parentId, resolveRef: fullWorkerRef(parentId, mapped.host) };
+    }
+    return { hostKnown: false, hostId: qualified.hostId, id: parentId, resolveRef: `${qualified.hostId}:${parentId}` };
+  }
+  let parentId: string;
+  try { parentId = canonicalSessionId(session.parentId); } catch { return null; }
+  if (parentId === selfId) return null;
+  return { hostKnown: true, host: selfHost, id: parentId, resolveRef: fullWorkerRef(parentId, selfHost) };
+}
+
+function parseResolvedSession(raw: unknown, fallbackHost: string | null | undefined): ResolvedProvenanceSession | null {
+  if (!isRecord(raw)) return null;
+  const session = isRecord(raw.session) ? raw.session : null;
+  if (!session) return null;
+  const id = typeof raw.id === 'string' && raw.id
+    ? raw.id
+    : typeof session.id === 'string' && session.id ? session.id : '';
+  if (!id) return null;
+  let host: string | null;
+  if (Object.hasOwn(raw, 'host')) {
+    host = typeof raw.host === 'string' && raw.host && raw.host !== 'self' ? raw.host : null;
+  } else {
+    if (fallbackHost === undefined) return null;
+    host = fallbackHost === 'self' ? null : fallbackHost;
+  }
+  return {
+    host,
+    id,
+    name: typeof session.name === 'string' && session.name ? session.name : id,
+    harnessId: typeof session.harnessId === 'string' && session.harnessId ? session.harnessId : null,
+    isActive: typeof session.isActive === 'boolean' ? session.isActive : null,
+    turnInProgress: session.turnInProgress === true,
+    compacting: session.compacting === true,
+    askPending: session.askPending === true,
+    parentId: typeof session.parentId === 'string' && session.parentId ? session.parentId : null,
+    parentSource: typeof session.parentSource === 'string' && session.parentSource ? session.parentSource : null,
+  };
+}
+
+function parseFleetHosts(raw: unknown): FleetHostInfo[] {
+  if (!isRecord(raw) || !Array.isArray(raw.hosts)) return [];
+  const out: FleetHostInfo[] = [];
+  for (const item of raw.hosts) {
+    if (!isRecord(item)) continue;
+    const self = item.self === true;
+    const name = !self && typeof item.name === 'string' && item.name ? item.name : null;
+    if (!self && !name) continue;
+    out.push({
+      self,
+      name,
+      label: typeof item.label === 'string' && item.label ? item.label : null,
+      hostId: typeof item.hostId === 'string' && item.hostId ? item.hostId : null,
+      reachable: self || item.reachable === true,
+    });
+  }
+  return out;
+}
+
+function parseActiveRows(raw: unknown, host: string | null): ResolvedProvenanceSession[] {
+  if (!isRecord(raw) || !Array.isArray(raw.active)) return [];
+  const rows: ResolvedProvenanceSession[] = [];
+  for (const item of raw.active) {
+    if (!isRecord(item) || typeof item.id !== 'string' || !item.id || item.isActive === false) continue;
+    rows.push({
+      host,
+      id: item.id,
+      name: typeof item.name === 'string' && item.name ? item.name : item.id,
+      harnessId: typeof item.harnessId === 'string' && item.harnessId ? item.harnessId : null,
+      isActive: true,
+      turnInProgress: item.turnInProgress === true,
+      compacting: item.compacting === true,
+      askPending: item.askPending === true,
+      parentId: typeof item.parentId === 'string' && item.parentId ? item.parentId : null,
+      parentSource: typeof item.parentSource === 'string' && item.parentSource ? item.parentSource : null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Authorize closing a session that is not directly in `memory.workers` by walking
+ * its server-recorded `pi-dish-launch` parent chain up to an owned worker (open or closed).
+ * Fails closed on non-launch parents (e.g. `pi-session-header`), cycles, missing hops, or host mismatches.
+ */
+export async function authorizeDescendantClose(
+  memory: BotMemory | undefined,
+  wanted: string,
+  lookup: ProvenanceLookupPorts,
+): Promise<AuthorizedDescendant | null> {
+  if (!Object.keys(memory?.workers ?? {}).length) return null;
+  const target = await lookup.resolve(wanted);
+  if (!target || target.harnessId === 'bot') return null;
+
+  let fleet: readonly FleetHostInfo[] | undefined;
+  const ensureHosts = async (): Promise<readonly FleetHostInfo[]> => {
+    if (fleet === undefined) fleet = await lookup.hosts();
+    return fleet;
+  };
+
+  const visited = new Set<string>([`${target.host ?? ''}\0${safeCanonicalSessionId(target.id)}`]);
+  let current: ResolvedProvenanceSession = target;
+
+  for (let depth = 0; depth < MAX_DESCENDANT_DEPTH; depth++) {
+    if (current.parentSource !== 'pi-dish-launch' || !current.parentId) return null;
+    if (parseHostQualifiedCaller(current.parentId)) await ensureHosts();
+    const parent = launchParentOf(current, fleet);
+    if (!parent) return null;
+
+    if (parent.hostKnown) {
+      const owned = findOwnedWorkerByIdentity(memory, parent.host, parent.id, fleet);
+      if (owned) {
+        const targetHost = normalizeHostName(target.host, fleet);
+        return { target, ref: fullWorkerRef(target.id, targetHost), ancestor: owned[1] };
+      }
+      const visitKey = `${parent.host ?? ''}\0${parent.id}`;
+      if (visited.has(visitKey)) return null;
+      visited.add(visitKey);
+    } else {
+      const visitKey = `uuid:${parent.hostId.toLowerCase()}\0${parent.id}`;
+      if (visited.has(visitKey)) return null;
+      visited.add(visitKey);
+    }
+
+    const resolvedParent = await lookup.resolve(parent.resolveRef);
+    if (!resolvedParent) return null;
+    if (safeCanonicalSessionId(resolvedParent.id) !== parent.id) return null;
+    if (parent.hostKnown && normalizeHostName(resolvedParent.host, fleet) !== normalizeHostName(parent.host, fleet)) {
+      return null;
+    }
+
+    if (!parent.hostKnown) {
+      const resolvedHost = normalizeHostName(resolvedParent.host, fleet);
+      const owned = findOwnedWorkerByIdentity(memory, resolvedHost, resolvedParent.id, fleet);
+      if (owned) {
+        const targetHost = normalizeHostName(target.host, fleet);
+        return { target, ref: fullWorkerRef(target.id, targetHost), ancestor: owned[1] };
+      }
+      const visitKey = `${resolvedHost ?? ''}\0${safeCanonicalSessionId(resolvedParent.id)}`;
+      if (visited.has(visitKey)) return null;
+      visited.add(visitKey);
+    }
+
+    current = resolvedParent;
+  }
+  return null;
+}
+
+/**
+ * Find all active `pi-dish-launch` descendant sessions of `(rootHost, rootId)` across reachable fleet hosts,
+ * sorted deepest-first so cascade teardown closes leaves before intermediate parents.
+ */
+export async function findActiveDescendants(
+  rootHost: string | null,
+  rootId: string,
+  scanPorts: DescendantScanPorts,
+): Promise<DescendantScanResult> {
+  const fleet = await scanPorts.hosts();
+  const normalizedRootHost = normalizeHostName(rootHost, fleet);
+  const canonicalRootId = safeCanonicalSessionId(rootId);
+  const unreachableHosts: string[] = [];
+  const hostsToScan: (string | null)[] = [];
+  const seenScan = new Set<string>();
+  const addScanHost = (host: string | null) => {
+    const key = host ?? '';
+    if (!seenScan.has(key)) { seenScan.add(key); hostsToScan.push(host); }
+  };
+
+  if (fleet.length) {
+    for (const entry of fleet) {
+      if (entry.reachable) addScanHost(entry.self ? null : entry.name);
+      else if (!entry.self && entry.name) unreachableHosts.push(entry.name);
+    }
+    if (!unreachableHosts.includes(normalizedRootHost ?? '')) addScanHost(normalizedRootHost);
+  } else {
+    addScanHost(normalizedRootHost);
+  }
+
+  const activeByKey = new Map<string, ResolvedProvenanceSession>();
+  const listed = await Promise.all(hostsToScan.map(async (host) => {
+    try {
+      return { host, rows: await scanPorts.listActive(host), ok: true as const };
+    } catch {
+      return { host, rows: [] as ResolvedProvenanceSession[], ok: false as const };
+    }
+  }));
+  for (const outcome of listed) {
+    if (!outcome.ok) {
+      unreachableHosts.push(outcome.host ?? '(self)');
+      continue;
+    }
+    for (const row of outcome.rows) {
+      const host = normalizeHostName(row.host, fleet);
+      const id = safeCanonicalSessionId(row.id);
+      activeByKey.set(`${host ?? ''}\0${id}`, { ...row, host });
+    }
+  }
+
+  const resolvedCache = new Map<string, ResolvedProvenanceSession | null>();
+  const resolveCached = async (ref: string): Promise<ResolvedProvenanceSession | null> => {
+    if (resolvedCache.has(ref)) return resolvedCache.get(ref) ?? null;
+    const resolved = await scanPorts.resolve(ref);
+    resolvedCache.set(ref, resolved);
+    return resolved;
+  };
+
+  const descendants: ActiveDescendant[] = [];
+  for (const candidate of activeByKey.values()) {
+    if (candidate.harnessId === 'bot') continue;
+    const candidateId = safeCanonicalSessionId(candidate.id);
+    if (candidate.host === normalizedRootHost && candidateId === canonicalRootId) continue;
+    if (candidate.parentSource !== 'pi-dish-launch' || !candidate.parentId) continue;
+
+    const visited = new Set<string>([`${candidate.host ?? ''}\0${candidateId}`]);
+    let current: ResolvedProvenanceSession = candidate;
+    let matchedDepth: number | null = null;
+
+    for (let depth = 1; depth <= MAX_DESCENDANT_DEPTH; depth++) {
+      const parent = launchParentOf(current, fleet);
+      if (!parent) break;
+
+      if (parent.hostKnown) {
+        const parentHost = normalizeHostName(parent.host, fleet);
+        if (parentHost === normalizedRootHost && parent.id === canonicalRootId) {
+          matchedDepth = depth;
+          break;
+        }
+        const key = `${parentHost ?? ''}\0${parent.id}`;
+        if (visited.has(key)) break;
+        visited.add(key);
+
+        const activeParent = activeByKey.get(key);
+        if (activeParent) {
+          current = activeParent;
+          continue;
+        }
+        const resolvedParent = await resolveCached(parent.resolveRef);
+        if (!resolvedParent || safeCanonicalSessionId(resolvedParent.id) !== parent.id
+          || normalizeHostName(resolvedParent.host, fleet) !== parentHost) break;
+        current = { ...resolvedParent, host: parentHost };
+      } else {
+        const uuidKey = `uuid:${parent.hostId.toLowerCase()}\0${parent.id}`;
+        if (visited.has(uuidKey)) break;
+        visited.add(uuidKey);
+
+        const resolvedParent = await resolveCached(parent.resolveRef);
+        if (!resolvedParent || safeCanonicalSessionId(resolvedParent.id) !== parent.id) break;
+        const resolvedHost = normalizeHostName(resolvedParent.host, fleet);
+        if (resolvedHost === normalizedRootHost && safeCanonicalSessionId(resolvedParent.id) === canonicalRootId) {
+          matchedDepth = depth;
+          break;
+        }
+        const key = `${resolvedHost ?? ''}\0${safeCanonicalSessionId(resolvedParent.id)}`;
+        if (visited.has(key)) break;
+        visited.add(key);
+        current = { ...resolvedParent, host: resolvedHost };
+      }
+    }
+
+    if (matchedDepth !== null) {
+      descendants.push({
+        session: candidate,
+        ref: fullWorkerRef(candidate.id, candidate.host),
+        depth: matchedDepth,
+        busy: candidate.turnInProgress || candidate.compacting || candidate.askPending,
+      });
+    }
+  }
+
+  descendants.sort((a, b) => b.depth - a.depth || a.ref.localeCompare(b.ref));
+  return { descendants, unreachableHosts };
+}
+
 export interface ClosedWindow {
   line: string;
   closedAt: string;
@@ -655,7 +1048,8 @@ const PREAMBLE = [
   'do not poll for it. A worker may end a turn while background work runs and report again when it finishes. It is',
   'watched until it is closed or 24 hours pass, and the last report says so. Tell the user the ref when you start one',
   'and the outcome when it reports. Once you have what you need from a worker, close it with the sessions tool',
-  '(action close); you can close only workers you started. A spawn whose outcome is unknown is never retried for you:',
+  '(action close); you can close workers you started and sessions descended from them (pass cascade: true to also',
+  'close idle descendants). A spawn whose outcome is unknown is never retried for you:',
   'look for the session with the sessions tool before starting another. The sessions tool lists, reads, searches,',
   'messages and closes sessions and reports the fleet\'s hosts and their load.',
   '',
@@ -1283,46 +1677,170 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     return findOwnedWorker(memory, wanted, options);
   }
 
-  /** Closes a session this bot started; any other ref is refused. */
-  async function closeWorker(wanted: string, api: Durable.ToolExecutionApi, callContext: Context): Promise<Durable.ToolExecutionResult> {
+  /**
+   * Closes a worker this bot started or a verified `pi-dish-launch` descendant of one; any other ref is refused.
+   * With `cascade: true`, also closes idle (not mid-turn) active descendants under the target, leaving busy ones running.
+   */
+  async function closeWorker(
+    wanted: string,
+    cascade: boolean,
+    api: Durable.ToolExecutionApi,
+    callContext: Context,
+  ): Promise<Durable.ToolExecutionResult> {
+    const signal = callContext.abortSignal;
     const memory = await api.snapshot(MemoryDoc, api.conversationId, callContext);
-    const found = ownWorker(memory, wanted);
-    if (!found) {
-      const open = Object.values(memory?.workers ?? {}).filter(worker => !worker.closedAt).map(worker => worker.ref);
-      return refusal(`Refused: ${wanted} is not a worker you started, and you can close only your own workers. Open workers: ${open.join(', ') || 'none'}.`);
-    }
-    const [dispatchId, worker] = found;
-    const mark = (closing: boolean) => api.commit(async (tx) => {
-      const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
-      if (closing) draft.closing = true;
-      else delete draft.closing;
-    }, callContext);
-    // Marked first, so its watch, seeing the session stop, ends without reporting the close back.
-    await mark(true);
-    let alreadyClosed = false;
-    try {
-      await sessions(['close', worker.ref]);
-    } catch (error) {
-      // A worker closed from outside whose watch is gone, such as one carried over from before workers were watched
-      // until closed, is refused as not active: the bot's record of it is closed instead.
-      let active = true;
+    let cachedHosts: readonly FleetHostInfo[] | undefined;
+    const scanPorts: DescendantScanPorts = {
+      async resolve(ref) {
+        try {
+          const parsed: unknown = JSON.parse(await sessions(['resolve', ref, '--json', '--fields', 'all'], signal));
+          const fallbackHost = parseHostQualifiedCaller(ref) ? undefined : splitWorkerRef(ref).host;
+          return parseResolvedSession(parsed, fallbackHost);
+        } catch {
+          return null;
+        }
+      },
+      async hosts() {
+        if (cachedHosts !== undefined) return cachedHosts;
+        try {
+          cachedHosts = parseFleetHosts(JSON.parse(await sessions(['hosts', '--json'], signal)));
+        } catch {
+          cachedHosts = [];
+        }
+        return cachedHosts;
+      },
+      async listActive(host) {
+        const argv = ['list', '--active', '--full', '--json', ...(host ? ['--host', host] : [])];
+        return parseActiveRows(JSON.parse(await sessions(argv, signal)), host);
+      },
+    };
+
+    const closeTrackedWorker = async (dispatchId: string, worker: WorkerRecord): Promise<boolean> => {
+      const mark = (closing: boolean) => api.commit(async (tx) => {
+        const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
+        if (!draft) return;
+        if (closing) draft.closing = true;
+        else delete draft.closing;
+      }, callContext);
+      // Marked first, so its watch, seeing the session stop, ends without reporting the close back.
+      await mark(true);
+      let alreadyClosed = false;
       try {
-        const resolved: unknown = JSON.parse(await sessions(['resolve', worker.ref, '--json', '--fields', 'all']));
-        active = !(isRecord(resolved) && isRecord(resolved.session) && resolved.session.isActive === false);
-      } catch {}
-      if (active) {
-        await mark(false);
+        await sessions(['close', worker.ref], signal);
+      } catch (error) {
+        // A worker closed from outside whose watch is gone, such as one carried over from before workers were watched
+        // until closed, is refused as not active: the bot's record of it is closed instead.
+        let active = true;
+        try {
+          const resolved: unknown = JSON.parse(await sessions(['resolve', worker.ref, '--json', '--fields', 'all'], signal));
+          active = !(isRecord(resolved) && isRecord(resolved.session) && resolved.session.isActive === false);
+        } catch {}
+        if (active) {
+          await mark(false);
+          throw error;
+        }
+        alreadyClosed = true;
+      }
+      await api.commit(async (tx) => {
+        const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
+        if (draft) draft.closedAt ??= new Date().toISOString();
+      }, callContext);
+      return alreadyClosed;
+    };
+
+    const closeUntrackedRef = async (ref: string, knownInactive: boolean): Promise<boolean> => {
+      if (knownInactive) return true;
+      try {
+        await sessions(['close', ref], signal);
+        return false;
+      } catch (error) {
+        const resolved = await scanPorts.resolve(ref);
+        if (resolved?.isActive === false) return true;
         throw error;
       }
-      alreadyClosed = true;
+    };
+
+    let targetRef: string;
+    let targetHost: string | null;
+    let targetId: string;
+    let alreadyClosed: boolean;
+    let leadText: string;
+
+    const found = ownWorker(memory, wanted);
+    if (found) {
+      const [dispatchId, worker] = found;
+      alreadyClosed = await closeTrackedWorker(dispatchId, worker);
+      targetRef = worker.ref;
+      targetHost = worker.host;
+      targetId = worker.sessionId;
+      leadText = alreadyClosed
+        ? `Worker "${worker.name}" (${worker.ref}) had already been closed; it is now marked closed in your records.`
+        : `Closed worker "${worker.name}" (${worker.ref}).`;
+    } else {
+      const descendant = await authorizeDescendantClose(memory, wanted, scanPorts);
+      if (!descendant) {
+        const open = Object.values(memory?.workers ?? {}).filter(worker => !worker.closedAt).map(worker => worker.ref);
+        return refusal(`Refused: ${wanted} is not a worker you started or descended from one, and you can close only your own workers and their descendants. Open workers: ${open.join(', ') || 'none'}.`);
+      }
+      targetRef = descendant.ref;
+      targetHost = descendant.target.host;
+      targetId = descendant.target.id;
+      alreadyClosed = await closeUntrackedRef(targetRef, descendant.target.isActive === false);
+      leadText = alreadyClosed
+        ? `Descendant session "${descendant.target.name}" (${targetRef}, under worker "${descendant.ancestor.name}") had already been closed.`
+        : `Closed descendant session "${descendant.target.name}" (${targetRef}, under worker "${descendant.ancestor.name}").`;
     }
-    await api.commit(async (tx) => {
-      const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
-      draft.closedAt ??= new Date().toISOString();
-    }, callContext);
-    return both(alreadyClosed
-      ? `Worker "${worker.name}" (${worker.ref}) had already been closed; it is now marked closed in your records.`
-      : `Closed worker "${worker.name}" (${worker.ref}).`, { action: 'close', ref: worker.ref, alreadyClosed });
+
+    if (!cascade) {
+      return both(leadText, { action: 'close', ref: targetRef, alreadyClosed });
+    }
+
+    const { descendants, unreachableHosts } = await findActiveDescendants(targetHost, targetId, scanPorts);
+    const closedDescendants: string[] = [];
+    const skippedBusy: string[] = [];
+    const failedDescendants: { ref: string; error: string }[] = [];
+    const latestMemory = await api.snapshot(MemoryDoc, api.conversationId, callContext);
+
+    for (const descendant of descendants) {
+      if (descendant.busy) {
+        skippedBusy.push(descendant.ref);
+        continue;
+      }
+      try {
+        const tracked = findOwnedWorkerByIdentity(latestMemory, descendant.session.host, descendant.session.id, cachedHosts);
+        if (tracked) await closeTrackedWorker(tracked[0], tracked[1]);
+        else await closeUntrackedRef(descendant.ref, false);
+        closedDescendants.push(descendant.ref);
+      } catch (error) {
+        failedDescendants.push({ ref: descendant.ref, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    const parts = [leadText];
+    if (closedDescendants.length) {
+      parts.push(`Cascade closed ${closedDescendants.length} idle descendant${closedDescendants.length === 1 ? '' : 's'}: ${closedDescendants.join(', ')}.`);
+    }
+    if (skippedBusy.length) {
+      parts.push(`Left ${skippedBusy.length} busy (mid-turn) descendant${skippedBusy.length === 1 ? '' : 's'} running: ${skippedBusy.join(', ')}.`);
+    }
+    if (failedDescendants.length) {
+      parts.push(`Failed to close ${failedDescendants.length} descendant${failedDescendants.length === 1 ? '' : 's'}: ${failedDescendants.map(item => `${item.ref} (${item.error})`).join(', ')}.`);
+    }
+    if (!closedDescendants.length && !skippedBusy.length && !failedDescendants.length) {
+      parts.push('No active descendants found.');
+    }
+    if (unreachableHosts.length) {
+      parts.push(`Could not check descendants on unreachable host${unreachableHosts.length === 1 ? '' : 's'}: ${unreachableHosts.join(', ')}.`);
+    }
+    return both(parts.join(' '), {
+      action: 'close',
+      ref: targetRef,
+      alreadyClosed,
+      closedDescendants,
+      skippedBusy,
+      ...(failedDescendants.length ? { failedDescendants } : {}),
+      ...(unreachableHosts.length ? { unreachableHosts } : {}),
+    });
   }
 
   /**
@@ -1453,7 +1971,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   };
   const sessionsTool = durable.defineTool({
     name: 'sessions',
-    description: 'pi-dish sessions and hosts: list live sessions, read a transcript, search every transcript, send a message to a session, close a worker you started, list the fleet\'s hosts, or show how busy a host is. In a code mode script, wait blocks until a session settles and returns its answer.',
+    description: 'pi-dish sessions and hosts: list live sessions, read or search transcripts, send a message, close a worker you started or its descendants (cascade: true closes idle descendants), list hosts, or show host load. In scripts, wait blocks until a session settles.',
     parameters: obj({
       action: oneOf(['list', 'read', 'search', 'send', 'close', 'hosts', 'load', 'wait'] as const),
       ref: opt(str({ description: 'Session ref, for read, send, close and wait' })),
@@ -1463,6 +1981,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       limit: opt(num({ description: 'Rows or messages to show' })),
       since: opt(num({ description: 'For wait: settle only once the transcript holds more than this many messages; omitted: a fresh worker\'s first answer, or an idle session\'s last' })),
       timeout: opt(num({ description: `For wait: seconds to wait, at most ${WAIT_MAX_SECS}; default ${WAIT_DEFAULT_SECS}. Past it the call fails` })),
+      cascade: opt(bool({ description: 'For close: also close idle descendants' })),
     }),
     structuredOutputSchema: union([
       obj({ action: lit('list'), sessions: arr(obj(sessionRowSchema)), total: num() }),
@@ -1483,7 +2002,15 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         memoryUsedPercent: opt(num()), diskUsedPercent: opt(num()),
       }),
       obj({ action: lit('send'), ref: str(), response: anyValue({ description: 'The host\'s answer: held and until when it holds the message' }) }),
-      obj({ action: lit('close'), ref: str(), alreadyClosed: bool() }),
+      obj({
+        action: lit('close'),
+        ref: str(),
+        alreadyClosed: bool(),
+        closedDescendants: opt(arr(str())),
+        skippedBusy: opt(arr(str())),
+        failedDescendants: opt(arr(obj({ ref: str(), error: str() }))),
+        unreachableHosts: opt(arr(str())),
+      }),
       obj({
         action: lit('wait'), ref: str(), state: oneOf(['finished', 'waiting'] as const), totalMessages: num(),
         text: str({ description: 'Its final answer; for a failed turn the error' }),
@@ -1500,7 +2027,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         if (!value) throw new Error(`${args.action} needs ${field}`);
         return value;
       };
-      if (args.action === 'close') return closeWorker(need(args.ref, 'ref'), api, callContext);
+      if (args.action === 'close') return closeWorker(need(args.ref, 'ref'), args.cascade === true, api, callContext);
       if (args.action === 'wait') return waitFor(need(args.ref, 'ref'), args.since, args.timeout, api, callContext);
       if (args.action === 'send') {
         const rawRef = need(args.ref, 'ref');
