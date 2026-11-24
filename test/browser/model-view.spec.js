@@ -260,32 +260,37 @@ const EMPTY_GLB = buildFixtureGlb({ empty: true });
         const url = new URL(route.request().url());
         const reqPath = url.searchParams.get('path') ?? '';
         const auth = route.request().headers().authorization;
+        const corsHeaders = {
+            'X-Content-Type-Options': 'nosniff',
+            'Access-Control-Allow-Origin': fleet.self.base,
+            'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
+        };
         authedContentRequests.push({ path: reqPath, auth });
         if (reqPath === modelAbsPath || reqPath.endsWith('huge_env.glb')) {
             return route.fulfill({
                 status: 200,
-                headers: { 'Content-Type': 'model/gltf-binary', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': fleet.self.base },
+                headers: { ...corsHeaders, 'Content-Type': 'model/gltf-binary' },
                 body: FIXTURE_GLB,
             });
         }
         if (reqPath.endsWith('blocked_uri.glb')) {
             return route.fulfill({
                 status: 200,
-                headers: { 'Content-Type': 'model/gltf-binary', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': fleet.self.base },
+                headers: { ...corsHeaders, 'Content-Type': 'model/gltf-binary' },
                 body: BLOCKED_URI_GLB,
             });
         }
         if (reqPath.endsWith('empty_clip.glb')) {
             return route.fulfill({
                 status: 200,
-                headers: { 'Content-Type': 'model/gltf-binary', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': fleet.self.base },
+                headers: { ...corsHeaders, 'Content-Type': 'model/gltf-binary' },
                 body: EMPTY_GLB,
             });
         }
         if (reqPath === ktxAbsPath) {
             return route.fulfill({
                 status: 200,
-                headers: { 'Content-Type': 'image/ktx2', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': fleet.self.base },
+                headers: { ...corsHeaders, 'Content-Type': 'image/ktx2' },
                 body: FIXTURE_KTX2,
             });
         }
@@ -433,4 +438,108 @@ const EMPTY_GLB = buildFixtureGlb({ empty: true });
     await (0, fixtures_js_1.expect)(viewer).toHaveAttribute('data-model-state', 'error');
     await (0, fixtures_js_1.expect)(viewer.locator('.model-overlay')).toContainText('reload the page');
     await (0, fixtures_js_1.expect)(viewer.locator('.model-reload-btn')).toBeVisible();
+});
+(0, fixtures_js_1.test)('small root GLB with large external companions pauses for consent before buffering companions and aborts cleanly on decline', async ({ page, fleet }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await fleet.select(fleet.self);
+    const multiTexGlb = buildFixtureGlb({
+        textureUri: '../../textures/material/big_base.ktx2',
+        extraBlockedUri: '../../textures/material/big_emissive.ktx2',
+    });
+    const bigBasePath = '/fixture/assets/textures/material/big_base.ktx2';
+    const bigEmissivePath = '/fixture/assets/textures/material/big_emissive.ktx2';
+    const companionGets = [];
+    const companionHeads = [];
+    await page.route('**/api/sessions/*/file?*', route => route.fulfill({
+        json: {
+            path: '/fixture/assets/environments/berth/small_root.glb',
+            relPath: 'assets/environments/berth/small_root.glb',
+            size: multiTexGlb.length,
+            mtime: 200,
+            model: { url: `/api/sessions/${fixtures_js_1.ROOT}/file/content?path=small_root.glb&v=200-${multiTexGlb.length}`, mimeType: 'model/gltf-binary' },
+        },
+    }));
+    await page.route('**/api/sessions/*/file/content?*', route => {
+        const reqPath = new URL(route.request().url()).searchParams.get('path') ?? '';
+        const method = route.request().method();
+        if (reqPath.endsWith('small_root.glb')) {
+            return route.fulfill({ status: 200, headers: { 'Content-Type': 'model/gltf-binary' }, body: multiTexGlb });
+        }
+        if (reqPath === bigBasePath || reqPath === bigEmissivePath) {
+            if (method === 'HEAD') {
+                companionHeads.push(reqPath);
+                // Report 20 MiB each (40 MiB total > 25 MiB gate) without transferring bytes.
+                return route.fulfill({
+                    status: 200,
+                    headers: { 'Content-Type': 'image/ktx2', 'Content-Length': String(20 * 1024 * 1024) },
+                    body: Buffer.alloc(0),
+                });
+            }
+            companionGets.push(reqPath);
+            return route.fulfill({ status: 200, headers: { 'Content-Type': 'image/ktx2' }, body: FIXTURE_KTX2 });
+        }
+        return route.fulfill({ status: 404, json: { error: 'Not found' } });
+    });
+    // 1. Opening pauses at consent with the combined ~40.0 MB total BEFORE any companion GET.
+    await page.evaluate(() => fixtureApp.features.fileViews.openFile('small_root.glb'));
+    const viewer = page.locator('#fileViewBody .model-viewer');
+    await (0, fixtures_js_1.expect)(viewer).toHaveAttribute('data-model-state', 'gated', { timeout: 10000 });
+    await (0, fixtures_js_1.expect)(viewer.locator('.model-load-btn')).toContainText('Load ~40.0 MB');
+    (0, fixtures_js_1.expect)(companionHeads.sort()).toEqual([bigBasePath, bigEmissivePath]);
+    (0, fixtures_js_1.expect)(companionGets).toHaveLength(0);
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewBody canvas')).toHaveCount(0);
+    // Declining aborts cleanly with zero companion GETs and zero WebGL context.
+    await viewer.locator('.model-cancel-btn').click();
+    await (0, fixtures_js_1.expect)(viewer).toHaveAttribute('data-model-state', 'cancelled');
+    (0, fixtures_js_1.expect)(companionGets).toHaveLength(0);
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewBody canvas')).toHaveCount(0);
+    // 2. Reopening and accepting proceeds to download the companions and render.
+    await page.evaluate(() => fixtureApp.features.fileViews.openFile('small_root.glb'));
+    await (0, fixtures_js_1.expect)(viewer).toHaveAttribute('data-model-state', 'gated', { timeout: 10000 });
+    await viewer.locator('.model-load-btn').click();
+    await (0, fixtures_js_1.expect)(viewer).toHaveAttribute('data-model-state', 'ready', { timeout: 15000 });
+    (0, fixtures_js_1.expect)(companionGets.sort()).toEqual([bigBasePath, bigEmissivePath]);
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewBody canvas')).toHaveCount(1);
+});
+(0, fixtures_js_1.test)('small transfer KTX2 companions exceeding the 256 MiB decoded budget pause before WASM decode', async ({ page, fleet }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await fleet.select(fleet.self);
+    // Clone the valid 4×4 KTX2 header but declare 150 MiB uncompressed mip 0 on each
+    // of two companions (300 MiB > 256 MiB decoded limit) while keeping transfer tiny (< 1 KB).
+    const hugeHeaderKtx2 = Buffer.from(FIXTURE_KTX2);
+    hugeHeaderKtx2.writeBigUInt64LE(BigInt(150 * 1024 * 1024), 80 + 16);
+    const twoTexGlb = buildFixtureGlb({
+        textureUri: '../../textures/material/dense_a.ktx2',
+        extraBlockedUri: '../../textures/material/dense_b.ktx2',
+    });
+    const denseA = '/fixture/assets/textures/material/dense_a.ktx2';
+    const denseB = '/fixture/assets/textures/material/dense_b.ktx2';
+    await page.route('**/api/sessions/*/file?*', route => route.fulfill({
+        json: {
+            path: '/fixture/assets/environments/berth/dense_ktx.glb',
+            relPath: 'assets/environments/berth/dense_ktx.glb',
+            size: twoTexGlb.length,
+            mtime: 201,
+            model: { url: `/api/sessions/${fixtures_js_1.ROOT}/file/content?path=dense_ktx.glb&v=201-${twoTexGlb.length}`, mimeType: 'model/gltf-binary' },
+        },
+    }));
+    await page.route('**/api/sessions/*/file/content?*', route => {
+        const reqPath = new URL(route.request().url()).searchParams.get('path') ?? '';
+        if (reqPath.endsWith('dense_ktx.glb')) {
+            return route.fulfill({ status: 200, headers: { 'Content-Type': 'model/gltf-binary' }, body: twoTexGlb });
+        }
+        if (reqPath === denseA || reqPath === denseB) {
+            return route.fulfill({ status: 200, headers: { 'Content-Type': 'image/ktx2' }, body: hugeHeaderKtx2 });
+        }
+        return route.fulfill({ status: 404, json: { error: 'Not found' } });
+    });
+    await page.evaluate(() => fixtureApp.features.fileViews.openFile('dense_ktx.glb'));
+    const viewer = page.locator('#fileViewBody .model-viewer');
+    await (0, fixtures_js_1.expect)(viewer).toHaveAttribute('data-model-state', 'gated', { timeout: 10000 });
+    await (0, fixtures_js_1.expect)(viewer.locator('.model-load-btn')).toContainText('Decode ~300.0 MB');
+    // WebGL renderer has not been created yet (and WASM decode has not run).
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewBody canvas')).toHaveCount(0);
+    await viewer.locator('.model-cancel-btn').click();
+    await (0, fixtures_js_1.expect)(viewer).toHaveAttribute('data-model-state', 'cancelled');
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewBody canvas')).toHaveCount(0);
 });

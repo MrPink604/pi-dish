@@ -7,6 +7,7 @@ import { formatMediaSize } from '../core/helper-media';
 
 export const MODEL_VENDOR_API_VERSION = 1;
 export const MODEL_LARGE_FILE_BYTES = 25 * 1024 * 1024;
+export const MODEL_MAX_DECODED_BYTES = 256 * 1024 * 1024;
 export const MODEL_VENDOR_META_NAME = 'pi-dish-asset-three-gltf';
 export const DEFAULT_MODEL_VENDOR_URL = 'vendor/three-gltf.js';
 
@@ -107,6 +108,118 @@ export function modelVendorUrl(doc: Pick<Document, 'querySelector'>): string {
 
 export function shouldGateModelLoad(sizeBytes: number): boolean {
   return Number.isFinite(sizeBytes) && sizeBytes > MODEL_LARGE_FILE_BYTES;
+}
+
+export function shouldGateDecodedKtx2(decodedBytes: number): boolean {
+  return Number.isFinite(decodedBytes) && decodedBytes > MODEL_MAX_DECODED_BYTES;
+}
+
+const GLB_MAGIC = 0x46546c67; // 'glTF' little-endian
+const GLB_JSON_CHUNK_TYPE = 0x4e4f534a; // 'JSON' little-endian
+const KTX2_IDENTIFIER = [0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a] as const;
+
+/**
+ * Extract unique external resource URIs (`images[*].uri`, `buffers[*].uri`)
+ * from a GLB 2.0 binary container or UTF-8 `.gltf` JSON buffer before parsing
+ * so companion transfer sizes can be checked up front.
+ */
+export function extractGltfExternalUris(buffer: ArrayBuffer): string[] {
+  if (!buffer || buffer.byteLength === 0) return [];
+  let jsonBytes: Uint8Array;
+  const view = new DataView(buffer);
+  if (buffer.byteLength >= 20 && view.getUint32(0, true) === GLB_MAGIC) {
+    const chunkLength = view.getUint32(12, true);
+    const chunkType = view.getUint32(16, true);
+    if (chunkType !== GLB_JSON_CHUNK_TYPE || 20 + chunkLength > buffer.byteLength) return [];
+    jsonBytes = new Uint8Array(buffer, 20, chunkLength);
+  } else {
+    jsonBytes = new Uint8Array(buffer);
+  }
+  let parsed: unknown;
+  try {
+    let text: string;
+    if (typeof TextDecoder !== 'undefined') {
+      text = new TextDecoder('utf-8').decode(jsonBytes);
+    } else {
+      let raw = '';
+      for (let i = 0; i < jsonBytes.length; i++) raw += String.fromCharCode(jsonBytes[i]);
+      text = decodeURIComponent(escape(raw));
+    }
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+  const doc = parsed as Record<string, unknown>;
+  const seen = new Set<string>();
+  const collect = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const uri = (item as Record<string, unknown>).uri;
+        if (typeof uri === 'string' && uri.trim()) seen.add(uri);
+      }
+    }
+  };
+  collect(doc.images);
+  collect(doc.buffers);
+  return [...seen];
+}
+
+/**
+ * Sum the uncompressed mip-level byte lengths declared in a KTX2 file's binary
+ * header + level index without invoking the zstd WASM decoder.
+ * Returns `null` when the buffer does not start with a valid KTX2 header.
+ */
+export function parseKtx2DecodedBytes(buffer: ArrayBuffer): number | null {
+  if (!buffer || buffer.byteLength < 80) return null;
+  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
+  for (let i = 0; i < KTX2_IDENTIFIER.length; i++) {
+    if (bytes[i] !== KTX2_IDENTIFIER[i]) return null;
+  }
+  const view = new DataView(buffer);
+  const pixelWidth = view.getUint32(20, true);
+  const pixelHeight = view.getUint32(24, true);
+  const pixelDepth = view.getUint32(28, true);
+  const layerCount = view.getUint32(32, true);
+  const faceCount = view.getUint32(36, true);
+  const levelCount = view.getUint32(40, true);
+  const storedLevels = Math.max(1, levelCount);
+  if (80 + storedLevels * 24 > buffer.byteLength) return null;
+
+  let total = 0;
+  for (let i = 0; i < storedLevels; i++) {
+    const entryOffset = 80 + i * 24 + 16; // uncompressedByteLength (uint64 LE)
+    const lo = view.getUint32(entryOffset, true);
+    const hi = view.getUint32(entryOffset + 4, true);
+    const levelBytes = lo + hi * 4294967296;
+    if (!Number.isFinite(levelBytes) || levelBytes < 0) return null;
+    total += levelBytes;
+  }
+  if (total === 0 && pixelWidth > 0) {
+    // Fallback when uncompressedByteLength is zero (e.g. Basis/unlisted mip 0): estimate RGBA8.
+    total = pixelWidth * Math.max(1, pixelHeight) * Math.max(1, pixelDepth)
+      * Math.max(1, layerCount) * Math.max(1, faceCount) * 4;
+  }
+  return total;
+}
+
+/** Parse declared response byte length from `Content-Range` (total) or `Content-Length`. */
+export function parseResponseByteLength(headers: Pick<Headers, 'get'>): number | null {
+  const range = headers.get('content-range');
+  if (range) {
+    const match = /\/(\d+)\s*$/.exec(range);
+    if (match) {
+      const total = Number(match[1]);
+      if (Number.isSafeInteger(total) && total >= 0) return total;
+    }
+  }
+  const length = headers.get('content-length');
+  if (length && /^\s*\d+\s*$/.test(length)) {
+    const total = Number(length);
+    if (Number.isSafeInteger(total) && total >= 0) return total;
+  }
+  return null;
 }
 
 export interface ModelStats {

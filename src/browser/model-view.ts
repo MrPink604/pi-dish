@@ -18,14 +18,19 @@ import { resolveColorToHex } from './host-presentation';
 import { escapeHtml } from '../core/helper-format';
 import { formatMediaSize } from '../core/helper-media';
 import {
+  extractGltfExternalUris,
   formatModelStats,
+  MODEL_LARGE_FILE_BYTES,
+  MODEL_MAX_DECODED_BYTES,
   MODEL_VENDOR_API_VERSION,
   MODEL_VIEWS,
   modelSnapshotFilename,
   modelVendorUrl,
   modelViewById,
   parseCssColorToHex,
+  parseKtx2DecodedBytes,
   resolveModelResourcePath,
+  shouldGateDecodedKtx2,
   shouldGateModelLoad,
   type ModelStats,
   type ModelViewId,
@@ -62,12 +67,32 @@ class ModelVersionSkewError extends Error {
   }
 }
 
+class ModelLoadDeclinedError extends Error {
+  constructor(message = 'Model load cancelled.') {
+    super(message);
+    this.name = 'ModelLoadDeclinedError';
+  }
+}
+
+class TransferBudgetPausedError extends Error {
+  constructor(public readonly totalBytes: number, public readonly companionCount: number) {
+    super('Transfer budget exceeded');
+    this.name = 'TransferBudgetPausedError';
+  }
+}
+
+export interface ModelFetchOptions {
+  readonly cacheKey?: string;
+  readonly checkSize?: (bytes: number) => Promise<boolean>;
+}
+
 export interface ModelMountOptions {
   readonly container: HTMLElement;
   readonly modelPath: string;
   readonly sizeBytes: number;
   readonly mtime: number;
-  readonly fetchFile: (absPath: string, signal: AbortSignal, cacheKey?: string) => Promise<ArrayBuffer>;
+  readonly probeFileSize?: (absPath: string, signal: AbortSignal) => Promise<number | null>;
+  readonly fetchFile: (absPath: string, signal: AbortSignal, options?: ModelFetchOptions) => Promise<ArrayBuffer>;
   readonly status: (message: string, type?: string) => void;
 }
 
@@ -255,7 +280,7 @@ export function createModelViewer(options: {
   }
 
   function mount(mountOptions: ModelMountOptions): MountedModelView {
-    const { container, modelPath, sizeBytes, mtime, fetchFile, status } = mountOptions;
+    const { container, modelPath, sizeBytes, mtime, probeFileSize, fetchFile, status } = mountOptions;
     let instanceDisposed = false;
     const events = new AbortController();
     const { signal } = events;
@@ -324,10 +349,37 @@ export function createModelViewer(options: {
       }
     }
 
-    function showOverlay(html: string, state: 'loading' | 'gated' | 'empty' | 'error'): void {
+    function showOverlay(html: string, state: 'loading' | 'gated' | 'cancelled' | 'empty' | 'error'): void {
       rootEl.dataset.modelState = state;
       overlayEl.innerHTML = html;
       overlayEl.hidden = false;
+    }
+
+    function requestConsent(prompt: { title: string; subtitle: string; loadLabel: string }): Promise<boolean> {
+      if (!isAlive()) return Promise.resolve(false);
+      return new Promise<boolean>(resolve => {
+        const promptEvents = new AbortController();
+        let settled = false;
+        const finish = (accepted: boolean) => {
+          if (settled) return;
+          settled = true;
+          promptEvents.abort();
+          resolve(accepted);
+        };
+        signal.addEventListener('abort', () => finish(false), { once: true, signal: promptEvents.signal });
+        showOverlay(
+          `<div class="model-overlay-card">`
+            + `<div class="model-overlay-title">${escapeHtml(prompt.title)}</div>`
+            + `<div class="model-overlay-sub">${escapeHtml(prompt.subtitle)}</div>`
+            + `<div class="model-overlay-actions">`
+            + `<button type="button" class="btn-small model-load-btn">${escapeHtml(prompt.loadLabel)}</button>`
+            + `<button type="button" class="model-chip model-cancel-btn">Cancel</button>`
+            + `</div></div>`,
+          'gated',
+        );
+        overlayEl.querySelector<HTMLButtonElement>('.model-load-btn')?.addEventListener('click', () => finish(true), { once: true, signal: promptEvents.signal });
+        overlayEl.querySelector<HTMLButtonElement>('.model-cancel-btn')?.addEventListener('click', () => finish(false), { once: true, signal: promptEvents.signal });
+      });
     }
 
     function hideOverlay(state: 'ready'): void {
@@ -540,20 +592,164 @@ export function createModelViewer(options: {
       }, { signal });
     }
 
-    async function loadAndRender(): Promise<void> {
+    async function runWithConcurrency<T>(
+      items: readonly T[],
+      limit: number,
+      worker: (item: T) => Promise<void>,
+    ): Promise<void> {
+      if (!items.length) return;
+      let cursor = 0;
+      const run = async () => {
+        while (cursor < items.length && isAlive()) {
+          const item = items[cursor++];
+          await worker(item);
+        }
+      };
+      const workers = Array.from({ length: Math.min(limit, items.length) }, () => run());
+      await Promise.all(workers);
+    }
+
+    async function loadAndRender(initialTransferApproved: boolean): Promise<void> {
       if (!isAlive()) return;
       showOverlay('<div class="model-overlay-msg">Loading 3D viewer…</div>', 'loading');
+      const prefetchedBuffers = new Map<string, ArrayBuffer>();
       try {
         const rt = await loadRuntime();
         if (!isAlive()) return;
         runtime = rt;
 
         showOverlay('<div class="model-overlay-msg">Loading model…</div>', 'loading');
-        const modelBuffer = await fetchFile(modelPath, signal, `${mtime}-${sizeBytes}`);
+        const modelBuffer = await fetchFile(modelPath, signal, { cacheKey: `${mtime}-${sizeBytes}` });
         if (!isAlive()) return;
 
-        // Create the WebGL renderer after bytes arrive so failed/aborted loads
-        // never claim a mobile WebGL context slot.
+        // Track cumulative unique transfer bytes (root + unique local companions)
+        // and decoded KTX2 mip bytes before buffering/WASM-decoding large assets.
+        let transferApproved = initialTransferApproved;
+        let decodedApproved = false;
+        const knownCompanionSizes = new Map<string, number>();
+        const sumKnownTransfer = () => {
+          let total = modelBuffer.byteLength;
+          for (const sz of knownCompanionSizes.values()) total += sz;
+          return total;
+        };
+
+        const rawUris = extractGltfExternalUris(modelBuffer);
+        const uniqueLocalCompanions: string[] = [];
+        const seenLocal = new Set<string>();
+        for (const uri of rawUris) {
+          const resolved = resolveModelResourcePath(modelPath, uri);
+          if (resolved.kind === 'local' && !seenLocal.has(resolved.absPath)) {
+            seenLocal.add(resolved.absPath);
+            uniqueLocalCompanions.push(resolved.absPath);
+          }
+        }
+
+        if (uniqueLocalCompanions.length > 0) {
+          // 1. Pre-flight HEAD probe for unique companion sizes before downloading bytes.
+          if (probeFileSize) {
+            await runWithConcurrency(uniqueLocalCompanions, 8, async absPath => {
+              const probed = await probeFileSize(absPath, signal);
+              if (probed !== null) knownCompanionSizes.set(absPath, probed);
+            });
+            if (!isAlive()) return;
+            const probedTotal = sumKnownTransfer();
+            if (!transferApproved && shouldGateModelLoad(probedTotal)) {
+              const totalLabel = formatMediaSize(probedTotal);
+              const compBytes = Math.max(0, probedTotal - modelBuffer.byteLength);
+              const accepted = await requestConsent({
+                title: `Large 3D model (~${totalLabel})`,
+                subtitle: `${formatMediaSize(modelBuffer.byteLength)} model + ${formatMediaSize(compBytes)} across ${uniqueLocalCompanions.length} external ${uniqueLocalCompanions.length === 1 ? 'asset' : 'assets'}. Tap to download and render.`,
+                loadLabel: `Load ~${totalLabel}`,
+              });
+              if (!accepted || !isAlive()) throw new ModelLoadDeclinedError();
+              transferApproved = true;
+            }
+          }
+
+          // 2. Fetch unique companions, guarding against unprobed / chunked responses
+          //    passing the 25 MiB cumulative budget before buffering.
+          showOverlay('<div class="model-overlay-msg">Loading assets…</div>', 'loading');
+          const pendingCompanions = [...uniqueLocalCompanions];
+          while (pendingCompanions.length > 0) {
+            let pausedError: TransferBudgetPausedError | null = null;
+            const failedOrDeferred: string[] = [];
+            const batch = pendingCompanions.splice(0, pendingCompanions.length);
+            const batchAbort = new AbortController();
+            const onParentAbort = () => batchAbort.abort();
+            signal.addEventListener('abort', onParentAbort, { once: true });
+            try {
+              await runWithConcurrency(batch, 6, async absPath => {
+                if (batchAbort.signal.aborted || !isAlive()) {
+                  failedOrDeferred.push(absPath);
+                  return;
+                }
+                try {
+                  const buf = await fetchFile(absPath, batchAbort.signal, {
+                    checkSize: async bytes => {
+                      knownCompanionSizes.set(absPath, bytes);
+                      const total = sumKnownTransfer();
+                      if (!transferApproved && shouldGateModelLoad(total)) {
+                        if (!pausedError) pausedError = new TransferBudgetPausedError(total, uniqueLocalCompanions.length);
+                        batchAbort.abort();
+                        return false;
+                      }
+                      return true;
+                    },
+                  });
+                  if (!isAlive()) return;
+                  knownCompanionSizes.set(absPath, buf.byteLength);
+                  prefetchedBuffers.set(absPath, buf);
+                } catch {
+                  if (pausedError) failedOrDeferred.push(absPath);
+                  // Missing/unreachable companions stay absent; GLTFLoader records them as unavailable.
+                }
+              });
+            } finally {
+              signal.removeEventListener('abort', onParentAbort);
+            }
+            if (!isAlive()) return;
+            if (pausedError) {
+              const paused: TransferBudgetPausedError = pausedError;
+              const totalLabel = formatMediaSize(paused.totalBytes);
+              const accepted = await requestConsent({
+                title: `Large 3D model (~${totalLabel})`,
+                subtitle: `Model and ${paused.companionCount} external ${paused.companionCount === 1 ? 'asset exceed' : 'assets exceed'} ${formatMediaSize(MODEL_LARGE_FILE_BYTES)}. Tap to download and render.`,
+                loadLabel: `Load ~${totalLabel}`,
+              });
+              if (!accepted || !isAlive()) throw new ModelLoadDeclinedError();
+              transferApproved = true;
+              pendingCompanions.push(...failedOrDeferred);
+            }
+          }
+
+          // 3. Check cumulative decoded KTX2 mip bytes from KTX2 headers BEFORE
+          //    running any WASM zstd decode or claiming a WebGL context.
+          let totalDecodedKtx2 = 0;
+          let ktx2Count = 0;
+          for (const [absPath, buf] of prefetchedBuffers) {
+            if (!/\.ktx2$/i.test(absPath)) continue;
+            const decoded = parseKtx2DecodedBytes(buf);
+            if (decoded !== null) {
+              totalDecodedKtx2 += decoded;
+              ktx2Count++;
+            }
+          }
+          if (!decodedApproved && shouldGateDecodedKtx2(totalDecodedKtx2)) {
+            const decodedLabel = formatMediaSize(totalDecodedKtx2);
+            const accepted = await requestConsent({
+              title: `Large decoded textures (~${decodedLabel})`,
+              subtitle: `${ktx2Count} KTX2 ${ktx2Count === 1 ? 'texture expands' : 'textures expand'} to ~${decodedLabel} in memory (limit ${formatMediaSize(MODEL_MAX_DECODED_BYTES)}). Tap to decode and render.`,
+              loadLabel: `Decode ~${decodedLabel}`,
+            });
+            if (!accepted || !isAlive()) throw new ModelLoadDeclinedError();
+            decodedApproved = true;
+          }
+        }
+
+        showOverlay('<div class="model-overlay-msg">Rendering model…</div>', 'loading');
+
+        // Create the WebGL renderer after transfer/decoded budgets clear so
+        // failed, gated, or declined loads never claim a mobile WebGL context slot.
         let webglRenderer: THREE.WebGLRenderer;
         try {
           webglRenderer = new rt.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -618,13 +814,43 @@ export function createModelViewer(options: {
 
         let failedTextures = 0;
         let blockedResources = 0;
+        let lateDecodedKtx2 = 0;
         const manager = new rt.LoadingManager();
         const ktx2 = new rt.KTX2Loader(manager);
         ktx2.detectSupport(webglRenderer);
         // RGBA8+zstd KTX2 decodes via the inlined zstddec WASM; refuse Basis
         // transcoder fetches so no unbundled asset request ever escapes.
         ktx2.init = () => Promise.reject(new Error('Basis-compressed KTX2 textures are not supported'));
+        // Guard embedded/inline KTX2 buffers against exceeding the decoded budget.
+        const origKtx2Parse = ktx2.parse.bind(ktx2);
+        const seenDecodedBuffers = new WeakSet<ArrayBuffer>();
+        ktx2.parse = (buffer, onLoad, onError) => {
+          if (!seenDecodedBuffers.has(buffer)) {
+            seenDecodedBuffers.add(buffer);
+            const decoded = parseKtx2DecodedBytes(buffer);
+            if (decoded !== null) {
+              lateDecodedKtx2 += decoded;
+              if (!decodedApproved && shouldGateDecodedKtx2(lateDecodedKtx2)) {
+                onError?.(new Error('Decoded KTX2 texture memory exceeds budget'));
+                return Promise.resolve();
+              }
+            }
+          }
+          return origKtx2Parse(buffer, onLoad, onError);
+        };
         ktx2Loader = ktx2;
+
+        const getLocalBuffer = (absPath: string): Promise<ArrayBuffer> => {
+          const cached = prefetchedBuffers.get(absPath);
+          if (cached) return Promise.resolve(cached);
+          if (seenLocal.has(absPath)) return Promise.reject(new Error('Companion asset unavailable'));
+          return fetchFile(absPath, signal, {
+            checkSize: async bytes => {
+              knownCompanionSizes.set(absPath, bytes);
+              return transferApproved || !shouldGateModelLoad(sumKnownTransfer());
+            },
+          });
+        };
 
         const ktx2Handler: THREE.Loader<THREE.Texture, string> = {
           load(url, onLoad, _onProgress, onError) {
@@ -641,7 +867,7 @@ export function createModelViewer(options: {
               }, err => { failedTextures++; onError?.(err); });
               return;
             }
-            void fetchFile(resolved.absPath, signal).then(buf => {
+            void getLocalBuffer(resolved.absPath).then(buf => {
               if (!isAlive()) return;
               ktx2.parse(
                 buf,
@@ -671,7 +897,7 @@ export function createModelViewer(options: {
               }, err => { failedTextures++; onError?.(err); });
               return;
             }
-            void fetchFile(resolved.absPath, signal).then(buf => decodeImageBuffer(rt, buf, document)).then(({ texture, bitmap }) => {
+            void getLocalBuffer(resolved.absPath).then(buf => decodeImageBuffer(rt, buf, document)).then(({ texture, bitmap }) => {
               if (!isAlive()) { texture.dispose(); bitmap?.close(); return; }
               if (bitmap) ownedBitmaps.push(bitmap);
               onLoad(texture);
@@ -704,7 +930,7 @@ export function createModelViewer(options: {
               onError?.(new Error(resolved.reason));
               return;
             }
-            void fetchFile(resolved.absPath, signal).then(
+            void getLocalBuffer(resolved.absPath).then(
               buf => { if (isAlive()) onLoad?.(buf); },
               err => { onError?.(err); },
             );
@@ -715,6 +941,7 @@ export function createModelViewer(options: {
         const gltf = await new Promise<GLTF>((resolve, reject) => {
           gltfLoader.parse(modelBuffer, '', resolve, reject);
         });
+        prefetchedBuffers.clear();
         if (!isAlive()) {
           disposeObjectTree(gltf.scene, ownedBitmaps);
           return;
@@ -768,8 +995,13 @@ export function createModelViewer(options: {
         hideOverlay('ready');
         applyView(MODEL_VIEWS[0]);
       } catch (err) {
+        prefetchedBuffers.clear();
         if (!isAlive()) return;
         setControlsEnabled(false);
+        if (err instanceof ModelLoadDeclinedError) {
+          showOverlay(`<div class="model-overlay-msg">${escapeHtml(err.message)}</div>`, 'cancelled');
+          return;
+        }
         if (err instanceof ModelVersionSkewError) {
           showOverlay(
             `<div class="model-overlay-card">`
@@ -789,19 +1021,17 @@ export function createModelViewer(options: {
 
     if (shouldGateModelLoad(sizeBytes)) {
       const label = formatMediaSize(sizeBytes);
-      showOverlay(
-        `<div class="model-overlay-card">`
-          + `<div class="model-overlay-title">Large 3D model (${escapeHtml(label)})</div>`
-          + `<div class="model-overlay-sub">Tap below to download and render in WebGL.</div>`
-          + `<button type="button" class="btn-small model-load-btn">Load (${escapeHtml(label)})</button>`
-          + `</div>`,
-        'gated',
-      );
-      overlayEl.querySelector<HTMLButtonElement>('.model-load-btn')?.addEventListener('click', () => {
-        if (isAlive()) void loadAndRender();
-      }, { once: true, signal });
+      void requestConsent({
+        title: `Large 3D model (${label})`,
+        subtitle: 'Tap below to download and render in WebGL.',
+        loadLabel: `Load (${label})`,
+      }).then(accepted => {
+        if (!isAlive()) return;
+        if (accepted) void loadAndRender(true);
+        else showOverlay('<div class="model-overlay-msg">Model load cancelled.</div>', 'cancelled');
+      });
     } else {
-      void loadAndRender();
+      void loadAndRender(false);
     }
 
     return {

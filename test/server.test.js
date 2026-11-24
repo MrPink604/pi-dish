@@ -1729,6 +1729,20 @@ test('GET /file and /file/content serve .glb/.gltf models with 206 Range and gat
     assert.equal(outsideRes.status, 404);
     const traverseRes = await fetch(`${base}/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent('../../outside.ktx2')}`);
     assert.equal(traverseRes.status, 404);
+    // Published .glb downloads carry Content-Disposition attachment with the original filename while keeping sandbox CSP.
+    const pubRes = await fetch(`${base}/api/pages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: path.join(meshesDir, 'rifle.glb'), renderer: 'file' }),
+    });
+    assert.equal(pubRes.status, 200);
+    const pub = (0, test_types_js_1.record)(await pubRes.json());
+    const dlRes = await fetch(`${base}${text(pub.path)}?content=1`);
+    assert.equal(dlRes.status, 200);
+    assert.equal(dlRes.headers.get('content-type'), 'model/gltf-binary');
+    assert.equal(dlRes.headers.get('content-disposition'), 'attachment; filename="rifle.glb"; filename*=UTF-8\'\'rifle.glb');
+    assert.match(dlRes.headers.get('content-security-policy') || '', /\bsandbox\b/);
+    assert.deepEqual(Buffer.from(await dlRes.arrayBuffer()), glbBytes);
 });
 test('published file pages and transcript video attachments serve video with Range support', async () => {
     const bytes = Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz');

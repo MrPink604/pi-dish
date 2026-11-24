@@ -4,7 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { decodeFilePreview, decodeDiffView, renderDiffViewHtml, renderVideoPlayerHtml, MODEL_LARGE_FILE_BYTES, MODEL_VIEWS, resolveModelResourcePath, modelContentApiPath, shouldGateModelLoad, formatModelBounds, formatModelStats, modelSnapshotFilename, parseCssColorToHex, } = (0, browser_vm_js_1.loadBrowser)();
+const { decodeFilePreview, decodeDiffView, renderDiffViewHtml, renderVideoPlayerHtml, MODEL_LARGE_FILE_BYTES, MODEL_MAX_DECODED_BYTES, MODEL_VIEWS, resolveModelResourcePath, modelContentApiPath, shouldGateModelLoad, shouldGateDecodedKtx2, extractGltfExternalUris, parseKtx2DecodedBytes, parseResponseByteLength, formatModelBounds, formatModelStats, modelSnapshotFilename, parseCssColorToHex, } = (0, browser_vm_js_1.loadBrowser)();
 test('file and diff wire decoding rejects missing file paths and narrows nested fields', () => {
     assert.throws(() => decodeFilePreview({ content: 'text' }), /Invalid file preview/);
     const file = decodeFilePreview({
@@ -116,4 +116,48 @@ test('model viewer size gate, camera presets, stats and snapshot filename format
     assert.equal(parseCssColorToHex('rgb(30, 35, 41)'), '#1e2329');
     assert.equal(parseCssColorToHex('color(srgb 0.190588 0.215686 0.242353)'), '#31373e');
     assert.equal(parseCssColorToHex('transparent'), null);
+});
+test('model companion URI extraction, KTX2 decoded-byte header parsing, and response length parsing', () => {
+    assert.equal(shouldGateDecodedKtx2(MODEL_MAX_DECODED_BYTES), false);
+    assert.equal(shouldGateDecodedKtx2(MODEL_MAX_DECODED_BYTES + 1), true);
+    // Plain .gltf JSON extraction + deduplication across images and buffers.
+    const gltfBytes = new TextEncoder().encode(JSON.stringify({
+        images: [{ uri: '../../textures/a.ktx2' }, { uri: '../../textures/a.ktx2' }, { uri: 'b.png' }],
+        buffers: [{ uri: 'mesh.bin' }],
+    }));
+    const gltfBuf = gltfBytes.buffer.slice(gltfBytes.byteOffset, gltfBytes.byteOffset + gltfBytes.byteLength);
+    assert.deepEqual(Array.from(extractGltfExternalUris(gltfBuf)), ['../../textures/a.ktx2', 'b.png', 'mesh.bin']);
+    // GLB 2.0 binary container JSON chunk extraction.
+    const rawJson = Buffer.from(JSON.stringify({ images: [{ uri: 'albedo.ktx2' }] }), 'utf8');
+    const padLen = (4 - (rawJson.length % 4)) % 4;
+    const jsonChunk = Buffer.concat([rawJson, Buffer.alloc(padLen, 0x20)]);
+    const glb = Buffer.alloc(12 + 8 + jsonChunk.length);
+    glb.write('glTF', 0, 'ascii');
+    glb.writeUInt32LE(2, 4);
+    glb.writeUInt32LE(glb.length, 8);
+    glb.writeUInt32LE(jsonChunk.length, 12);
+    glb.write('JSON', 16, 'ascii');
+    jsonChunk.copy(glb, 20);
+    const glbAb = glb.buffer.slice(glb.byteOffset, glb.byteOffset + glb.byteLength);
+    assert.deepEqual(Array.from(extractGltfExternalUris(glbAb)), ['albedo.ktx2']);
+    assert.deepEqual(Array.from(extractGltfExternalUris(new ArrayBuffer(4))), []);
+    // KTX2 header level index uncompressedByteLength sum (3 mip levels: 16M + 4M + 1M).
+    const ktx = Buffer.alloc(80 + 3 * 24);
+    Buffer.from([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a]).copy(ktx, 0);
+    ktx.writeUInt32LE(2048, 20);
+    ktx.writeUInt32LE(2048, 24);
+    ktx.writeUInt32LE(1, 36);
+    ktx.writeUInt32LE(3, 40);
+    ktx.writeBigUInt64LE(16777216n, 80 + 16);
+    ktx.writeBigUInt64LE(4194304n, 80 + 24 + 16);
+    ktx.writeBigUInt64LE(1048576n, 80 + 48 + 16);
+    const ktxAb = ktx.buffer.slice(ktx.byteOffset, ktx.byteOffset + ktx.byteLength);
+    assert.equal(parseKtx2DecodedBytes(ktxAb), 16_777_216 + 4_194_304 + 1_048_576);
+    assert.equal(parseKtx2DecodedBytes(new ArrayBuffer(128)), null);
+    // Content-Range total wins over Content-Length; missing/malformed returns null.
+    const headersOf = (map) => ({ get: (k) => map[k.toLowerCase()] ?? null });
+    assert.equal(parseResponseByteLength(headersOf({ 'content-length': '12345' })), 12345);
+    assert.equal(parseResponseByteLength(headersOf({ 'content-range': 'bytes 0-15/987654', 'content-length': '16' })), 987654);
+    assert.equal(parseResponseByteLength(headersOf({})), null);
+    assert.equal(parseResponseByteLength(headersOf({ 'content-length': 'NaN' })), null);
 });

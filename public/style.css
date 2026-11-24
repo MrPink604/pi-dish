@@ -7081,6 +7081,14 @@ img.msg-image {
   color: var(--error);
 }
 
+.model-overlay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .model-stats {
   display: flex;
   flex-wrap: wrap;

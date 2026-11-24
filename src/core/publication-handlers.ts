@@ -982,6 +982,11 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
             ? file.image.mimeType : 'text/plain; charset=utf-8';
       res.setHeader('Cache-Control', 'public, no-cache');
       res.setHeader('X-Content-Type-Options', 'nosniff');
+      if (file.model) {
+        const name = path.basename(root);
+        const fallback = name.replace(/[^\x20-\x7e]|["\\;]/g, '_') || 'model.glb';
+        res.setHeader('Content-Disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+      }
       return sendRangedFile(req, res, root, { mimeType: safeMime, size: file.size, mtimeMs: file.mtime, onError: notFound });
     }
     res.setHeader('Cache-Control', 'public, no-cache');

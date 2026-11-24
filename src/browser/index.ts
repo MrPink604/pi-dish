@@ -86,9 +86,10 @@ export { decodeFilePreview, decodeDiffView, decodeDiffPatch } from './file-view-
 export { renderDiffViewHtml } from './file-view-render';
 export { createModelViewer } from './model-view';
 export {
-  MODEL_VENDOR_API_VERSION, MODEL_LARGE_FILE_BYTES, MODEL_VENDOR_META_NAME, DEFAULT_MODEL_VENDOR_URL, MODEL_VIEWS,
+  MODEL_VENDOR_API_VERSION, MODEL_LARGE_FILE_BYTES, MODEL_MAX_DECODED_BYTES, MODEL_VENDOR_META_NAME, DEFAULT_MODEL_VENDOR_URL, MODEL_VIEWS,
   modelViewById, resolvePosixPath, resolveModelResourcePath, modelContentApiPath, modelVendorUrl,
-  shouldGateModelLoad, formatModelBounds, formatModelStats, modelSnapshotFilename, parseCssColorToHex,
+  shouldGateModelLoad, shouldGateDecodedKtx2, extractGltfExternalUris, parseKtx2DecodedBytes, parseResponseByteLength,
+  formatModelBounds, formatModelStats, modelSnapshotFilename, parseCssColorToHex,
 } from './model-view-data';
 
 export { createAnchoredComments } from './anchored-comments';

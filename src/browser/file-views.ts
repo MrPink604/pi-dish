@@ -10,7 +10,7 @@ import { escapeHtml } from '../core/helper-format';
 import { formatMediaSize } from '../core/helper-media';
 import { shortCwd } from './helper-format';
 import { pauseAndUnloadVideos, type RenderVideoPreview, type VideoEnhanceContext } from './video-player';
-import { modelContentApiPath } from './model-view-data';
+import { modelContentApiPath, parseResponseByteLength } from './model-view-data';
 import type { ModelMountOptions, MountedModelView } from './model-view';
 function resolveRelativePosixPath(baseFilePath: string, rel: string): string {
   const dir = baseFilePath.includes('/') ? baseFilePath.slice(0, baseFilePath.lastIndexOf('/')) : '';
@@ -208,13 +208,62 @@ export function createFileViews(options: {
           modelPath: data.path,
           sizeBytes: data.size,
           mtime: data.mtime,
-          fetchFile: async (absPath, signal, cacheKey) => {
+          probeFileSize: async (absPath, signal) => {
+            if (!ownsFile(id, generation)) return null;
+            try {
+              const res = await request(owner, endpoint, modelContentApiPath(id, absPath), { method: 'HEAD', signal });
+              if (!res.ok) return null;
+              return parseResponseByteLength(res.headers);
+            } catch {
+              return null;
+            }
+          },
+          fetchFile: async (absPath, signal, fetchOptions) => {
             if (!ownsFile(id, generation)) throw new Error('File view closed');
-            const apiPath = modelContentApiPath(id, absPath, cacheKey);
+            const apiPath = modelContentApiPath(id, absPath, fetchOptions?.cacheKey);
             const res = await request(owner, endpoint, apiPath, { signal });
             if (!res.ok) {
               const payload: unknown = await res.json().catch(() => null);
               throw new Error(responseError(res, payload, `HTTP ${res.status}`));
+            }
+            const checkSize = fetchOptions?.checkSize;
+            const declared = parseResponseByteLength(res.headers);
+            if (checkSize && declared !== null) {
+              const allowed = await checkSize(declared);
+              if (!allowed) {
+                void res.body?.cancel().catch(() => {});
+                throw new Error('Model download paused for consent');
+              }
+              return res.arrayBuffer();
+            }
+            if (checkSize && res.body && typeof res.body.getReader === 'function') {
+              const reader = res.body.getReader();
+              const chunks: Uint8Array[] = [];
+              let received = 0;
+              try {
+                for (;;) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  if (value && value.byteLength > 0) {
+                    received += value.byteLength;
+                    const allowed = await checkSize(received);
+                    if (!allowed) {
+                      void reader.cancel().catch(() => {});
+                      throw new Error('Model download paused for consent');
+                    }
+                    chunks.push(value);
+                  }
+                }
+              } finally {
+                reader.releaseLock();
+              }
+              const merged = new Uint8Array(received);
+              let offset = 0;
+              for (const chunk of chunks) {
+                merged.set(chunk, offset);
+                offset += chunk.byteLength;
+              }
+              return merged.buffer;
             }
             return res.arrayBuffer();
           },
