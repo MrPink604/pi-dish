@@ -131,4 +131,29 @@ test('a file over the host limit is refused before upload and stays attached', a
   expect(fs.existsSync(path.join(fleet.self.home, '.pi/dish/uploads'))).toBe(false);
 });
 
+test('small WebP and GIF attachments are re-encoded as JPEG so bots accept them while PNG passes through', async ({ page, fleet }) => {
+  const GIF = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  const WEBP = 'UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=';
+  await fleet.select(fleet.self);
+  await page.locator('#attachFileInput').setInputFiles([
+    { name: 'tiny.gif', mimeType: 'image/gif', buffer: Buffer.from(GIF, 'base64') },
+    { name: 'tiny.webp', mimeType: 'image/webp', buffer: Buffer.from(WEBP, 'base64') },
+    image,
+  ]);
+  await expect(page.locator('#attachmentStrip img')).toHaveCount(3);
+  await page.locator('#promptInput').fill('Check these images');
+  await page.locator('#promptInput').press('Enter');
+  await expect.poll(() => sentPrompts(fleet.self).length).toBe(1);
+  const images = sentPrompts(fleet.self)[0]!.images as Array<{ type: string; mimeType: string; data: string }>;
+  expect(images.map(img => img.mimeType)).toEqual(['image/jpeg', 'image/jpeg', 'image/png']);
+  // Verify re-encoded JPEG payloads begin with JPEG SOI (FF D8 FF).
+  for (const jpeg of images.slice(0, 2)) {
+    const bytes = Buffer.from(jpeg.data, 'base64');
+    expect(bytes[0]).toBe(0xff);
+    expect(bytes[1]).toBe(0xd8);
+    expect(bytes[2]).toBe(0xff);
+  }
+  expect(images[2]!.data).toBe(PNG);
+});
+
 export {};

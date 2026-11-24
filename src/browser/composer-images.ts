@@ -8,7 +8,9 @@ export interface ComposerImage { readonly data: string; readonly mimeType: strin
 export interface ComposerFile { readonly file: File; readonly name: string; readonly mimeType: string; readonly size: number }
 export type ComposerAttachment = ComposerImage | ComposerFile;
 export function isComposerFile(attachment: ComposerAttachment): attachment is ComposerFile { return 'file' in attachment; }
-// Image types providers accept as-is; other decodable images are re-encoded as JPEG, undecodable ones travel as files.
+// Image types accepted without re-encoding across all harnesses (including bots, which accept only PNG and JPEG).
+const PASSTHROUGH_IMAGE_TYPES: Record<string, true> = { 'image/png': true, 'image/jpeg': true };
+// Fallback types kept when the browser cannot decode the image via createImageBitmap.
 const MODEL_IMAGE_TYPES: Record<string, true> = { 'image/png': true, 'image/jpeg': true, 'image/gif': true, 'image/webp': true };
 const ICON_PATHS: readonly [RegExp, string][] = [
   [/^audio\//, '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'],
@@ -105,7 +107,7 @@ export function createComposerImages(options: { document: Document; owner: () =>
     if (!bitmap) return MODEL_IMAGE_TYPES[file.type] === true ? { data: await read(file), mimeType: file.type } : null;
     try {
       const scale = Math.min(1, 1568 / Math.max(bitmap.width, bitmap.height));
-      if (scale === 1 && file.size <= 512 * 1024 && MODEL_IMAGE_TYPES[file.type] === true) return { data: await read(file), mimeType: file.type };
+      if (scale === 1 && file.size <= 512 * 1024 && PASSTHROUGH_IMAGE_TYPES[file.type] === true) return { data: await read(file), mimeType: file.type };
       const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
       const context = canvas.getContext('2d'); if (!context) throw new Error('Image canvas unavailable'); context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
       const url = canvas.toDataURL('image/jpeg', 0.85); return { data: url.slice(url.indexOf(',') + 1), mimeType: 'image/jpeg' };
