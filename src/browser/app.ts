@@ -948,6 +948,13 @@ const messageStreamController: ReturnType<typeof createMessageStream> = createMe
 
 const composerDrafts: ReturnType<typeof createComposerDrafts> = createComposerDrafts({
   document, storage: localStorage, keyForSession: keyForSessionId, currentSessionId: () => sessionState.currentSession?.id || null,
+  isBotTarget: owner => {
+    if (owner.startsWith('spawn:')) return false;
+    const { hostId, sessionId } = parseSessionKey(owner);
+    const session = sessionState.findSession(sessionId, hostId);
+    if (session) return session.harnessId === 'bot';
+    return sessionId.includes(':bot:');
+  },
   autosize: input => autosizePromptInput(input), status: setStatus,
   historyChanged: () => promptHistory.update(),
 });

@@ -121,27 +121,69 @@ async function chips(page) {
     (0, fixtures_js_1.expect)(sentPrompts(fleet.self)).toEqual([]);
     (0, fixtures_js_1.expect)(fs.existsSync(path.join(fleet.self.home, '.pi/dish/uploads'))).toBe(false);
 });
-(0, fixtures_js_1.test)('small WebP and GIF attachments are re-encoded as JPEG so bots accept them while PNG passes through', async ({ page, fleet }) => {
-    const GIF = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-    const WEBP = 'UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=';
+(0, fixtures_js_1.test)('non-bot chats keep small animated/transparent GIF and WebP attachments byte-for-byte intact', async ({ page, fleet }) => {
+    // Valid 2-frame GIF89a with transparent frame 1 and opaque white frame 2.
+    const ANIMATED_GIF = Buffer.from([
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
+        0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, // 1x1, 2-color GCT
+        0x00, 0x00, 0x00, 0xff, 0xff, 0xff, // black, white
+        0x21, 0xff, 0x0b, 0x4e, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2e, 0x30, 0x03, 0x01, 0x00, 0x00, 0x00,
+        0x21, 0xf9, 0x04, 0x01, 0x0a, 0x00, 0x00, 0x00, // frame 1: transparent index 0
+        0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+        0x21, 0xf9, 0x04, 0x00, 0x0a, 0x00, 0x00, 0x00, // frame 2: opaque
+        0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x4c, 0x01, 0x00,
+        0x3b,
+    ]);
+    const WEBP = Buffer.from('UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=', 'base64');
     await fleet.select(fleet.self);
     await page.locator('#attachFileInput').setInputFiles([
-        { name: 'tiny.gif', mimeType: 'image/gif', buffer: Buffer.from(GIF, 'base64') },
-        { name: 'tiny.webp', mimeType: 'image/webp', buffer: Buffer.from(WEBP, 'base64') },
+        { name: 'anim.gif', mimeType: 'image/gif', buffer: ANIMATED_GIF },
+        { name: 'tiny.webp', mimeType: 'image/webp', buffer: WEBP },
         image,
     ]);
     await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip img')).toHaveCount(3);
-    await page.locator('#promptInput').fill('Check these images');
+    await page.locator('#promptInput').fill('Check normal chat images');
     await page.locator('#promptInput').press('Enter');
     await fixtures_js_1.expect.poll(() => sentPrompts(fleet.self).length).toBe(1);
     const images = sentPrompts(fleet.self)[0].images;
-    (0, fixtures_js_1.expect)(images.map(img => img.mimeType)).toEqual(['image/jpeg', 'image/jpeg', 'image/png']);
-    // Verify re-encoded JPEG payloads begin with JPEG SOI (FF D8 FF).
-    for (const jpeg of images.slice(0, 2)) {
-        const bytes = Buffer.from(jpeg.data, 'base64');
-        (0, fixtures_js_1.expect)(bytes[0]).toBe(0xff);
-        (0, fixtures_js_1.expect)(bytes[1]).toBe(0xd8);
-        (0, fixtures_js_1.expect)(bytes[2]).toBe(0xff);
-    }
+    (0, fixtures_js_1.expect)(images.map(img => img.mimeType)).toEqual(['image/gif', 'image/webp', 'image/png']);
+    (0, fixtures_js_1.expect)(images[0].data).toBe(ANIMATED_GIF.toString('base64'));
+    (0, fixtures_js_1.expect)(images[1].data).toBe(WEBP.toString('base64'));
     (0, fixtures_js_1.expect)(images[2].data).toBe(PNG);
+});
+(0, fixtures_js_1.test)('bot chats convert transparent GIF to PNG, opaque GIF/WebP to JPEG, pass PNG through, and refuse undecodable WebP/GIF', async ({ page, fleet }) => {
+    const TRANSPARENT_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    const OPAQUE_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64');
+    const WEBP = Buffer.from('UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=', 'base64');
+    await fleet.select(fleet.self);
+    await page.evaluate((id) => {
+        window.fixtureSessionListPatch(id, { harnessId: 'bot' });
+    }, fixtures_js_1.ROOT);
+    // Corrupt WebP on a bot destination must surface an error rather than passing raw WebP.
+    await page.locator('#attachFileInput').setInputFiles([
+        { name: 'broken.webp', mimeType: 'image/webp', buffer: Buffer.from('not-a-valid-webp') },
+    ]);
+    await (0, fixtures_js_1.expect)(page.locator('#status')).toContainText('Could not attach broken.webp');
+    await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip img')).toHaveCount(0);
+    await page.locator('#attachFileInput').setInputFiles([
+        { name: 'alpha.gif', mimeType: 'image/gif', buffer: TRANSPARENT_GIF },
+        { name: 'opaque.gif', mimeType: 'image/gif', buffer: OPAQUE_GIF },
+        { name: 'tiny.webp', mimeType: 'image/webp', buffer: WEBP },
+        image,
+    ]);
+    await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip img')).toHaveCount(4);
+    await page.locator('#promptInput').fill('Check bot images');
+    await page.locator('#promptInput').press('Enter');
+    await fixtures_js_1.expect.poll(() => sentPrompts(fleet.self).length).toBe(1);
+    const images = sentPrompts(fleet.self)[0].images;
+    (0, fixtures_js_1.expect)(images.map(img => img.mimeType)).toEqual(['image/png', 'image/jpeg', 'image/jpeg', 'image/png']);
+    // Transparent GIF -> PNG (magic 89 50 4E 47).
+    const pngBytes = Buffer.from(images[0].data, 'base64');
+    (0, fixtures_js_1.expect)(Array.from(pngBytes.subarray(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    // Opaque GIF and opaque WebP -> JPEG (SOI FF D8 FF).
+    for (const jpeg of images.slice(1, 3)) {
+        const bytes = Buffer.from(jpeg.data, 'base64');
+        (0, fixtures_js_1.expect)(Array.from(bytes.subarray(0, 3))).toEqual([0xff, 0xd8, 0xff]);
+    }
+    (0, fixtures_js_1.expect)(images[3].data).toBe(PNG);
 });

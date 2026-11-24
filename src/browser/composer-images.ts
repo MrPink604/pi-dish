@@ -8,10 +8,19 @@ export interface ComposerImage { readonly data: string; readonly mimeType: strin
 export interface ComposerFile { readonly file: File; readonly name: string; readonly mimeType: string; readonly size: number }
 export type ComposerAttachment = ComposerImage | ComposerFile;
 export function isComposerFile(attachment: ComposerAttachment): attachment is ComposerFile { return 'file' in attachment; }
-// Image types accepted without re-encoding across all harnesses (including bots, which accept only PNG and JPEG).
-const PASSTHROUGH_IMAGE_TYPES: Record<string, true> = { 'image/png': true, 'image/jpeg': true };
-// Fallback types kept when the browser cannot decode the image via createImageBitmap.
+// Image types bots accept without re-encoding (bots accept PNG and JPEG only).
+const BOT_PASSTHROUGH_IMAGE_TYPES: Record<string, true> = { 'image/png': true, 'image/jpeg': true };
+// Image types standard model chats accept directly without losing animation or transparency.
 const MODEL_IMAGE_TYPES: Record<string, true> = { 'image/png': true, 'image/jpeg': true, 'image/gif': true, 'image/webp': true };
+function canvasHasAlpha(context: CanvasRenderingContext2D, width: number, height: number): boolean {
+  try {
+    const data = context.getImageData(0, 0, width, height).data;
+    for (let i = 3; i < data.length; i += 4) if (data[i]! < 255) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
 const ICON_PATHS: readonly [RegExp, string][] = [
   [/^audio\//, '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'],
   [/^video\//, '<rect x="2" y="5" width="14" height="14" rx="2"/><path d="M16 10l6-3v10l-6-3"/>'],
@@ -27,7 +36,10 @@ function decodeComposerAttachments(value: unknown): ComposerAttachment[] {
   return Array.isArray(value) ? value.flatMap((item: unknown): ComposerAttachment[] => record(item) && item.file instanceof File && typeof item.name === 'string' && typeof item.mimeType === 'string' && typeof item.size === 'number'
     ? [{ file: item.file, name: item.name, mimeType: item.mimeType, size: item.size }] : decodeComposerImages([item])) : [];
 }
-export function createComposerImages(options: { document: Document; owner: () => string | null; status: (text: string, type?: string) => void }) {
+export function createComposerImages(options: {
+  document: Document; owner: () => string | null; status: (text: string, type?: string) => void;
+  isBotTarget?: (key: string) => boolean;
+}) {
   const { document } = options;
   const stored = new Map<string, readonly ComposerAttachment[]>(), aliases = new Map<string, string>();
   const uploads = new Map<string, { readonly files: readonly ComposerFile[]; readonly loaded: number[] }>();
@@ -100,26 +112,40 @@ export function createComposerImages(options: { document: Document; owner: () =>
     });
   }
   /** The model-ready image for `file`, or null when it can only travel as a file. */
-  async function prepare(file: File): Promise<ComposerImage | null> {
+  async function prepare(file: File, forBot = false): Promise<ComposerImage | null> {
     if (disposed) throw new Error('Image attachments disposed');
+    const passthrough = forBot ? BOT_PASSTHROUGH_IMAGE_TYPES : MODEL_IMAGE_TYPES;
     const bitmap = typeof createImageBitmap === 'function' ? await createImageBitmap(file).catch(() => null) : null;
     if (disposed) { bitmap?.close(); throw new Error('Image attachments disposed'); }
-    if (!bitmap) return MODEL_IMAGE_TYPES[file.type] === true ? { data: await read(file), mimeType: file.type } : null;
+    if (!bitmap) {
+      if (passthrough[file.type] === true) return { data: await read(file), mimeType: file.type };
+      if (forBot && MODEL_IMAGE_TYPES[file.type] === true) {
+        throw new Error(`Could not decode ${file.type} for bot attachment`);
+      }
+      return null;
+    }
     try {
       const scale = Math.min(1, 1568 / Math.max(bitmap.width, bitmap.height));
-      if (scale === 1 && file.size <= 512 * 1024 && PASSTHROUGH_IMAGE_TYPES[file.type] === true) return { data: await read(file), mimeType: file.type };
+      if (scale === 1 && file.size <= 512 * 1024 && passthrough[file.type] === true) {
+        return { data: await read(file), mimeType: file.type };
+      }
       const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
       const context = canvas.getContext('2d'); if (!context) throw new Error('Image canvas unavailable'); context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      const url = canvas.toDataURL('image/jpeg', 0.85); return { data: url.slice(url.indexOf(',') + 1), mimeType: 'image/jpeg' };
+      const usePng = file.type !== 'image/jpeg' && canvasHasAlpha(context, canvas.width, canvas.height);
+      const mimeType = usePng ? 'image/png' : 'image/jpeg';
+      const url = usePng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85);
+      return { data: url.slice(url.indexOf(',') + 1), mimeType };
     } finally { bitmap.close(); }
   }
   async function add(files: ArrayLike<File> | null | undefined) {
-    const key = currentKey(); if (disposed || !key) return; const batch = { key, retired: false }; batches.add(batch);
+    const key = currentKey(); if (disposed || !key) return;
+    const forBot = Boolean(options.isBotTarget?.(key));
+    const batch = { key, retired: false }; batches.add(batch);
     try {
       for (const file of Array.from(files || [])) {
         if (disposed || batch.retired) break;
         try {
-          const image = file.type.startsWith('image/') ? await prepare(file) : null;
+          const image = file.type.startsWith('image/') ? await prepare(file, forBot) : null;
           const attachment: ComposerAttachment = image || { file, name: file.name || 'file', mimeType: file.type || 'application/octet-stream', size: file.size };
           if (!disposed && !batch.retired) append(batch.key, [attachment], false);
         }

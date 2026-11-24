@@ -21,11 +21,11 @@ export function storedPromptHistories(storage: Pick<Storage, 'length' | 'key' | 
 export function createComposerDrafts(options: {
   document: Document; storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>; keyForSession: (id: string) => string;
   currentSessionId: () => string | null; autosize: (input: HTMLTextAreaElement) => void; status: (text: string, type?: string) => void;
-  historyChanged?: () => void;
+  isBotTarget?: (owner: string) => boolean; historyChanged?: () => void;
 }) {
   const { document, storage } = options;
   let key: string | null = null, dirty = false, history: string[] = [], historyIndex = -1, historyStash = '', timer: ReturnType<typeof setTimeout> | null = null, generation = 0, disposed = false;
-  const images = createComposerImages({ document, owner: () => key, status: options.status });
+  const images = createComposerImages({ document, owner: () => key, isBotTarget: options.isBotTarget, status: options.status });
   const input = () => document.getElementById('promptInput') as HTMLTextAreaElement;
   function ownerKey(id: string) { return id.startsWith('spawn:') || id.includes(' ') ? id : options.keyForSession(id); }
   function draftKey(id: string) { return 'pi-dish-draft-' + ownerKey(id); }
