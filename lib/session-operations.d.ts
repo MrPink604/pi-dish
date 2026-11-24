@@ -1,4 +1,5 @@
 // Generated from src/core/session-operations.ts; edit that source and run npm run build:core.
+import type { ProcessIdentity } from './contracts';
 import type { SessionSource } from './session-source';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import type { HarnessLaunchTarget, SessionLaunch } from './session-launch';
@@ -31,6 +32,8 @@ export interface ResumeSessionOptions {
     model?: unknown;
     target?: HarnessLaunchTarget | null;
     recovery?: RecoveryRecord | null;
+    /** Bind headless tmux launch to one exact already-running server (-N, no server creation, no RPC fallback). */
+    expectedTmuxServer?: ProcessIdentity | null;
 }
 export interface ResumeSessionResult {
     success: true;

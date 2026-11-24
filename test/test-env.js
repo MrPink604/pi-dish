@@ -203,8 +203,9 @@ const KEEP = {
 };
 // Read straight by server.js at listen time. XDG_STATE_HOME locates the
 // private-session root; dropped, it follows each suite's temp HOME, so no test
-// reads the operator's private transcripts.
-const DROP = ['HOST', 'PORT', 'XDG_STATE_HOME'];
+// reads the operator's private transcripts. TMUX_TMPDIR is always replaced with
+// an isolated directory below so no test can touch the operator's tmux servers.
+const DROP = ['HOST', 'PORT', 'XDG_STATE_HOME', 'TMUX_TMPDIR'];
 // The OMP bridge suites spawn `bun`, which a non-interactive shell does not
 // find in its usual `~/.bun/bin`.
 function withBunOnPath(env) {
@@ -236,12 +237,16 @@ function sanitizeTestEnv(env = process.env) {
     }
     for (const key of DROP)
         delete next[key];
-    // Prime live rows come from a resident daemon socket outside HOME, and `agy`
-    // `/usage` probes a host binary on PATH; pin nonexistent paths so no test
-    // touches the operator's live daemon or Antigravity account unless opted in.
+    // Prime live rows come from a resident daemon socket outside HOME, `agy`
+    // `/usage` probes a host binary on PATH, and tmux defaults to /tmp/tmux-<uid>;
+    // pin isolated paths so no test touches the operator's live daemon, account,
+    // or tmux servers unless explicitly overridden.
     const isolated = isolatedHarnessPaths ??= createTestTempDir('dish-prime-daemon-');
+    const isolatedTmux = path.join(isolated, 'tmux');
+    fs.mkdirSync(isolatedTmux, { recursive: true, mode: 0o700 });
     next.PRIME_AGENT_DAEMON_SOCKET = path.join(isolated, 'daemon.sock');
     next.PI_DISH_AGY_COMMAND = path.join(isolated, 'no-agy');
+    next.TMUX_TMPDIR = isolatedTmux;
     // A server a suite boots never starts a bot relay (or its model).
     next.PI_DISH_BOTS = 'off';
     // Test tmux servers never become transient units in the operator's systemd manager.

@@ -28,6 +28,7 @@ const OPERATOR_ENV = {
     PI_DISH_ENV_FILE: '/home/operator/.config/pi-dish/env',
     PI_DISH_PI_COMMAND: '/usr/local/bin/pi',
     PI_DISH_SKIP_INTEGRATION: '1',
+    TMUX_TMPDIR: '/tmp/tmux-operator',
 };
 test('sanitizeTestEnv pins the bind target and drops the operator deployment', () => {
     const env = (0, test_env_js_1.sanitizeTestEnv)(OPERATOR_ENV);
@@ -45,10 +46,13 @@ test('sanitizeTestEnv pins the bind target and drops the operator deployment', (
     assert.equal(env.PI_DISH_SKIP_INTEGRATION, '1');
     assert.equal(env.HOME, '/home/operator', 'unrelated variables pass through');
     assert.equal(env.PATH, '/usr/bin');
-    // Prime live rows are read from a daemon socket outside HOME; a test process
-    // must never attach to the operator's resident daemon.
+    // Prime live rows are read from a daemon socket outside HOME, and tmux sockets
+    // default to /tmp/tmux-<uid>; a test process must never touch either.
     assert.ok(path.isAbsolute(env.PRIME_AGENT_DAEMON_SOCKET ?? ''));
     assert.equal(fs.existsSync(env.PRIME_AGENT_DAEMON_SOCKET), false, 'the pinned daemon socket does not exist');
+    assert.ok(path.isAbsolute(env.TMUX_TMPDIR ?? ''), 'tests get an isolated absolute TMUX_TMPDIR');
+    assert.notEqual(env.TMUX_TMPDIR, '/tmp/tmux-operator', 'operator TMUX_TMPDIR is never inherited');
+    assert.equal(fs.existsSync(env.TMUX_TMPDIR), true, 'isolated TMUX_TMPDIR exists');
     assert.equal(OPERATOR_ENV.HOST, '100.70.163.97', 'the input env is not mutated');
 });
 test('sanitizeTestEnv puts a user-installed bun on PATH, but never replaces one', () => {

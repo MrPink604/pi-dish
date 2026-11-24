@@ -156,6 +156,10 @@ export interface BotStartPorts {
   /** The build pi-dish runs; a running relay of another build is handed to `restartStale`. */
   build?: string;
   restartStale?(bot: BotRow, holder: BotRelayHolder): void;
+  /** Return a reason string to defer starting an offline bot (e.g. persisted tmux-loss backoff); healthy relays are untouched. */
+  shouldSkipStart?(bot: BotRow): string | null;
+  /** Called after an active bot is observed live or started cleanly. */
+  onRunning?(bot: BotRow): void;
 }
 
 /** The live relay holding a bot's lock, or null. */
@@ -179,11 +183,22 @@ export async function startBots(ports: BotStartPorts): Promise<void> {
     if (bot.status !== 'active') continue;
     try {
       const holder = liveBotRelay(path.join(botsDir, bot.id));
-      if (holder && ports.build && ports.restartStale && holder.build !== ports.build) {
-        ports.restartStale(bot, holder);
+      if (holder) {
+        ports.onRunning?.(bot);
+        if (ports.build && ports.restartStale && holder.build !== ports.build) {
+          ports.restartStale(bot, holder);
+          continue;
+        }
+        await startBot(bot, ports);
+        continue;
+      }
+      const skipReason = ports.shouldSkipStart?.(bot);
+      if (skipReason) {
+        ports.log(`bot ${bot.name}: startup skipped (${skipReason})`);
         continue;
       }
       await startBot(bot, ports);
+      ports.onRunning?.(bot);
     } catch (error) {
       ports.log(`bot ${bot.name} did not start: ${errorMessage(error)}`);
     }

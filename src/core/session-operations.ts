@@ -2,7 +2,7 @@ import fs = require('fs');
 import path = require('path');
 import crypto = require('crypto');
 import { setTimeout as delay } from 'timers/promises';
-import type { BridgeRegistryEntry } from './contracts';
+import type { BridgeRegistryEntry, ProcessIdentity } from './contracts';
 import { BridgeSession, invalidateRegistryCache, listRegisteredSessions, pruneRegisteredSession } from './bridge-session';
 import { getHarness } from './harnesses';
 import { formatModelRef } from './helper-models';
@@ -52,6 +52,8 @@ export interface ResumeSessionOptions {
   model?: unknown;
   target?: HarnessLaunchTarget | null;
   recovery?: RecoveryRecord | null;
+  /** Bind headless tmux launch to one exact already-running server (-N, no server creation, no RPC fallback). */
+  expectedTmuxServer?: ProcessIdentity | null;
 }
 
 export interface ResumeSessionResult {
@@ -482,7 +484,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
     }
   }
 
-  async function resumeSessionById(requestedId: unknown, { model, target, recovery = null }: ResumeSessionOptions = {}): Promise<ResumeSessionResult> {
+  async function resumeSessionById(requestedId: unknown, { model, target, recovery = null, expectedTmuxServer = null }: ResumeSessionOptions = {}): Promise<ResumeSessionResult> {
     const requestedRoute = routeIdentity(requestedId);
     if (requestedRoute && restartFlights.has(routeSessionId(requestedRoute.harnessId, requestedRoute.nativeSessionId))) {
       throw new SessionOperationError(409, 'The session is being restarted; no second writer was launched.');
@@ -561,10 +563,18 @@ export function createSessionOperations(observations: SessionOperationObservatio
       invalidateRegistryCache();
       if (activeSessionClearsQuarantine(sessionId)) return { success: true, id: sessionId, alreadyActive: true };
       assertNoConflictingWriter(sessionId, sessionFile);
+      if (expectedTmuxServer) {
+        const currentServer = await tmux.serverIdentity(tmux.headlessTmuxSocket());
+        if (!sameProcessIdentity(currentServer, expectedTmuxServer)) {
+          throw new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} is no longer running`, true);
+        }
+      }
+      let previousLaunch: unknown;
       if (recovery) {
         validateRecoveryRecord(recovery);
         const control = recoveryStore.getControl(recovery.harnessId, recovery.nativeSessionId);
         if (control.closed || control.excluded) throw new SessionOperationError(409, 'Recovery was closed or excluded before launch.');
+        previousLaunch = control.attempt?.launch;
         recoveryStore.patchControl(recovery.harnessId, recovery.nativeSessionId, {
           attempt: { ...control.attempt, launch: { bootId: recoveryStore.bootId(), uncertain: true } },
         });
@@ -572,9 +582,18 @@ export function createSessionOperations(observations: SessionOperationObservatio
       // R/L is asymmetric: close never checks this file flight, and an already-active R may return above.
       if (closeFlights.has(sessionId)) throw new SessionOperationError(409, 'The session is being closed; retry after close completes.');
       const outcome = await launch.launchResumedSession({
-        descriptor, sessionFile, cwd, name: recovery?.name || null, target, model, thinking,
+        descriptor, sessionFile, cwd, name: recovery?.name || null, target, model, thinking, expectedTmuxServer,
       });
       if (outcome.kind !== 'ready') {
+        if (outcome.error instanceof tmux.TmuxServerLostError) {
+          if (recovery && outcome.error.beforeSpawn) {
+            const currentControl = recoveryStore.getControl(recovery.harnessId, recovery.nativeSessionId);
+            recoveryStore.patchControl(recovery.harnessId, recovery.nativeSessionId, {
+              attempt: { ...currentControl.attempt, launch: previousLaunch ?? null },
+            });
+          }
+          throw outcome.error;
+        }
         if (target?.type === 'tmux') rememberUncertainPlacement(sessionFile, outcome);
         else if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
         throw outcome.error;

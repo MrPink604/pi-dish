@@ -33,17 +33,38 @@ export interface RecoveryReportOptions {
     /** Include PIN-protected private sessions; callers must gate this on private unlock. */
     includePrivate?: boolean;
 }
+export interface RecoveryRetryOptions {
+    /** Include PIN-protected private sessions; defaults false (fail closed). */
+    includePrivate?: boolean;
+}
 export interface RecoveryRetryAllOptions {
     /** Include PIN-protected private sessions; defaults false (fail closed). */
     includePrivate?: boolean;
 }
+export interface RecoverLostOptions {
+    /** Bind headless tmux launches to one exact replacement server (-N, no server creation). */
+    expectedTmuxServer?: ProcessIdentity | null;
+    /** Checked around each launch; returning false aborts the batch and reconciles its rows. */
+    checkServer?: () => Promise<boolean>;
+}
+export interface ReconcileLostResult {
+    live: RecoveryOutcome[];
+    deadIds: string[];
+    outcomes: RecoveryOutcome[];
+}
 export interface RecoveryRunner {
     start(): Promise<void>;
-    retry(id: string): Promise<RecoveryOutcome>;
+    retry(id: string, options?: RecoveryRetryOptions): Promise<RecoveryOutcome>;
     /** Explicitly retries failed rows and pending tmux-lost sessions, one at a time. */
     retryAll(options?: RecoveryRetryAllOptions): Promise<RecoveryOutcome[]>;
+    /** Marks routes affected by confirmed tmux server loss as restore-only immediately on detection. */
+    markLostRestoreOnly(ids: readonly string[]): void;
     /** Automatic restore-only recovery of sessions that were live in a lost tmux server. */
-    recoverLost(ids: readonly string[]): Promise<RecoveryOutcome[]>;
+    recoverLost(ids: readonly string[], options?: RecoverLostOptions): Promise<RecoveryOutcome[]>;
+    /** Reconciles rows in a lost/aborted batch against live sessions so reports stay accurate. */
+    reconcileLost(ids: readonly string[], reason: string, options?: {
+        status?: 'failed' | 'needs-review';
+    }): Promise<ReconcileLostResult>;
     /** Records a persisted needs-review outcome when automatic server-loss recovery is rate-limited. */
     markLostRateLimited(ids: readonly string[], reason: string): RecoveryOutcome[];
     /** True while a recovery launch/check flight is currently active for `id`. */
@@ -63,8 +84,10 @@ export interface RecoveryPresentationOptions {
     hibernated?(routeId: string): boolean;
     /** Completed one-shot routines awaiting auto-close must not be resurrected by loss recovery. */
     isPendingClose?(routeId: string): boolean;
-    /** Identifies private PIN-gated sessions so locked reports and retry-all omit them. */
+    /** Identifies private PIN-gated sessions so locked reports and retries omit/refuse them. */
     isPrivate?(record: RecoveryRecord): boolean;
+    /** Returns a refusal reason if startup recovery for `routeId` is suppressed by persisted tmux-loss backoff. */
+    suppressedAtStartup?(routeId: string): string | null;
 }
 /** Isolated runner seams; production policy is composed by createRecoveryRuntime below. */
 export interface RecoveryRunnerOptions extends RecoveryPresentationOptions {
@@ -72,7 +95,9 @@ export interface RecoveryRunnerOptions extends RecoveryPresentationOptions {
     routeId: typeof recoveryRouteId;
     probeLive: SessionOperations['probeRecoveryLive'];
     validateRecord: typeof validateRecoveryRecord;
-    restore(record: RecoveryRecord): Promise<ResumeSessionResult>;
+    restore(record: RecoveryRecord, options?: {
+        expectedTmuxServer?: ProcessIdentity | null;
+    }): Promise<ResumeSessionResult>;
     continueSession(record: RecoveryRecord, session: LiveSession, message: string): Promise<void>;
 }
 export interface RecoveryRuntimeOptions extends RecoveryPresentationOptions {
@@ -99,9 +124,21 @@ export type TmuxLossVerdict = {
     retryAt: number | null;
     reason: string;
 };
+export interface TmuxLossSuppression {
+    agentIds?: readonly string[];
+    botIds?: readonly string[];
+}
 export interface TmuxLossLimiter {
     check(at?: number): TmuxLossVerdict;
     record(at?: number): void;
+    /** Persists agents/bots suppressed by a rate-limited or failed server-loss recovery across restarts. */
+    suppress(targets: TmuxLossSuppression): void;
+    /** Clears agents/bots from persisted suppression once running or explicitly resumed. */
+    clearSuppressed(targets: TmuxLossSuppression): void;
+    /** Returns a refusal reason if startup launch for `botId` is currently suppressed by backoff/cap or corrupt state. */
+    suppressedBotReason(botId: string, at?: number): string | null;
+    /** Returns a refusal reason if startup recovery for `agentId` is currently suppressed by backoff/cap or corrupt state. */
+    suppressedAgentReason(agentId: string, at?: number): string | null;
 }
 /**
  * Durable exponential-backoff and rolling-window limiter for automatic tmux
@@ -124,8 +161,11 @@ export interface TmuxServerLossEvent {
 export interface TmuxServerWatchOptions {
     socket: string;
     inspectServer(socket: string): Promise<TmuxServerSnapshot | null>;
-    configureServer?(socket: string): Promise<void>;
+    /** Called only after verifying at least one live pi-dish placement inside the server. */
+    configureServer?(socket: string): Promise<boolean | void>;
     snapshotSessions(socket: string, panes: ReadonlyMap<string, LiveTmuxPane>): WatchedTmuxServerSessions;
+    /** Fired synchronously as soon as server loss is confirmed, before waiting for process exit. */
+    onLossDetected?(event: TmuxServerLossEvent): void;
     onLost(event: TmuxServerLossEvent): Promise<unknown>;
     intervalMs?: number;
     /** Post-exit settle delay after dead-pane processes exit (default 500 ms). */
@@ -151,6 +191,6 @@ export interface TmuxServerWatch {
  * agents and bots handed to `onLost` — never when one session exits while the
  * server stays alive, and never when a running server is merely slow to answer.
  */
-export declare function watchTmuxServer({ socket, inspectServer, configureServer, snapshotSessions, onLost, intervalMs, settleMs, exitWaitMs, processAlive, log, }: TmuxServerWatchOptions): TmuxServerWatch;
+export declare function watchTmuxServer({ socket, inspectServer, configureServer, snapshotSessions, onLossDetected, onLost, intervalMs, settleMs, exitWaitMs, processAlive, log, }: TmuxServerWatchOptions): TmuxServerWatch;
 /** Checked production restore/delivery policy; callers provide owners and presentation, not authority callbacks. */
-export declare function createRecoveryRuntime({ operations, ownership, getMode, now, log, hibernated, isPendingClose, isPrivate }: RecoveryRuntimeOptions): RecoveryRunner;
+export declare function createRecoveryRuntime({ operations, ownership, getMode, now, log, hibernated, isPendingClose, isPrivate, suppressedAtStartup, }: RecoveryRuntimeOptions): RecoveryRunner;

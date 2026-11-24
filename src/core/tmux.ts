@@ -44,6 +44,16 @@ export interface SpawnOptions extends PaneCommand {
   tmuxSession?: string | null;
   newTmuxSessionName?: string | null;
   windowName?: string | null;
+  /** Bind launch to one exact already-running server and never start a new one (-N). */
+  expectedServer?: ProcessIdentity | null;
+}
+
+/** Raised when a launch bound to a specific tmux server finds that server dead or replaced. */
+export class TmuxServerLostError extends Error {
+  constructor(message: string, readonly beforeSpawn = false) {
+    super(message);
+    this.name = 'TmuxServerLostError';
+  }
 }
 
 /** Async preparation returns the synchronous checker run adjacent to execFile. */
@@ -337,8 +347,12 @@ export function isSocketAllowed(socket: unknown): socket is string {
   return path.dirname(path.resolve(socket)) === path.resolve(tmuxTmpdir());
 }
 
+function sameServerIdentity(left: ProcessIdentity | null, right: ProcessIdentity): boolean {
+  return !!left && left.pid === right.pid && String(left.startTime) === String(right.startTime);
+}
+
 /** Open a detached window or session with child argv and tmux -e KEY=VALUE flags. */
-export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, windowName, cwd, command, env }: SpawnOptions): Promise<{ paneId: string }> {
+export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, windowName, cwd, command, env, expectedServer = null }: SpawnOptions): Promise<{ paneId: string }> {
   if (!Array.isArray(command) || !command.length) throw new Error('command argv required');
   const envFlags: string[] = [];
   for (const [k, v] of Object.entries(env || {})) envFlags.push('-e', `${k}=${v}`);
@@ -357,6 +371,36 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
   if (newTmuxSessionName) args.push('-c', path.resolve(String(cwd || '.')));
   else if (cwd) args.push('-c', cwd);
   args.push(...envFlags, '-P', '-F', '#{pane_id}', '--', ...command);
+
+  if (expectedServer) {
+    const current = await serverIdentity(socket);
+    if (!sameServerIdentity(current, expectedServer)) {
+      if (!current) notifyHeadlessNoServer(socket);
+      throw new TmuxServerLostError(`expected tmux server pid ${expectedServer.pid} is no longer running`, true);
+    }
+    let out: string;
+    try {
+      // -N: a launch bound to one replacement server must never start a third server.
+      out = await runFile('tmux', ['-N', '-S', socket, ...args], 5000, '/');
+    } catch (error) {
+      if (isNoServerError(error)) {
+        notifyHeadlessNoServer(socket);
+        throw new TmuxServerLostError(`expected tmux server pid ${expectedServer.pid} died before launch`, true);
+      }
+      if (!sameServerIdentity(await serverIdentity(socket), expectedServer)) {
+        throw new TmuxServerLostError(`expected tmux server pid ${expectedServer.pid} died during launch`, true);
+      }
+      throw error;
+    }
+    const paneId = out.trim();
+    const after = await serverIdentity(socket);
+    if (!sameServerIdentity(after, expectedServer)) {
+      if (after && paneId) await killPane(socket, paneId).catch(() => {});
+      if (!after) notifyHeadlessNoServer(socket);
+      throw new TmuxServerLostError(`expected tmux server pid ${expectedServer.pid} was lost during launch`, false);
+    }
+    return { paneId };
+  }
 
   const out = newTmuxSessionName
     ? await runTmuxStartingServer(socket, args, 5000)
@@ -635,6 +679,12 @@ export async function serverPid(socket: string): Promise<number | null> {
   }
 }
 
+/** Process identity of the server answering on `socket`; null when none answers. Never starts a server. */
+export async function serverIdentity(socket: string): Promise<ProcessIdentity | null> {
+  const pid = await serverPid(socket);
+  return pid !== null ? processIdentity(pid) : null;
+}
+
 /**
  * Single-command snapshot of a running tmux server and its panes. Uses -N so
  * it never starts a server; handles an empty server (exit-empty off) by
@@ -679,10 +729,14 @@ export async function inspectServer(socket: string): Promise<TmuxServerSnapshot 
 }
 
 /** Applies exit-empty off to an already-running headless server without ever starting one. */
-export async function configureHeadlessServer(socket = headlessTmuxSocket()): Promise<void> {
+export async function configureHeadlessServer(socket = headlessTmuxSocket()): Promise<boolean> {
+  if (!isHeadlessSocket(socket)) return false;
   try {
     await runTmux(['-N', '-S', socket, 'set-option', '-sq', 'exit-empty', 'off'], { timeout: 2000 });
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -690,10 +744,10 @@ export async function configureHeadlessServer(socket = headlessTmuxSocket()): Pr
  * (-f /dev/null, HEADLESS_SERVER_OPTIONS, transient systemd scope) as
  * spawnInTmux, and -N when a server is already running.
  */
-export async function ensureHeadlessServer(socket = headlessTmuxSocket()): Promise<number | null> {
+export async function ensureHeadlessServer(socket = headlessTmuxSocket()): Promise<ProcessIdentity | null> {
   fs.mkdirSync(path.dirname(socket), { recursive: true, mode: 0o700 });
   await runTmuxStartingServer(socket, ['start-server'], 5000);
-  return serverPid(socket);
+  return serverIdentity(socket);
 }
 
 /**

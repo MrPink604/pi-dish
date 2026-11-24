@@ -31,6 +31,13 @@ export interface SpawnOptions extends PaneCommand {
     tmuxSession?: string | null;
     newTmuxSessionName?: string | null;
     windowName?: string | null;
+    /** Bind launch to one exact already-running server and never start a new one (-N). */
+    expectedServer?: ProcessIdentity | null;
+}
+/** Raised when a launch bound to a specific tmux server finds that server dead or replaced. */
+export declare class TmuxServerLostError extends Error {
+    readonly beforeSpawn: boolean;
+    constructor(message: string, beforeSpawn?: boolean);
 }
 /** Async preparation returns the synchronous checker run adjacent to execFile. */
 export interface RespawnOptions extends PaneTarget, PaneCommand {
@@ -95,7 +102,7 @@ export declare function headlessTmuxSocket(): string;
 export declare function listServers(): Promise<TmuxServer[]>;
 export declare function isSocketAllowed(socket: unknown): socket is string;
 /** Open a detached window or session with child argv and tmux -e KEY=VALUE flags. */
-export declare function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, windowName, cwd, command, env }: SpawnOptions): Promise<{
+export declare function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, windowName, cwd, command, env, expectedServer }: SpawnOptions): Promise<{
     paneId: string;
 }>;
 /** Replace only the exact pane-root birth authorized by the caller. */
@@ -139,6 +146,8 @@ export interface TmuxServerSnapshot {
 }
 /** PID of the server answering on `socket`; null when none answers. Never starts a server. */
 export declare function serverPid(socket: string): Promise<number | null>;
+/** Process identity of the server answering on `socket`; null when none answers. Never starts a server. */
+export declare function serverIdentity(socket: string): Promise<ProcessIdentity | null>;
 /**
  * Single-command snapshot of a running tmux server and its panes. Uses -N so
  * it never starts a server; handles an empty server (exit-empty off) by
@@ -146,13 +155,13 @@ export declare function serverPid(socket: string): Promise<number | null>;
  */
 export declare function inspectServer(socket: string): Promise<TmuxServerSnapshot | null>;
 /** Applies exit-empty off to an already-running headless server without ever starting one. */
-export declare function configureHeadlessServer(socket?: string): Promise<void>;
+export declare function configureHeadlessServer(socket?: string): Promise<boolean>;
 /**
  * Ensures pi-dish's headless tmux server is running using the same flags
  * (-f /dev/null, HEADLESS_SERVER_OPTIONS, transient systemd scope) as
  * spawnInTmux, and -N when a server is already running.
  */
-export declare function ensureHeadlessServer(socket?: string): Promise<number | null>;
+export declare function ensureHeadlessServer(socket?: string): Promise<ProcessIdentity | null>;
 /**
  * Clients attached to the pane's session, including grouped viewer sessions.
  * Null (unreadable) means "possibly watched", never "nobody is looking".

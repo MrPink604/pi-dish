@@ -30,7 +30,7 @@ import { createReviewHandlers } from './review-handlers';
 import { createFeatureHandlers } from './feature-handlers';
 import { harnessCommandAvailable, runHarnessModelCommand } from './harness-feature-commands';
 import { decodeLaunchParents } from './session-catalog';
-import { createSessionOwnership, liveSessionSupports, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
+import { createSessionOwnership, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
 import { createSessionLaunch } from './session-launch';
 import { createSessionOperations } from './session-operations';
 import { createMessageHold } from './message-hold';
@@ -50,7 +50,7 @@ import { createRoutineRunner, type RoutineBots, type RoutineRunner } from './rou
 import { createRoutineHandlers, composeRoutinePrompt } from './routine-handlers';
 import { createRecoveryRuntime, createTmuxLossLimiter, recoveryMode, watchTmuxServer } from './recovery-runner';
 import type { RecoveryOutcome, TmuxServerLossEvent, TmuxServerWatch, WatchedTmuxServerSessions } from './recovery-runner';
-import { inspectProcessAncestry, processIdentity } from './process-identity';
+import { inspectProcessAncestry, processIdentity, processIdentityAlive } from './process-identity';
 import type { ProcessIdentity } from './contracts';
 import { createSessionBounceRuntime, createSessionLifecycleActions } from './session-bounces';
 import { createSessionHibernation } from './session-hibernation';
@@ -282,17 +282,46 @@ export function startServer(rootDirectory: string): Server {
   }
 
   // Private rows and routes answer only to requests unlocked by the PIN.
+  // One shared predicate authorizes both the matched recovery record and its
+  // current live/discovered source across session gates, reports, and retries.
   const privateAccess = createPrivateAccess();
   const privateUnlocked = (req: IncomingMessage) => privateAccess.unlocked(req);
-  const recordIsPrivate = (record: recoveryStore.RecoveryRecord) =>
-    isPrivateSessionFile(getHarness(record.harnessId), record.sessionFile);
-  const sessionIsPrivate = (sessionId: string) => {
-    if ([...liveSourceObservations(sessionId), findSessionSource(sessionId)]
-      .some(entry => !!entry && isPrivateSessionFile(getHarness(entry.harnessId), entry.file))) return true;
-    const identity = routeIdentity(sessionId);
-    if (!identity) return false;
-    const saved = recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId);
-    return !!saved && recordIsPrivate(saved);
+  function fileIsPrivate(harnessId: unknown, file: unknown): boolean {
+    if (typeof file !== 'string' || !file) return false;
+    const descriptor = getHarness(harnessId);
+    if (!descriptor) return false;
+    if (isPrivateSessionFile(descriptor, file)) return true;
+    try {
+      const real = fs.realpathSync(file);
+      return real !== file && isPrivateSessionFile(descriptor, real);
+    } catch {
+      return false;
+    }
+  }
+  function isPrivateSession(routeId: string | null, saved: recoveryStore.RecoveryRecord | null = null): boolean {
+    if (saved && fileIsPrivate(saved.harnessId, saved.sessionFile)) return true;
+    const identity = routeId ? routeIdentity(routeId) : null;
+    const canonical = identity && getHarness(identity.harnessId)
+      ? routeSessionId(identity.harnessId, identity.nativeSessionId)
+      : null;
+    if (canonical) {
+      if ([...liveSourceObservations(canonical), findSessionSource(canonical)]
+        .some(entry => !!entry && fileIsPrivate(entry.harnessId, entry.file))) return true;
+      if (!saved) {
+        const stored = recoveryStore.readRecord(identity!.harnessId, identity!.nativeSessionId);
+        if (stored && fileIsPrivate(stored.harnessId, stored.sessionFile)) return true;
+      }
+    }
+    return false;
+  }
+  const sessionIsPrivate = (sessionId: string) => isPrivateSession(sessionId);
+  const recoveryRecordIsPrivate = (record: recoveryStore.RecoveryRecord) => {
+    let route: string | null = null;
+    try {
+      const candidate = recoveryRouteId(record);
+      if (routeIdentity(candidate)) route = candidate;
+    } catch {}
+    return isPrivateSession(route, record);
   };
   const privateSessions = createPrivateSessionHandlers({ access: privateAccess, sessionIsPrivate });
   app.get('/api/private-sessions', privateSessions.status);
@@ -628,6 +657,19 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/new', createHandlers.create);
   app.get('/api/session-spawns/:id', createHandlers.spawnStatus);
 
+  function optionalEnvNumber(name: string, min: number): number | undefined {
+    const raw = process.env[name];
+    if (raw === undefined || raw === '') return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= min ? value : undefined;
+  }
+
+  const tmuxLossLimiter = createTmuxLossLimiter({
+    baseBackoffMs: optionalEnvNumber('PI_DISH_TMUX_RECOVERY_BACKOFF_MS', 0),
+    windowMs: optionalEnvNumber('PI_DISH_TMUX_RECOVERY_WINDOW_MS', 1),
+    maxAttempts: optionalEnvNumber('PI_DISH_TMUX_RECOVERY_MAX_ATTEMPTS', 1),
+  });
+
   app.post('/api/sessions/:id/resume', async (req: ApplicationRequest, res: ApplicationResponse) => {
     const body = requestBody(req);
     try {
@@ -637,6 +679,14 @@ export function startServer(rootDirectory: string): Server {
       }));
       hibernation.forget(req.params.id);
       messageHold.wake(req.params.id);
+      const resumedIdentity = routeIdentity(req.params.id);
+      if (resumedIdentity?.harnessId === 'bot') {
+        try { tmuxLossLimiter.clearSuppressed({ botIds: [resumedIdentity.nativeSessionId] }); } catch {}
+      } else if (resumedIdentity) {
+        try {
+          tmuxLossLimiter.clearSuppressed({ agentIds: [routeSessionId(resumedIdentity.harnessId, resumedIdentity.nativeSessionId)] });
+        } catch {}
+      }
     } catch (error) {
       res.status(errorStatus(error, 500)).json({ error: errorMessage(error) });
     }
@@ -649,7 +699,8 @@ export function startServer(rootDirectory: string): Server {
     getMode: () => readDishSettings().recoveryMode,
     hibernated: id => hibernation.isHibernated(id),
     isPendingClose: id => routineRunner?.isPendingClose(id) ?? false,
-    isPrivate: recordIsPrivate,
+    isPrivate: recoveryRecordIsPrivate,
+    suppressedAtStartup: id => tmuxLossLimiter.suppressedAgentReason(id),
   });
 
   app.get('/api/recovery', (req: ApplicationRequest, res: ApplicationResponse) => {
@@ -671,6 +722,7 @@ export function startServer(rootDirectory: string): Server {
   function forgetRunningHibernation(outcome: RecoveryOutcome): void {
     if (outcome.status === 'restored' || outcome.status === 'continued' || outcome.status === 'live') {
       hibernation.forget(outcome.id);
+      try { tmuxLossLimiter.clearSuppressed({ agentIds: [outcome.id] }); } catch {}
     }
   }
   // { id } retries one session; { all: true } retries failed rows and pending
@@ -682,10 +734,15 @@ export function startServer(rootDirectory: string): Server {
     }
     try {
       if (typeof id === 'string') {
-        if (privateSessions.refused(req, id)) {
+        const identity = routeIdentity(id);
+        if (!identity || !getHarness(identity.harnessId)) {
+          return res.status(400).json({ error: 'Invalid session ID' });
+        }
+        const canonicalId = routeSessionId(identity.harnessId, identity.nativeSessionId);
+        if (privateSessions.refused(req, canonicalId)) {
           return res.status(404).json({ error: 'Recovery record not found' });
         }
-        const outcome = await recoveryRunner.retry(id);
+        const outcome = await recoveryRunner.retry(canonicalId, { includePrivate: privateUnlocked(req) });
         forgetRunningHibernation(outcome);
         return res.json(outcome);
       }
@@ -942,13 +999,6 @@ export function startServer(rootDirectory: string): Server {
   const relayUpgrade = relayHandlers.upgrade;
   const terminalUpgrade = terminalHandlers?.upgrade;
 
-  function optionalEnvNumber(name: string, min: number): number | undefined {
-    const raw = process.env[name];
-    if (raw === undefined || raw === '') return undefined;
-    const value = Number(raw);
-    return Number.isFinite(value) && value >= min ? value : undefined;
-  }
-
   function processBelongsToPane(child: ProcessIdentity, paneProcess: ProcessIdentity): boolean {
     if (sameProcessIdentity(child, paneProcess)) return true;
     const ancestry = inspectProcessAncestry(child);
@@ -1014,128 +1064,255 @@ export function startServer(rootDirectory: string): Server {
     return { agentIds, botIds, processes: [...processes.values()] };
   }
 
-  const tmuxLossLimiter = createTmuxLossLimiter({
-    baseBackoffMs: optionalEnvNumber('PI_DISH_TMUX_RECOVERY_BACKOFF_MS', 0),
-    windowMs: optionalEnvNumber('PI_DISH_TMUX_RECOVERY_WINDOW_MS', 1),
-    maxAttempts: optionalEnvNumber('PI_DISH_TMUX_RECOVERY_MAX_ATTEMPTS', 1),
-  });
-
   function formatRecoveryLogEntry(outcome: RecoveryOutcome): string {
     const label = sessionIsPrivate(outcome.id) ? `private:${outcome.harnessId}` : outcome.id;
     const detail = typeof outcome.reason === 'string' && outcome.reason ? `: ${outcome.reason}` : '';
     return `${label} (${outcome.status}${detail})`;
   }
 
-  async function handleTmuxServerLoss(event: TmuxServerLossEvent): Promise<void> {
-    const socket = tmux.headlessTmuxSocket();
-    const lossKind = event.replacementPid ? `replaced by pid ${event.replacementPid}` : 'died';
-    console.error(
-      `[tmux-recovery] pi-dish tmux server (pid ${event.server.pid}) ${lossKind}; `
-      + `evaluating ${event.agentIds.length} session(s) and ${event.botIds.length} bot(s)`,
-    );
-    const mode = recoveryMode(readDishSettings().recoveryMode);
-    const hasEligibleAgent = mode !== 'off' && event.agentIds.some(id => {
-      const identity = routeIdentity(id);
-      if (!identity) return false;
-      const saved = recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId);
-      if (!saved) return false;
-      const control = recoveryStore.getControl(saved.harnessId, saved.nativeSessionId);
-      if (control.closed || control.excluded) return false;
-      if (hibernation.isHibernated(id) || routineRunner?.isPendingClose(id)) return false;
-      const prev = control.attempt;
-      if (prev?.delivery === 'uncertain' || prev?.status === 'restoring') return false;
-      return true;
-    });
+  async function waitForHeadlessProcessesToExit(
+    socket: string,
+    agentIds: readonly string[],
+    botIds: readonly string[],
+  ): Promise<void> {
+    const resolvedSocket = path.resolve(socket);
+    const tracked = new Map<string, ProcessIdentity>();
+    const add = (identity: ProcessIdentity | null) => {
+      if (identity) tracked.set(`${identity.pid}:${identity.startTime}`, identity);
+    };
     const botsDir = path.join(dishDir(), 'bots');
-    const botSkipped: string[] = [];
-    const eligibleBotIds: string[] = [];
-    for (const botId of event.botIds) {
-      if (!botsRun) { botSkipped.push(`${botId} (bots disabled)`); continue; }
-      const current = bots()?.get(botId);
-      if (!current) { botSkipped.push(`${botId} (missing from registry)`); continue; }
-      if (current.status !== 'active') { botSkipped.push(`${current.name} (${current.status})`); continue; }
-      if (recoveryStore.getControl('bot', botId).closed) { botSkipped.push(`${current.name} (explicitly closed)`); continue; }
-      const running = liveBotRelay(path.join(botsDir, botId));
-      if (running !== null) { botSkipped.push(`${current.name} (already running pid ${running.pid})`); continue; }
-      eligibleBotIds.push(botId);
-    }
-    if (!hasEligibleAgent && !eligibleBotIds.length) {
-      const outcomes = event.agentIds.length ? await recoveryRunner.recoverLost(event.agentIds) : [];
-      outcomes.forEach(forgetRunningHibernation);
-      console.error(
-        `[tmux-recovery] nothing eligible to relaunch (mode=${mode}); `
-        + `sessions=[${outcomes.map(formatRecoveryLogEntry).join('; ') || 'none'}]; `
-        + `bots skipped=[${botSkipped.join('; ') || 'none'}]`,
-      );
-      return;
-    }
-    const verdict = tmuxLossLimiter.check();
-    if (!verdict.allowed) {
-      const limited = event.agentIds.length ? recoveryRunner.markLostRateLimited(event.agentIds, verdict.reason) : [];
-      console.error(
-        `[tmux-recovery] automatic recovery skipped (rate-limited): ${verdict.reason}; `
-        + `skipped ${limited.length} session(s) and ${eligibleBotIds.length} bot(s)`,
-      );
-      return;
-    }
-    try {
-      // Durable write precedes server recreation and relaunches so a crash loop
-      // during recovery cannot bypass backoff across restarts.
-      tmuxLossLimiter.record();
-    } catch (error) {
-      const reason = `Tmux recovery rate-limit state could not be persisted (${errorMessage(error)}); automatic recovery paused.`;
-      if (event.agentIds.length) recoveryRunner.markLostRateLimited(event.agentIds, reason);
-      console.error(`[tmux-recovery] ${reason}`);
-      return;
-    }
-    try {
-      const newPid = await tmux.ensureHeadlessServer(socket);
-      console.error(`[tmux-recovery] pi-dish tmux server ready (pid ${newPid ?? 'unknown'})`);
-    } catch (error) {
-      console.error(`[tmux-recovery] failed to recreate pi-dish tmux server: ${errorMessage(error)}`);
-      return;
-    }
-    const agentOutcomes = event.agentIds.length ? await recoveryRunner.recoverLost(event.agentIds) : [];
-    agentOutcomes.forEach(forgetRunningHibernation);
-
-    const botRecovered: string[] = [];
-    for (const botId of eligibleBotIds) {
-      if (recoveryStopped) break;
-      const current = bots()?.get(botId);
-      if (!current) { botSkipped.push(`${botId} (missing from registry)`); continue; }
-      if (current.status !== 'active') { botSkipped.push(`${current.name} (${current.status})`); continue; }
-      if (recoveryStore.getControl('bot', botId).closed) { botSkipped.push(`${current.name} (explicitly closed)`); continue; }
-      try {
-        const started = await startBot(current, {
-          resume: id => sessionOperations.resumeSessionById(id),
-          log: line => console.error(line),
-        });
-        if (started) {
-          const route = botRoute(current.id);
-          const stale = staleBots.get(route);
-          if (stale) {
-            staleBots.delete(route);
-            stale.resolve();
-          }
-          botRecovered.push(current.name);
-        } else {
-          botSkipped.push(`${current.name} (already running)`);
+    invalidateRegistryCache();
+    for (const id of agentIds) {
+      const spawn = tmux.getSpawn(id);
+      if (spawn && path.resolve(spawn.socket) === resolvedSocket) {
+        if (isRecord(spawn.paneProcess) && spawn.paneProcess.pid && spawn.paneProcess.startTime) {
+          add({ pid: Number(spawn.paneProcess.pid), startTime: String(spawn.paneProcess.startTime) });
         }
-      } catch (error) {
-        botSkipped.push(`${current.name} (failed: ${errorMessage(error)})`);
+        const reg = getRegisteredSession(id);
+        if (reg?.pid) add(processIdentity(Number(reg.pid)));
       }
     }
-    const agentsRecovered = agentOutcomes.filter(outcome =>
-      outcome.status === 'restored' || outcome.status === 'continued' || outcome.status === 'live');
-    const agentsSkipped = agentOutcomes.filter(outcome =>
-      outcome.status !== 'restored' && outcome.status !== 'continued' && outcome.status !== 'live');
-    console.error(
-      `[tmux-recovery] summary: `
-      + `sessions recovered=${agentsRecovered.length} [${agentsRecovered.map(formatRecoveryLogEntry).join('; ') || 'none'}], `
-      + `skipped=${agentsSkipped.length} [${agentsSkipped.map(formatRecoveryLogEntry).join('; ') || 'none'}]; `
-      + `bots restarted=${botRecovered.length} [${botRecovered.join(', ') || 'none'}], `
-      + `skipped=${botSkipped.length} [${botSkipped.join('; ') || 'none'}]`,
-    );
+    for (const botId of botIds) {
+      const route = botRoute(botId);
+      const spawn = tmux.getSpawn(route);
+      if (spawn && path.resolve(spawn.socket) === resolvedSocket) {
+        if (isRecord(spawn.paneProcess) && spawn.paneProcess.pid && spawn.paneProcess.startTime) {
+          add({ pid: Number(spawn.paneProcess.pid), startTime: String(spawn.paneProcess.startTime) });
+        }
+        const holder = liveBotRelay(path.join(botsDir, botId));
+        if (holder?.pid) add(processIdentity(holder.pid));
+      }
+    }
+    const processes = [...tracked.values()];
+    const exitWaitMs = optionalEnvNumber('PI_DISH_TMUX_EXIT_WAIT_MS', 0) ?? 10_000;
+    const settleMs = optionalEnvNumber('PI_DISH_TMUX_SETTLE_MS', 0) ?? 500;
+    if (processes.length && exitWaitMs > 0) {
+      const deadline = Date.now() + exitWaitMs;
+      while (!recoveryStopped && Date.now() < deadline && processes.some(processIdentityAlive)) {
+        await delay(Math.min(100, Math.max(1, deadline - Date.now())));
+      }
+    }
+    if (!recoveryStopped && settleMs > 0) await delay(settleMs);
+  }
+
+  async function handleTmuxServerLoss(initialEvent: TmuxServerLossEvent): Promise<void> {
+    const socket = tmux.headlessTmuxSocket();
+    const serverStillExpected = async (expected: ProcessIdentity): Promise<boolean> => {
+      if (!processIdentityAlive(expected)) return false;
+      const current = await tmux.serverIdentity(socket);
+      return sameProcessIdentity(current, expected);
+    };
+
+    let currentEvent: TmuxServerLossEvent | null = initialEvent;
+    while (currentEvent && !recoveryStopped) {
+      const event: TmuxServerLossEvent = currentEvent;
+      currentEvent = null;
+      if (event.agentIds.length) recoveryRunner.markLostRestoreOnly(event.agentIds);
+
+      const lossKind = event.replacementPid ? `replaced by pid ${event.replacementPid}` : 'died';
+      console.error(
+        `[tmux-recovery] pi-dish tmux server (pid ${event.server.pid}) ${lossKind}; `
+        + `evaluating ${event.agentIds.length} session(s) and ${event.botIds.length} bot(s)`,
+      );
+      const mode = recoveryMode(readDishSettings().recoveryMode);
+      const hasEligibleAgent = mode !== 'off' && event.agentIds.some(id => {
+        const identity = routeIdentity(id);
+        if (!identity) return false;
+        const saved = recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId);
+        if (!saved) return false;
+        const control = recoveryStore.getControl(saved.harnessId, saved.nativeSessionId);
+        if (control.closed || control.excluded) return false;
+        if (hibernation.isHibernated(id) || routineRunner?.isPendingClose(id)) return false;
+        const prev = control.attempt;
+        if (prev?.delivery === 'uncertain' || prev?.status === 'restoring') return false;
+        return true;
+      });
+      const botsDir = path.join(dishDir(), 'bots');
+      const botSkipped: string[] = [];
+      const eligibleBotIds: string[] = [];
+      for (const botId of event.botIds) {
+        if (!botsRun) { botSkipped.push(`${botId} (bots disabled)`); continue; }
+        const current = bots()?.get(botId);
+        if (!current) { botSkipped.push(`${botId} (missing from registry)`); continue; }
+        if (current.status !== 'active') { botSkipped.push(`${current.name} (${current.status})`); continue; }
+        if (recoveryStore.getControl('bot', botId).closed) { botSkipped.push(`${current.name} (explicitly closed)`); continue; }
+        const running = liveBotRelay(path.join(botsDir, botId));
+        if (running !== null) { botSkipped.push(`${current.name} (already running pid ${running.pid})`); continue; }
+        eligibleBotIds.push(botId);
+      }
+      if (!hasEligibleAgent && !eligibleBotIds.length) {
+        const outcomes = event.agentIds.length ? await recoveryRunner.recoverLost(event.agentIds) : [];
+        outcomes.forEach(forgetRunningHibernation);
+        console.error(
+          `[tmux-recovery] nothing eligible to relaunch (mode=${mode}); `
+          + `sessions=[${outcomes.map(formatRecoveryLogEntry).join('; ') || 'none'}]; `
+          + `bots skipped=[${botSkipped.join('; ') || 'none'}]`,
+        );
+        return;
+      }
+      const verdict = tmuxLossLimiter.check();
+      if (!verdict.allowed) {
+        const limited = event.agentIds.length ? recoveryRunner.markLostRateLimited(event.agentIds, verdict.reason) : [];
+        try { tmuxLossLimiter.suppress({ agentIds: event.agentIds, botIds: eligibleBotIds }); } catch {}
+        console.error(
+          `[tmux-recovery] automatic recovery skipped (rate-limited): ${verdict.reason}; `
+          + `skipped ${limited.length} session(s) and ${eligibleBotIds.length} bot(s)`,
+        );
+        return;
+      }
+      try {
+        // Durable write precedes server recreation and relaunches so a crash loop
+        // during recovery cannot bypass backoff across restarts.
+        tmuxLossLimiter.record();
+      } catch (error) {
+        const reason = `Tmux recovery rate-limit state could not be persisted (${errorMessage(error)}); automatic recovery paused.`;
+        if (event.agentIds.length) recoveryRunner.markLostRateLimited(event.agentIds, reason);
+        console.error(`[tmux-recovery] ${reason}`);
+        return;
+      }
+      let replacementServer: ProcessIdentity | null;
+      try {
+        replacementServer = await tmux.ensureHeadlessServer(socket);
+        if (!replacementServer) throw new Error('recreated tmux server identity could not be verified');
+        console.error(`[tmux-recovery] pi-dish tmux server ready (pid ${replacementServer.pid})`);
+      } catch (error) {
+        const reason = `Failed to recreate pi-dish tmux server: ${errorMessage(error)}`;
+        if (event.agentIds.length) recoveryRunner.markLostRateLimited(event.agentIds, reason);
+        try { tmuxLossLimiter.suppress({ agentIds: event.agentIds, botIds: eligibleBotIds }); } catch {}
+        console.error(`[tmux-recovery] ${reason}`);
+        return;
+      }
+
+      const checkReplacement = () => serverStillExpected(replacementServer!);
+      const agentOutcomes = event.agentIds.length
+        ? await recoveryRunner.recoverLost(event.agentIds, {
+          expectedTmuxServer: replacementServer,
+          checkServer: checkReplacement,
+        })
+        : [];
+      let batchServerLost = !(await checkReplacement());
+
+      const botRecovered: string[] = [];
+      const botRecoveredIds: string[] = [];
+      if (!batchServerLost) {
+        for (const botId of eligibleBotIds) {
+          if (recoveryStopped) break;
+          if (!(await checkReplacement())) {
+            batchServerLost = true;
+            break;
+          }
+          const current = bots()?.get(botId);
+          if (!current) { botSkipped.push(`${botId} (missing from registry)`); continue; }
+          if (current.status !== 'active') { botSkipped.push(`${current.name} (${current.status})`); continue; }
+          if (recoveryStore.getControl('bot', botId).closed) { botSkipped.push(`${current.name} (explicitly closed)`); continue; }
+          try {
+            const started = await startBot(current, {
+              resume: id => sessionOperations.resumeSessionById(id, { expectedTmuxServer: replacementServer }),
+              log: line => console.error(line),
+            });
+            if (started) {
+              const route = botRoute(current.id);
+              const stale = staleBots.get(route);
+              if (stale) {
+                staleBots.delete(route);
+                stale.resolve();
+              }
+              botRecovered.push(current.name);
+              botRecoveredIds.push(current.id);
+            } else {
+              botSkipped.push(`${current.name} (already running)`);
+            }
+          } catch (error) {
+            if (error instanceof tmux.TmuxServerLostError || !(await checkReplacement())) {
+              batchServerLost = true;
+              break;
+            }
+            botSkipped.push(`${current.name} (failed: ${errorMessage(error)})`);
+          }
+        }
+      }
+      if (!batchServerLost && !(await checkReplacement())) batchServerLost = true;
+
+      if (batchServerLost) {
+        // The replacement server died or was replaced mid-batch: stop launching,
+        // wait out dying panes, reconcile every row against live state, and route
+        // any remaining dead sessions/bots through the limiter.
+        await waitForHeadlessProcessesToExit(socket, event.agentIds, eligibleBotIds);
+        if (recoveryStopped) return;
+        const reconciled = event.agentIds.length
+          ? await recoveryRunner.reconcileLost(event.agentIds, 'Replacement tmux server died during recovery batch.', { status: 'failed' })
+          : { live: [], deadIds: [], outcomes: [] };
+        reconciled.live.forEach(forgetRunningHibernation);
+        const deadBotIds = eligibleBotIds.filter(botId => liveBotRelay(path.join(botsDir, botId)) === null);
+        const liveBotIds = eligibleBotIds.filter(botId => !deadBotIds.includes(botId));
+        if (liveBotIds.length) {
+          try { tmuxLossLimiter.clearSuppressed({ botIds: liveBotIds }); } catch {}
+        }
+        if (!reconciled.deadIds.length && !deadBotIds.length) return;
+        const nextVerdict = tmuxLossLimiter.check();
+        if (!nextVerdict.allowed) {
+          if (reconciled.deadIds.length) {
+            await recoveryRunner.reconcileLost(reconciled.deadIds, nextVerdict.reason, { status: 'needs-review' });
+          }
+          try { tmuxLossLimiter.suppress({ agentIds: reconciled.deadIds, botIds: deadBotIds }); } catch {}
+          console.error(
+            `[tmux-recovery] replacement tmux server (pid ${replacementServer.pid}) died mid-batch; `
+            + `reconciled ${reconciled.deadIds.length} session(s) and ${deadBotIds.length} bot(s) `
+            + `(rate-limited: ${nextVerdict.reason})`,
+          );
+          return;
+        }
+        const replacementNow = await tmux.serverPid(socket);
+        currentEvent = {
+          server: replacementServer,
+          replacementPid: replacementNow,
+          agentIds: reconciled.deadIds,
+          botIds: deadBotIds,
+        };
+        continue;
+      }
+
+      agentOutcomes.forEach(forgetRunningHibernation);
+      const agentsRecovered = agentOutcomes.filter(outcome =>
+        outcome.status === 'restored' || outcome.status === 'continued' || outcome.status === 'live');
+      const agentsSkipped = agentOutcomes.filter(outcome =>
+        outcome.status !== 'restored' && outcome.status !== 'continued' && outcome.status !== 'live');
+      if (agentsRecovered.length || botRecoveredIds.length) {
+        try {
+          tmuxLossLimiter.clearSuppressed({
+            agentIds: agentsRecovered.map(outcome => outcome.id),
+            botIds: botRecoveredIds,
+          });
+        } catch {}
+      }
+      console.error(
+        `[tmux-recovery] summary: `
+        + `sessions recovered=${agentsRecovered.length} [${agentsRecovered.map(formatRecoveryLogEntry).join('; ') || 'none'}], `
+        + `skipped=${agentsSkipped.length} [${agentsSkipped.map(formatRecoveryLogEntry).join('; ') || 'none'}]; `
+        + `bots restarted=${botRecovered.length} [${botRecovered.join(', ') || 'none'}], `
+        + `skipped=${botSkipped.length} [${botSkipped.join('; ') || 'none'}]`,
+      );
+    }
   }
 
   let recoveryStopped = false;
@@ -1197,6 +1374,7 @@ export function startServer(rootDirectory: string): Server {
           inspectServer: tmux.inspectServer,
           configureServer: tmux.configureHeadlessServer,
           snapshotSessions: snapshotHeadlessSessions,
+          onLossDetected: event => { recoveryRunner.markLostRestoreOnly(event.agentIds); },
           onLost: handleTmuxServerLoss,
           intervalMs: optionalEnvNumber('PI_DISH_TMUX_WATCH_MS', 50),
           settleMs: optionalEnvNumber('PI_DISH_TMUX_SETTLE_MS', 0),
@@ -1212,6 +1390,8 @@ export function startServer(rootDirectory: string): Server {
         const build = codeBuild();
         void startBots({
           registry, build, resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line),
+          shouldSkipStart: bot => tmuxLossLimiter.suppressedBotReason(bot.id),
+          onRunning: bot => { try { tmuxLossLimiter.clearSuppressed({ botIds: [bot.id] }); } catch {} },
           // A relay from another build, or one that recorded none, restarts through the bounce queue once it is idle.
           restartStale: (bot, holder) => {
             const route = botRoute(bot.id);

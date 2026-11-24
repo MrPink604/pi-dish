@@ -36,6 +36,8 @@ export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
     name?: string | null;
     target?: HarnessLaunchTarget | null;
     sessionFile: string;
+    /** Bind headless tmux launch to one exact already-running server (-N, no server creation, no RPC fallback). */
+    expectedTmuxServer?: ProcessIdentity | null;
 }
 export interface RpcResumeOptions extends PilotSelectionOptions {
     sessionFile: string;
@@ -56,6 +58,7 @@ export interface SpawnHarnessOptions {
     name?: string | null;
     hidden?: boolean;
     restartPane?: RestartPaneOptions | null;
+    expectedTmuxServer?: ProcessIdentity | null;
 }
 export interface CleanupEvidence extends tmux.PaneTarget {
     knownProcesses: ProcessIdentity[];

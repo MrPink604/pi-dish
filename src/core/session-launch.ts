@@ -12,6 +12,7 @@ import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';
 import { ensurePrivateRoot, privateRootFor } from './private-sessions';
 import { LifecycleInterruption, proveBridgeRegistryClaim, registryIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
 import type { BeforeLifecycleAction } from './session-ownership';
+import { processIdentityAlive } from './process-identity';
 import { formatModelRef, parseModelId } from './helper-models';
 import type { ModelRef } from './helper-types';
 import { dishDir } from './dish-store';
@@ -56,6 +57,8 @@ export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
   name?: string | null;
   target?: HarnessLaunchTarget | null;
   sessionFile: string;
+  /** Bind headless tmux launch to one exact already-running server (-N, no server creation, no RPC fallback). */
+  expectedTmuxServer?: ProcessIdentity | null;
 }
 
 export interface RpcResumeOptions extends PilotSelectionOptions {
@@ -79,6 +82,7 @@ export interface SpawnHarnessOptions {
   name?: string | null;
   hidden?: boolean;
   restartPane?: RestartPaneOptions | null;
+  expectedTmuxServer?: ProcessIdentity | null;
 }
 
 export interface CleanupEvidence extends tmux.PaneTarget {
@@ -138,8 +142,9 @@ function forbidden(error: unknown): LaunchOutcome {
   return { kind: 'fallback-forbidden', error, status: errorStatus(error, 500) };
 }
 
-function unclassifiedTmuxFailure(descriptor: HarnessDescriptor, error: unknown): LaunchOutcome {
-  if (error instanceof BridgeSocketConfigError || error instanceof LifecycleInterruption) return forbidden(error);
+function unclassifiedTmuxFailure(descriptor: HarnessDescriptor, error: unknown, expectedTmuxServer?: ProcessIdentity | null): LaunchOutcome {
+  if (error instanceof BridgeSocketConfigError || error instanceof LifecycleInterruption
+      || error instanceof tmux.TmuxServerLostError || expectedTmuxServer) return forbidden(error);
   // Only an unclassified launch exception permits the headless RPC fallback.
   return { kind: descriptor.rpcFallback ? 'fallback-permitted' : 'fallback-forbidden', error, status: errorStatus(error, 500) };
 }
@@ -303,18 +308,19 @@ interface PrimeLaunchContext {
 type PrimeRootObservation = { kind: 'single'; summary: PrimeAgentSummary } | { kind: 'ambiguous'; count: number } | null;
 
 /** Resume matches the transcript; a new session is the single new root in the launch cwd. */
-async function waitForPrimeRoot(daemon: PrimeDaemon, { cwd, resumeFile, snapshot, timeout }: {
-  cwd: string; resumeFile: string | null; snapshot: ReadonlySet<string>; timeout: number;
+async function waitForPrimeRoot(daemon: PrimeDaemon, { cwd, resumeFile, snapshot, timeout, shouldAbort }: {
+  cwd: string; resumeFile: string | null; snapshot: ReadonlySet<string>; timeout: number; shouldAbort?: () => boolean;
 }): Promise<PrimeRootObservation> {
   const deadline = Date.now() + timeout;
   for (;;) {
+    if (shouldAbort?.()) return null;
     const roots = await daemon.refresh();
     const matches = roots.filter(session => resumeFile
       ? samePath(session.summary.sessionFile, resumeFile)
       : !snapshot.has(session.activeSessionId) && samePath(session.summary.cwd, cwd));
     if (matches.length === 1) return { kind: 'single', summary: matches[0].summary };
     if (matches.length > 1) return { kind: 'ambiguous', count: matches.length };
-    if (Date.now() >= deadline) return null;
+    if (shouldAbort?.() || Date.now() >= deadline) return null;
     await delay(Math.min(200, Math.max(1, deadline - Date.now())));
   }
 }
@@ -385,7 +391,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return withPrimeLaunch(() => runTmuxLaunch(options, { daemon, snapshot: new Set() }));
   }
 
-  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, restartPane = null }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
+  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, restartPane = null, expectedTmuxServer = null }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
     if (!tmux.isTmuxAvailable()) throw new LaunchError('tmux is not available on this host', 400);
     const socket = target.socket;
     if (!tmux.isSocketAllowed(socket)) throw new LaunchError('Invalid tmux socket', 400);
@@ -426,7 +432,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       }
       if (descriptor.id === 'agy') {
         for (const key of ['PI_DISH_AGY_AUTONOMOUS_IDLE_MS', 'PI_DISH_AGY_UNFINISHED_IDLE_MS', 'PI_DISH_AGY_BRAIN_DIR']) {
-          if (!Object.hasOwn(env, key)) env[key] = process.env[key] || '';
+          if (!Object.hasOwn(env, key) && process.env[key]) env[key] = process.env[key];
         }
       }
     }
@@ -452,10 +458,11 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
           cwd: launchCwd,
           command,
           env,
+          expectedServer: expectedTmuxServer,
         }));
       }
     } catch (error) {
-      if (error instanceof LifecycleInterruption) throw error;
+      if (error instanceof LifecycleInterruption || error instanceof tmux.TmuxServerLostError) throw error;
       const action = restartPane ? 'restart tmux pane' : 'open tmux window';
       throw new LaunchError(`Failed to ${action}: ${errorMessage(error)}`, 500);
     }
@@ -468,7 +475,15 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       : `${descriptor.label} did not register within ${timeoutLabel}`;
     const resumeFile = prime ? launchResumeFile(args) : null;
     let registrationError: LaunchError | null = null;
+    let serverLostError: tmux.TmuxServerLostError | null = null;
+    const verifyExpectedServer = async (): Promise<void> => {
+      if (!expectedTmuxServer) return;
+      if (!processIdentityAlive(expectedTmuxServer) || !sameProcessIdentity(await tmux.serverIdentity(socket), expectedTmuxServer)) {
+        throw new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} is no longer running`, false);
+      }
+    };
     const acceptPrimeRoot = async (summary: PrimeAgentSummary): Promise<LaunchOutcome> => {
+      await verifyExpectedServer();
       const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
       if (restartPane && (!restartedPaneProcess || !sameProcessIdentity(paneProcess, restartedPaneProcess))) {
         throw new Error('Prime client pane changed before replacement registration');
@@ -489,6 +504,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       return { kind: 'ready', id: routeId };
     };
     const acceptRegistration = async ({ entry, identity }: SpawnRegistration): Promise<LaunchOutcome> => {
+      await verifyExpectedServer();
       let accepted = entry;
       if (descriptor.id !== 'pi') {
         invalidateRegistryCache();
@@ -501,6 +517,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       }
       const acceptedIdentity = registryIdentity(accepted);
       if (!acceptedIdentity) throw new Error(`${descriptor.label} registry identity is unavailable`);
+      await verifyExpectedServer();
       const routeId = routeSessionId(acceptedIdentity.harnessId, acceptedIdentity.nativeSessionId);
       const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
       tmux.recordSpawn(routeId, {
@@ -515,16 +532,24 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     if (prime) {
       const observation = await waitForPrimeRoot(prime.daemon, {
         cwd: launchCwd, resumeFile, snapshot: prime.snapshot, timeout: timeoutMs,
+        shouldAbort: expectedTmuxServer ? () => !processIdentityAlive(expectedTmuxServer) : undefined,
       });
-      if (observation?.kind === 'ambiguous') {
+      if (expectedTmuxServer && !processIdentityAlive(expectedTmuxServer)) {
+        serverLostError = new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} died while waiting for registration`, false);
+      } else if (observation?.kind === 'ambiguous') {
         registrationError = new LaunchError(`${descriptor.label} produced ${observation.count} daemon roots for one launch; refusing to select one.`, 409);
       } else if (observation?.kind === 'single') {
         try { return await acceptPrimeRoot(observation.summary); } catch (error) {
-          registrationError = new LaunchError(`${descriptor.label} daemon identity proof failed: ${errorMessage(error)}`, 500);
+          if (error instanceof tmux.TmuxServerLostError) serverLostError = error;
+          else registrationError = new LaunchError(`${descriptor.label} daemon identity proof failed: ${errorMessage(error)}`, 500);
         }
       }
     } else {
       while (Date.now() < deadline) {
+        if (expectedTmuxServer && !processIdentityAlive(expectedTmuxServer)) {
+          serverLostError = new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} died while waiting for registration`, false);
+          break;
+        }
         const scanStartedAt = Date.now();
         const observation = findSessionBySpawnToken(spawnToken, descriptor.id);
         if (observation?.kind === 'conflict') {
@@ -533,7 +558,8 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
         }
         if (observation?.kind === 'single') {
           try { return await acceptRegistration(observation.registration); } catch (error) {
-            registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
+            if (error instanceof tmux.TmuxServerLostError) serverLostError = error;
+            else registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
             break;
           }
         }
@@ -542,15 +568,20 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
         await delay(Math.min(interval, Math.max(1, deadline - Date.now())));
       }
       // A registration arriving in the final sleep must win over timeout cleanup.
-      const deadlineEntry = registrationError ? null : findSessionBySpawnToken(spawnToken, descriptor.id);
+      const deadlineEntry = registrationError || serverLostError ? null : findSessionBySpawnToken(spawnToken, descriptor.id);
       if (deadlineEntry?.kind === 'conflict') {
         registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
       }
-      if (!registrationError && deadlineEntry?.kind === 'single') {
+      if (!registrationError && !serverLostError && deadlineEntry?.kind === 'single') {
         try { return await acceptRegistration(deadlineEntry.registration); } catch (error) {
-          registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
+          if (error instanceof tmux.TmuxServerLostError) serverLostError = error;
+          else registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
         }
       }
+    }
+    if (serverLostError) return forbidden(serverLostError);
+    if (expectedTmuxServer && !sameProcessIdentity(await tmux.serverIdentity(socket), expectedTmuxServer)) {
+      return forbidden(new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} was lost during launch`, false));
     }
     if (restartPane && descriptor.closeMode === 'owned-agent') {
       // A resident replacement can outlive its client; pane exit doesn't prove a second writer is safe.
@@ -587,12 +618,12 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
           placement: { socket, paneId, knownProcesses: state.knownProcesses } };
       }
     }
-    return unclassifiedTmuxFailure(descriptor, error);
+    return unclassifiedTmuxFailure(descriptor, error, expectedTmuxServer);
   }
 
   async function spawnHarnessInTmux(options: SpawnHarnessOptions): Promise<LaunchOutcome> {
     try { return await performTmuxLaunch(options); } catch (error) {
-      return unclassifiedTmuxFailure(options.descriptor, error);
+      return unclassifiedTmuxFailure(options.descriptor, error, options.expectedTmuxServer);
     }
   }
 
@@ -600,11 +631,14 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     // Name selection and session creation share one chain to avoid races.
     const run = headlessSpawnChain.then(async (): Promise<LaunchOutcome> => {
       try {
+        if (options.expectedTmuxServer && !processIdentityAlive(options.expectedTmuxServer)) {
+          throw new tmux.TmuxServerLostError(`expected tmux server pid ${options.expectedTmuxServer.pid} is no longer running`, true);
+        }
         fs.mkdirSync(tmux.tmuxTmpdir(), { recursive: true, mode: 0o700 });
         const socket = tmux.headlessTmuxSocket();
         const sessionName = await generateHeadlessSessionName(socket, options.descriptor, options.name);
         return await spawnHarnessInTmux({ ...options, target: { socket, newTmuxSession: sessionName }, hidden: true });
-      } catch (error) { return unclassifiedTmuxFailure(options.descriptor, error); }
+      } catch (error) { return unclassifiedTmuxFailure(options.descriptor, error, options.expectedTmuxServer); }
     });
     headlessSpawnChain = run.then(() => {}, () => {});
     return run;
@@ -618,6 +652,12 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
   ): Promise<LaunchOutcome> {
     const { target } = options;
     if (target?.type === 'tmux') return spawnHarnessInTmux({ ...options, target });
+    if (options.expectedTmuxServer) {
+      if (!tmux.isTmuxAvailable()) {
+        return forbidden(new LaunchError('tmux is not available on this host', 400));
+      }
+      return spawnHarnessHeadlessTmux(options);
+    }
     if (headlessTmuxEnabled(options.descriptor)) {
       const outcome = await spawnHarnessHeadlessTmux(options);
       if (outcome.kind !== 'fallback-permitted') return outcome;
@@ -719,11 +759,11 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     } catch (error) { return forbidden(error); }
   }
 
-  async function launchResumedSession({ descriptor, sessionFile, cwd, name, target, model, thinking }: ResumeSessionLaunchOptions): Promise<LaunchOutcome> {
+  async function launchResumedSession({ descriptor, sessionFile, cwd, name, target, model, thinking, expectedTmuxServer }: ResumeSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
       const args = descriptor.argv.resume({ file: sessionFile, model: model ?? undefined });
       if (thinking && (descriptor.id === 'pi' || descriptor.id === 'omp')) args.push('--thinking', thinking);
-      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name }, 'resume',
+      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name, expectedTmuxServer }, 'resume',
         () => resumeRpcSession({ sessionFile, cwd, model, thinking }));
     } catch (error) { return forbidden(error); }
   }
