@@ -17,6 +17,8 @@ import { literalPrompt, visibleText } from './page-forms';
 import { record } from './helper-values';
 
 export const REVIEWS_CAPABILITY = 'reviewsV1';
+export const REVIEW_CLIENT_HEADER = 'x-pi-dish-client';
+export const REVIEW_CLIENT_VALUE = '1';
 export const MAX_CARDS = 6;
 export const MAX_QUESTIONS_PER_CARD = 3;
 export const MAX_MEDIA_PER_CARD = 4;
@@ -33,6 +35,8 @@ export const MAX_TEXT_ANSWER = 2000;
 export const MAX_NOTE = 1000;
 /** A deck's JSON as posted; far above anything the bounds above allow, so it only stops abuse. */
 export const MAX_SPEC_BYTES = 64 * 1024;
+/** A submission's JSON body; checked before validating answers. */
+export const MAX_SUBMIT_BYTES = 64 * 1024;
 /** Open decks per session: an agent that keeps posting without waiting is refused. */
 export const MAX_OPEN_REVIEWS = 10;
 /** Decks kept per session, answered and cancelled ones evicted oldest first. */
@@ -443,8 +447,12 @@ export function formatReviewMessage(review: ReviewRecord, ompRecipient: boolean)
   let summarized = 0;
   const emit = (question: ReviewQuestion, answer: QuestionAnswer) => {
     const suffix = question.default !== null && !answer.default ? ` (default ${formatValue(question.default)})` : '';
-    if (answer.other) raw.push(...block(`${question.id}: other${suffix}`, visibleText(answer.other)));
-    else raw.push(...block(`${question.id}${suffix}`, formatValue(answer.value)));
+    const hasValue = typeof answer.value === 'string' || (Array.isArray(answer.value) && answer.value.length > 0);
+    if (answer.other && !hasValue) raw.push(...block(`${question.id}: other${suffix}`, visibleText(answer.other)));
+    else {
+      raw.push(...block(`${question.id}${suffix}`, formatValue(answer.value)));
+      if (answer.other) raw.push(...block('  other', visibleText(answer.other)));
+    }
     if (answer.note) raw.push(...block('  note', visibleText(answer.note)));
   };
   for (const question of questions) {
@@ -538,6 +546,13 @@ export function updateReview(sessionId: string, reviewId: string, change: (revie
   change(review);
   writeReviews(sessionId, reviews);
   return review;
+}
+
+/** Removes one session's review store file, if it exists. */
+export function deleteReviews(sessionId: string): void {
+  try { fs.unlinkSync(storeFile(sessionId)); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
 }
 
 /** Every stored session's decks; an unreadable file is reported and skipped. */

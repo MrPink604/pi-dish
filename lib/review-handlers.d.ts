@@ -27,6 +27,8 @@ export interface ReviewHandlers {
     subscribe(sessionId: string, listener: (data: {
         review: reviews.ClientReview;
     }) => void): () => void;
+    /** Purges a permanently deleted session's review store and in-memory waiters/timers. */
+    removeSession(sessionId: string): void;
     /** Settles answers a restart cut off: pending ones after the grace period, delivering ones as uncertain. */
     start(): void;
     stop(): void;

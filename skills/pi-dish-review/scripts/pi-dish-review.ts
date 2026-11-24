@@ -55,6 +55,12 @@ Question types: choice, multi (default is a list), approve (default "approve"
 or "revise"), text. Shots are image files this session can reach, /page/<token>/…
 paths, or https URLs. See skills/pi-dish-review/SKILL.md.`;
 
+const CLIENT_HEADERS: Record<string, string> = { 'X-Pi-Dish-Client': '1' };
+const WAIT_RETRY_MS = process.env.PI_DISH_REVIEW_WAIT_RETRY_MS && Number.isFinite(Number(process.env.PI_DISH_REVIEW_WAIT_RETRY_MS))
+  ? Math.max(0, Number(process.env.PI_DISH_REVIEW_WAIT_RETRY_MS)) : 2000;
+const WAIT_MAX_RETRIES = process.env.PI_DISH_REVIEW_WAIT_RETRIES && Number.isFinite(Number(process.env.PI_DISH_REVIEW_WAIT_RETRIES))
+  ? Math.max(0, Math.floor(Number(process.env.PI_DISH_REVIEW_WAIT_RETRIES))) : 30;
+
 function reviewsPath(sessionId: unknown, rest = ''): string {
   return `/api/sessions/${encodeURIComponent(String(sessionId))}/reviews${rest}`;
 }
@@ -76,21 +82,41 @@ function readSpec(source: string): unknown {
 async function waitFor(base: string, sessionId: unknown, reviewId: string, timeoutSecs: number | null): Promise<Record<string, unknown> | null> {
   const deadline = timeoutSecs === null ? Infinity : Date.now() + timeoutSecs * 1000;
   let failures = 0;
+  let lastError: unknown = null;
   for (;;) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) return null;
+    if (remaining <= 0) {
+      if (failures > 0 && lastError !== null) throw lastError;
+      return null;
+    }
     const poll = Math.max(1, Math.min(50, Math.ceil(remaining / 1000)));
     try {
-      const { data } = await request(base, reviewsPath(sessionId, `/${encodeURIComponent(reviewId)}/wait?timeout=${poll}`));
+      const { data } = await request(base, reviewsPath(sessionId, `/${encodeURIComponent(reviewId)}/wait?timeout=${poll}`), { headers: CLIENT_HEADERS });
+      const raw = data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>).result : null;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error('wait response ended without a review result');
+      }
+      const result = raw as Record<string, unknown>;
+      if (result.status === 'cancelled') return result;
+      if (result.status === 'submitted') {
+        const answers = result.answers;
+        if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+          throw new Error('wait response reported submitted without answers');
+        }
+        return result;
+      }
+      if (result.status !== 'open') {
+        throw new Error(`wait response had unexpected status "${String(result.status)}"`);
+      }
       failures = 0;
-      const result = record(record(data ?? {}).result ?? {});
-      if (result.status !== 'open') return result;
+      lastError = null;
     } catch (error) {
-      // A restarting pi-dish refuses connections for a few seconds; a 4xx is final.
+      // A restarting pi-dish refuses connections or drops a flushed wait; a 4xx is final.
       const status = errorStatus(error);
       if (typeof status === 'number' && status >= 400 && status < 500) throw error;
-      if (++failures > 30) throw error;
-      await sleep(2000);
+      lastError = error;
+      if (++failures > WAIT_MAX_RETRIES) throw error;
+      await sleep(WAIT_RETRY_MS);
     }
   }
 }
@@ -133,7 +159,7 @@ async function main() {
     const wait = waitFlag ?? deck.wait !== false;
     let review: Record<string, unknown>;
     try {
-      const { data } = await request(base, reviewsPath(sessionId), jsonInit({ ...deck, wait }));
+      const { data } = await request(base, reviewsPath(sessionId), jsonInit({ ...deck, wait }, CLIENT_HEADERS));
       review = record(record(data ?? {}).review ?? {});
     } catch (error) {
       if (staleHost(error)) return fail('this pi-dish predates review decks (no reviewsV1); update pi-dish, or ask in chat');
@@ -168,11 +194,11 @@ async function main() {
       return print(result, args.json, answeredText(result));
     }
     if (args.command === 'answers') {
-      const { data } = await request(base, item);
+      const { data } = await request(base, item, { headers: CLIENT_HEADERS });
       const result = record(record(data ?? {}).result ?? {});
       return print(result, true, '');
     }
-    const { data } = await request(base, `${item}/cancel`, jsonInit({}));
+    const { data } = await request(base, `${item}/cancel`, jsonInit({}, CLIENT_HEADERS));
     const review = record(record(data ?? {}).review ?? {});
     return print(review, args.json, `review ${target} withdrawn.`);
   } catch (error) {

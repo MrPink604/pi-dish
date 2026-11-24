@@ -18,4 +18,5 @@ export interface SessionDeletePorts {
  */
 export declare function createSessionDelete(ports: SessionDeletePorts): (sessionId: string) => {
     deleted: string[];
+    sessionIds: string[];
 };

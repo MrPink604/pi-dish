@@ -11,7 +11,7 @@ import * as terminal from './terminal';
 import * as tmux from './tmux';
 import { PRIVATE_UNLOCK_HEADER } from './private-access';
 import { FORM_CLIENT_HEADER, PAGE_FORMS_CAPABILITY } from './page-forms';
-import { REVIEWS_CAPABILITY } from './reviews';
+import { REVIEW_CLIENT_HEADER, REVIEWS_CAPABILITY } from './reviews';
 
 export type TransportRequest = express.Request<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 export type TransportResponse = express.Response<unknown, Record<string, unknown>>;
@@ -195,7 +195,7 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (origin && allowedOrigins().includes(origin)) {
       res.header('Access-Control-Allow-Origin', origin);
       res.header('Vary', 'Origin');
-      res.header('Access-Control-Allow-Headers', `Authorization, Content-Type, Range, If-Range, ${PRIVATE_UNLOCK_HEADER}`);
+      res.header('Access-Control-Allow-Headers', `Authorization, Content-Type, Range, If-Range, ${PRIVATE_UNLOCK_HEADER}, ${REVIEW_CLIENT_HEADER}`);
       res.header('Access-Control-Expose-Headers', 'Accept-Ranges, Content-Range, Content-Length');
       res.header('Access-Control-Allow-Methods', 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS');
       if (req.method === 'OPTIONS') { res.status(204).end(); return; }

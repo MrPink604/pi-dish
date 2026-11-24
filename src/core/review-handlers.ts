@@ -45,6 +45,8 @@ export interface ReviewHandlers {
   media: RouteHandler;
   /** `review_updated` for a session's event stream; returns the unsubscribe. */
   subscribe(sessionId: string, listener: (data: { review: reviews.ClientReview }) => void): () => void;
+  /** Purges a permanently deleted session's review store and in-memory waiters/timers. */
+  removeSession(sessionId: string): void;
   /** Settles answers a restart cut off: pending ones after the grace period, delivering ones as uncertain. */
   start(): void;
   stop(): void;
@@ -58,15 +60,19 @@ const DEFAULT_GRACE_MS = 15_000;
 const WAIT_DEFAULT_SECS = 50;
 const WAIT_MAX_SECS = 600;
 
-interface Waiter { res: ApplicationResponse; finish(review: ReviewRecord): void }
+interface Waiter {
+  res: ApplicationResponse;
+  finish(review: ReviewRecord, onWritten?: () => void): void;
+  close(): void;
+}
 
 export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers {
   const graceMs = ports.graceMs ?? DEFAULT_GRACE_MS;
   const startedAt = Date.now();
   const listeners = new Map<string, Set<(data: { review: reviews.ClientReview }) => void>>();
-  const waiters = new Map<string, Set<Waiter>>();
-  const detachedAt = new Map<string, number>();
-  const timers = new Map<string, NodeJS.Timeout>();
+  const waiters = new Map<string, { sessionId: string; set: Set<Waiter> }>();
+  const detachedAt = new Map<string, { sessionId: string; at: number }>();
+  const timers = new Map<string, { sessionId: string; timer: NodeJS.Timeout }>();
   let stopped = false;
 
   function emit(review: ReviewRecord): void {
@@ -76,21 +82,38 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     }
   }
 
+  function requireClient(req: ApplicationRequest, res: ApplicationResponse): boolean {
+    if (req.headers[reviews.REVIEW_CLIENT_HEADER] === reviews.REVIEW_CLIENT_VALUE) return true;
+    res.status(403).json({ error: 'X-Pi-Dish-Client: 1 header is required' });
+    return false;
+  }
+
   function sessionOf(req: ApplicationRequest, res: ApplicationResponse): string | null {
-    try { return canonicalSessionId(req.params.id); } catch {
+    let sessionId: string;
+    try { sessionId = canonicalSessionId(req.params.id); } catch {
       res.status(400).json({ error: 'Invalid session ID' });
       return null;
     }
+    if (!ports.sessionKnown(sessionId)) {
+      res.status(404).json({ error: 'Session not found' });
+      return null;
+    }
+    return sessionId;
   }
 
   // The store fails closed: an unreadable one answers 500, never "no reviews".
-  function load(req: ApplicationRequest, res: ApplicationResponse): { sessionId: string; review: ReviewRecord } | null {
-    const sessionId = sessionOf(req, res);
-    if (!sessionId) return null;
+  function loadReview(sessionId: string, req: ApplicationRequest, res: ApplicationResponse): ReviewRecord | null {
     if (!reviews.REVIEW_ID_RE.test(req.params.reviewId)) { res.status(404).json({ error: 'no such review' }); return null; }
     const review = reviews.readReviews(sessionId).find(item => item.id === req.params.reviewId);
     if (!review) { res.status(404).json({ error: 'no such review' }); return null; }
-    return { sessionId, review };
+    return review;
+  }
+
+  function load(req: ApplicationRequest, res: ApplicationResponse): { sessionId: string; review: ReviewRecord } | null {
+    const sessionId = sessionOf(req, res);
+    if (!sessionId) return null;
+    const review = loadReview(sessionId, req, res);
+    return review ? { sessionId, review } : null;
   }
 
   function guarded(handler: (req: ApplicationRequest, res: ApplicationResponse) => unknown): RouteHandler {
@@ -179,17 +202,24 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
   // ---- delivery ----
 
   function liveWaiters(reviewId: string): Waiter[] {
-    return [...waiters.get(reviewId) ?? []].filter(waiter => !waiter.res.writableEnded && !waiter.res.destroyed);
+    return [...waiters.get(reviewId)?.set ?? []].filter(waiter => !waiter.res.writableEnded && !waiter.res.destroyed && !waiter.res.socket?.destroyed);
+  }
+
+  function clearTimer(reviewId: string): void {
+    const entry = timers.get(reviewId);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    timers.delete(reviewId);
   }
 
   function schedule(sessionId: string, reviewId: string, delay: number): void {
-    clearTimeout(timers.get(reviewId));
+    clearTimer(reviewId);
     const timer = setTimeout(() => {
       timers.delete(reviewId);
-      void settle(sessionId, reviewId);
+      void settle(sessionId, reviewId).catch(error => ports.log(`[reviews] delivering ${reviewId}: ${errorMessage(error)}`));
     }, Math.max(0, delay));
     timer.unref();
-    timers.set(reviewId, timer);
+    timers.set(reviewId, { sessionId, timer });
   }
 
   function setDelivery(sessionId: string, reviewId: string, delivery: reviews.ReviewDelivery): ReviewRecord | null {
@@ -201,6 +231,51 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     return updated;
   }
 
+  /** Writes a wait response; invokes `onWritten` only once `res.end` finishes on an intact socket. */
+  function writeWaiter(res: ApplicationResponse, review: ReviewRecord, onWritten?: () => void): void {
+    if (res.writableEnded || res.destroyed || res.socket?.destroyed) return;
+    let failed = false;
+    const onError = () => { failed = true; };
+    const onClose = () => { if (!res.writableFinished) failed = true; };
+    res.once('error', onError);
+    res.once('close', onClose);
+    const body = JSON.stringify({ review: reviews.clientReview(review), result: reviews.reviewResult(review) });
+    try {
+      res.end(body, () => {
+        res.off('error', onError);
+        res.off('close', onClose);
+        if (!failed && !res.destroyed && !res.socket?.destroyed && res.writableFinished) onWritten?.();
+      });
+    } catch {
+      res.off('error', onError);
+      res.off('close', onClose);
+    }
+  }
+
+  function markWaiterDelivered(sessionId: string, reviewId: string, delivery: reviews.ReviewDelivery): void {
+    if (stopped) return;
+    try {
+      let changed = false;
+      const updated = reviews.updateReview(sessionId, reviewId, review => {
+        if (review.submission?.delivery.state !== 'pending') return;
+        review.submission.delivery = delivery;
+        changed = true;
+      });
+      if (!changed || !updated) return;
+      clearTimer(reviewId);
+      detachedAt.delete(reviewId);
+      emit(updated);
+    } catch (error) {
+      ports.log(`[reviews] could not record waiter delivery of ${reviewId}: ${errorMessage(error)}`);
+    }
+  }
+
+  function withWaiterDelivery(review: ReviewRecord): { delivered: ReviewRecord; delivery: reviews.ReviewDelivery } | null {
+    if (!review.submission || review.submission.delivery.state !== 'pending') return null;
+    const delivery: reviews.ReviewDelivery = { state: 'delivered', via: 'waiter', at: Date.now(), error: null };
+    return { delivery, delivered: { ...review, submission: { ...review.submission, delivery } } };
+  }
+
   /** A pending answer goes to an attached waiter, waits out the grace period, or becomes a message. */
   async function settle(sessionId: string, reviewId: string): Promise<void> {
     if (stopped) return;
@@ -208,15 +283,18 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     if (!review?.submission || review.submission.delivery.state !== 'pending') return;
     const attached = liveWaiters(reviewId);
     if (attached.length) {
-      clearTimeout(timers.get(reviewId));
-      timers.delete(reviewId);
-      const delivered = setDelivery(sessionId, reviewId, { state: 'delivered', via: 'waiter', at: Date.now(), error: null });
-      if (delivered) for (const waiter of attached) waiter.finish(delivered);
+      const prepared = withWaiterDelivery(review);
+      if (!prepared) return;
+      // Leave pending on disk until a waiter write actually succeeds; if all fail, the fallback timer delivers via message.
+      schedule(sessionId, reviewId, graceMs);
+      for (const waiter of attached) {
+        waiter.finish(prepared.delivered, () => markWaiterDelivered(sessionId, reviewId, prepared.delivery));
+      }
       return;
     }
     // A waiting CLI that has not attached yet (just started, or back after a restart) gets the grace period too.
     const waitingSince = review.spec.wait ? Math.max(startedAt, review.createdAt) : -Infinity;
-    const holdUntil = Math.max(waitingSince, detachedAt.get(reviewId) ?? -Infinity) + graceMs;
+    const holdUntil = Math.max(waitingSince, detachedAt.get(reviewId)?.at ?? -Infinity) + graceMs;
     if (Date.now() < holdUntil) return schedule(sessionId, reviewId, holdUntil - Date.now());
     const delivering = setDelivery(sessionId, reviewId, { state: 'delivering', via: 'message', at: null, error: null });
     if (!delivering) return;
@@ -237,8 +315,7 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
 
   const create = guarded(async (req, res) => {
     const sessionId = sessionOf(req, res);
-    if (!sessionId) return;
-    if (!ports.sessionKnown(sessionId)) return res.status(404).json({ error: 'Session not found' });
+    if (!sessionId || !requireClient(req, res)) return;
     const checked = reviews.validateReviewSpec(req.body);
     if ('errors' in checked) return res.status(400).json({ error: checked.errors.join('; '), errors: checked.errors });
     const resolved = await resolveMedia(sessionId, checked.spec);
@@ -274,46 +351,60 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
   // cancelled, or still open after `timeout` seconds. Headers go out at once so a
   // proxy's first-byte timer never cuts the poll.
   const wait = guarded((req, res) => {
-    const found = load(req, res);
-    if (!found) return;
-    const { sessionId, review } = found;
+    const sessionId = sessionOf(req, res);
+    if (!sessionId) return;
+    // HEAD on wait must never claim a pending answer or attach a waiter.
+    if (req.method === 'HEAD') { res.setHeader('Allow', 'GET'); return res.status(405).end(); }
+    if (!requireClient(req, res)) return;
+    const review = loadReview(sessionId, req, res);
+    if (!review) return;
     const requested = Number(req.query.timeout);
     const seconds = Number.isFinite(requested) && requested > 0 ? Math.min(requested, WAIT_MAX_SECS) : WAIT_DEFAULT_SECS;
     res.status(200).type('application/json').setHeader('Cache-Control', 'no-store, no-transform');
-    const send = (current: ReviewRecord) => {
-      if (!res.writableEnded && !res.destroyed) res.end(JSON.stringify({ review: reviews.clientReview(current), result: reviews.reviewResult(current) }));
-    };
     if (review.status !== 'open') {
-      const claimed = review.submission?.delivery.state === 'pending'
-        ? setDelivery(sessionId, review.id, { state: 'delivered', via: 'waiter', at: Date.now(), error: null }) : null;
-      if (claimed) { clearTimeout(timers.get(review.id)); timers.delete(review.id); }
-      return send(claimed ?? review);
+      const prepared = withWaiterDelivery(review);
+      if (prepared) {
+        if (!timers.has(review.id)) schedule(sessionId, review.id, graceMs);
+        return writeWaiter(res, prepared.delivered, () => markWaiterDelivered(sessionId, review.id, prepared.delivery));
+      }
+      return writeWaiter(res, review);
     }
     res.flushHeaders();
-    const set = waiters.get(review.id) ?? new Set<Waiter>();
-    waiters.set(review.id, set);
+    const bucket = waiters.get(review.id) ?? { sessionId, set: new Set<Waiter>() };
+    waiters.set(review.id, bucket);
     let done = false;
-    const detach = () => {
+    const detach = (recordDetach: boolean) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      set.delete(waiter);
-      if (!set.size) waiters.delete(review.id);
-      detachedAt.set(review.id, Date.now());
+      bucket.set.delete(waiter);
+      if (!bucket.set.size) waiters.delete(review.id);
+      if (recordDetach) detachedAt.set(review.id, { sessionId, at: Date.now() });
     };
-    const waiter: Waiter = { res, finish: current => { detach(); send(current); } };
+    const waiter: Waiter = {
+      res,
+      finish: (current, onWritten) => { detach(true); writeWaiter(res, current, onWritten); },
+      close: () => { detach(false); if (!res.writableEnded && !res.destroyed) res.end(); },
+    };
     const timer = setTimeout(() => {
-      detach();
-      try { send(reviews.readReviews(sessionId).find(item => item.id === review.id) ?? review); } catch { send(review); }
+      detach(true);
+      try { writeWaiter(res, reviews.readReviews(sessionId).find(item => item.id === review.id) ?? review); }
+      catch { writeWaiter(res, review); }
     }, seconds * 1000);
-    set.add(waiter);
-    res.on('close', detach);
+    bucket.set.add(waiter);
+    res.on('close', () => detach(true));
   });
 
   const submit = guarded((req, res) => {
-    const found = load(req, res);
-    if (!found) return;
-    const { sessionId, review } = found;
+    const sessionId = sessionOf(req, res);
+    if (!sessionId || !requireClient(req, res)) return;
+    const review = loadReview(sessionId, req, res);
+    if (!review) return;
+    const contentLength = Number(req.headers['content-length']);
+    if ((Number.isFinite(contentLength) && contentLength > reviews.MAX_SUBMIT_BYTES)
+      || Buffer.byteLength(JSON.stringify(req.body ?? null)) > reviews.MAX_SUBMIT_BYTES) {
+      return res.status(413).json({ error: `submission exceeds ${reviews.MAX_SUBMIT_BYTES / 1024} KiB` });
+    }
     const body = requestBody(req);
     const id = body.submissionId;
     if (typeof id !== 'string' || !reviews.SUBMISSION_ID_RE.test(id)) {
@@ -343,15 +434,16 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
   });
 
   const cancel = guarded((req, res) => {
-    const found = load(req, res);
-    if (!found) return;
-    if (found.review.status === 'submitted') {
-      return res.status(409).json({ code: 'answered', error: 'this review was already answered', review: reviews.clientReview(found.review) });
+    const sessionId = sessionOf(req, res);
+    if (!sessionId || !requireClient(req, res)) return;
+    const review = loadReview(sessionId, req, res);
+    if (!review) return;
+    if (review.status === 'submitted') {
+      return res.status(409).json({ code: 'answered', error: 'this review was already answered', review: reviews.clientReview(review) });
     }
-    const cancelled = reviews.updateReview(found.sessionId, found.review.id, current => { current.status = 'cancelled'; });
+    const cancelled = reviews.updateReview(sessionId, review.id, current => { current.status = 'cancelled'; });
     if (!cancelled) return res.status(404).json({ error: 'no such review' });
-    clearTimeout(timers.get(cancelled.id));
-    timers.delete(cancelled.id);
+    clearTimer(cancelled.id);
     detachedAt.delete(cancelled.id);
     for (const waiter of liveWaiters(cancelled.id)) waiter.finish(cancelled);
     emit(cancelled);
@@ -370,6 +462,26 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     };
   }
 
+  function removeSession(sessionId: string): void {
+    let key: string;
+    try { key = canonicalSessionId(sessionId); } catch { return; }
+    listeners.delete(key);
+    for (const [reviewId, entry] of [...timers]) {
+      if (entry.sessionId === key) clearTimer(reviewId);
+    }
+    for (const [reviewId, entry] of [...detachedAt]) {
+      if (entry.sessionId === key) detachedAt.delete(reviewId);
+    }
+    for (const [reviewId, bucket] of [...waiters]) {
+      if (bucket.sessionId !== key) continue;
+      for (const waiter of [...bucket.set]) waiter.close();
+      waiters.delete(reviewId);
+    }
+    try { reviews.deleteReviews(key); } catch (error) {
+      ports.log(`[reviews] could not remove reviews for ${key}: ${errorMessage(error)}`);
+    }
+  }
+
   function start(): void {
     for (const review of reviews.readAllReviews(ports.log)) {
       const state = review.submission?.delivery.state;
@@ -386,9 +498,9 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
 
   function stop(): void {
     stopped = true;
-    for (const timer of timers.values()) clearTimeout(timer);
+    for (const { timer } of timers.values()) clearTimeout(timer);
     timers.clear();
   }
 
-  return { create, list, get, wait, submit, cancel, media, subscribe, start, stop };
+  return { create, list, get, wait, submit, cancel, media, subscribe, removeSession, start, stop };
 }

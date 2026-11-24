@@ -8,15 +8,21 @@ import test = require('node:test');
 import assert = require('node:assert/strict');
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
+import crypto = require('node:crypto');
+import { EventEmitter } from 'node:events';
 import fs = require('node:fs');
+import http = require('node:http');
 import net = require('node:net');
 import path = require('node:path');
 import { record } from './test-types.js';
 import { createTestTempDir, sanitizeTestEnv } from './test-env.js';
 import { sseReader } from './sse-reader.js';
+import type { ApplicationRequest, ApplicationResponse } from '../lib/http-boundary';
 import type { ReviewRecord, ReviewSpec } from '../lib/reviews';
 
 const reviews: typeof import('../lib/reviews') = require('../lib/reviews');
+const reviewHandlersModule: typeof import('../lib/review-handlers') = require('../lib/review-handlers');
+const sessionKey: typeof import('../lib/session-key') = require('../lib/session-key');
 
 const SERVER = path.join(__dirname, '..', 'server.js');
 const CLI = path.join(__dirname, '..', 'skills', 'pi-dish-review', 'scripts', 'pi-dish-review.js');
@@ -106,21 +112,27 @@ test('answers are checked against the deck; defaults, other and notes are kept a
   assert.deepEqual(reviews.changedQuestions(spec, 'answers' in good ? good.answers : {}), ['quick_mag', 'finish']);
 });
 
-test('the delivered message lists changes and notes first, summarizes defaults and defuses OMP syntax', () => {
+test('the delivered message lists changes and notes first, summarizes defaults, keeps values with other and defuses OMP syntax', () => {
   const spec = validSpec(DECK);
   const checked = reviews.validateReviewAnswers(spec, {
-    quick_mag: { value: 'vial', note: 'see @plan.md' }, finish: { value: ['steel'] }, scope: { value: 'approve' }, notes: { value: 'Warmer\ncrop' },
+    quick_mag: { value: 'vial', note: 'see @plan.md' },
+    finish: { value: ['steel', 'black'], other: 'plus @grip', note: 'matte' },
+    scope: { value: 'approve' },
+    notes: { value: 'Warmer\ncrop' },
   });
   assert.ok('answers' in checked);
   const review: ReviewRecord = {
     id: 'rv_0123456789abcdef', sessionId: SESSION_ID, createdAt: 0, anchorMessageIndex: null, spec, media: [], assets: [], status: 'submitted',
-    submission: { id: 'sub-00001', submittedAt: Date.UTC(2026, 10, 23, 10, 0, 0), answers: checked.answers, changed: ['quick_mag'],
+    submission: { id: 'sub-00001', submittedAt: Date.UTC(2026, 10, 23, 10, 0, 0), answers: checked.answers, changed: ['quick_mag', 'finish'],
       delivery: { state: 'pending', via: null, at: null, error: null } },
   };
   const expected = [
     '[review response: Halden part looks (rv_0123456789abcdef), submitted 2026-11-23T10:00:00Z]',
     'quick_mag (default tab): vial',
     '  note: see @plan.md',
+    'finish (default steel): steel, black',
+    '  other: plus @grip',
+    '  note: matte',
     'all other questions with a default: default',
     'notes: |',
     '  Warmer',
@@ -128,7 +140,19 @@ test('the delivered message lists changes and notes first, summarizes defaults a
     'full answer set: pi-dish-review answers rv_0123456789abcdef',
   ];
   assert.equal(reviews.formatReviewMessage(review, false), expected.join('\n'));
-  assert.equal(reviews.formatReviewMessage(review, true).split('\n')[2], '  note: see \\@plan.md');
+  const ompLines = reviews.formatReviewMessage(review, true).split('\n');
+  assert.equal(ompLines[2], '  note: see \\@plan.md');
+  assert.equal(ompLines[4], '  other: plus \\@grip');
+
+  const otherOnly = reviews.validateReviewAnswers(spec, {
+    quick_mag: { value: null, other: 'A lit vial' }, finish: { value: ['steel'] }, scope: { value: 'approve' },
+  });
+  assert.ok('answers' in otherOnly);
+  const otherOnlyMsg = reviews.formatReviewMessage({
+    ...review,
+    submission: { ...review.submission!, answers: otherOnly.answers, changed: ['quick_mag'] },
+  }, false);
+  assert.match(otherOnlyMsg, /\nquick_mag: other \(default tab\): A lit vial\n/);
 });
 
 // ---- the server ------------------------------------------------------------
@@ -186,8 +210,9 @@ async function json(response: Response): Promise<Record<string, unknown>> {
   try { return record(JSON.parse(text)); } catch { throw new Error(`not JSON (${response.status}): ${text.slice(0, 200)}`); }
 }
 
-const post = (url: string, body: unknown) =>
-  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const CLIENT_HEADER = { 'X-Pi-Dish-Client': '1' };
+const post = (url: string, body: unknown, headers: Record<string, string> = {}) =>
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...CLIENT_HEADER, ...headers }, body: JSON.stringify(body) });
 
 let home = '';
 let ownerPort = 0;
@@ -199,9 +224,9 @@ const viaHub = (rest = '') => `${hub}/hosts/owner/api/sessions/${SESSION_ID}/rev
 const ownerEnv = () => ({ PI_DISH_REVIEW_GRACE_MS: String(GRACE_MS) });
 
 interface Cli { child: ChildProcess; stdout: () => string; stderr: () => string; exited: Promise<number | null> }
-function cli(args: string[], input?: unknown): Cli {
+function cli(args: string[], input?: unknown, extraEnv: NodeJS.ProcessEnv = {}): Cli {
   const child = spawn(process.execPath, [CLI, ...args], {
-    env: { ...sanitizeTestEnv(), HOME: home, PI_DISH_URL: owner, PI_DISH_SESSION_ID: SESSION_ID }, stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...sanitizeTestEnv(), HOME: home, PI_DISH_URL: owner, PI_DISH_SESSION_ID: SESSION_ID, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'],
   });
   children.push(child);
   let stdout = '';
@@ -401,4 +426,267 @@ test('answers survive a restart; one cut off before delivery is delivered once a
   assert.equal(repeated.status, 200);
   const stat = fs.statSync(path.join(home, '.pi', 'dish', 'reviews'));
   assert.equal(stat.mode & 0o077, 0, 'the store is owner-only');
+});
+
+test('CSRF header is required (and proxied), HEAD wait has no side effects, and submit caps body at 64 KiB', async () => {
+  const rawPost = (url: string, body: unknown) =>
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  // Create without X-Pi-Dish-Client is refused both directly and through the hub.
+  assert.equal((await rawPost(api(owner), { ...DECK, title: 'No header', wait: false })).status, 403);
+  assert.equal((await rawPost(viaHub(), { ...DECK, title: 'No header hub', wait: false })).status, 403);
+
+  const created = await post(viaHub(), { ...DECK, title: 'CSRF deck', wait: true });
+  assert.equal(created.status, 201);
+  const reviewId = String(record((await json(created)).review).id);
+
+  // Missing header is refused on wait, submit, and cancel (directly and via hub) with zero side effects.
+  assert.equal((await fetch(api(owner, `/${reviewId}/wait?timeout=1`))).status, 403);
+  assert.equal((await fetch(viaHub(`/${reviewId}/wait?timeout=1`))).status, 403);
+  assert.equal((await rawPost(api(owner, `/${reviewId}/submit`), { submissionId: 'sub-csrf-01', answers: DEFAULTS })).status, 403);
+  assert.equal((await rawPost(viaHub(`/${reviewId}/submit`), { submissionId: 'sub-csrf-01', answers: DEFAULTS })).status, 403);
+  assert.equal((await rawPost(api(owner, `/${reviewId}/cancel`), {})).status, 403);
+  assert.equal((await rawPost(viaHub(`/${reviewId}/cancel`), {})).status, 403);
+  assert.equal(record((await json(await fetch(api(owner, `/${reviewId}`)))).review).status, 'open');
+
+  // Oversized submit body (>64 KiB) is refused with 413 before validating answers.
+  const huge = await post(api(owner, `/${reviewId}/submit`), { submissionId: 'sub-huge-01', answers: { notes: { value: 'x'.repeat(70 * 1024) } } });
+  assert.equal(huge.status, 413);
+  assert.equal(record((await json(await fetch(api(owner, `/${reviewId}`)))).review).status, 'open');
+
+  // HEAD on wait returns 405 and never claims a pending submission.
+  const before = prompts.length;
+  assert.equal((await post(viaHub(`/${reviewId}/submit`), { submissionId: 'sub-head-01', answers: DEFAULTS })).status, 202);
+  const headDirect = await fetch(api(owner, `/${reviewId}/wait`), { method: 'HEAD', headers: CLIENT_HEADER });
+  assert.equal(headDirect.status, 405);
+  const headHub = await fetch(viaHub(`/${reviewId}/wait`), { method: 'HEAD', headers: CLIENT_HEADER });
+  assert.equal(headHub.status, 405);
+  const done = await settled(reviewId);
+  assert.equal(record(record(done.submission).delivery).via, 'message', 'HEAD wait did not claim the pending submission');
+  assert.equal(prompts.length, before + 1);
+
+  // GET wait with X-Pi-Dish-Client passes through the /hosts hub proxy.
+  const proxiedWait = await fetch(viaHub(`/${reviewId}/wait?timeout=1`), { headers: CLIENT_HEADER });
+  assert.equal(proxiedWait.status, 200);
+  assert.equal(record((await json(proxiedWait)).result).status, 'submitted');
+});
+
+test('unknown or deleted sessions (including private and OMP subagents) return 404 and purge stored reviews', async () => {
+  // Unknown session returns 404 on every review route.
+  const ghost = '2026-11-23T09-00-00-ghost000';
+  const ghostBase = `${owner}/api/sessions/${ghost}/reviews`;
+  const fakeId = 'rv_0123456789abcdef';
+  assert.equal((await fetch(ghostBase)).status, 404);
+  assert.equal((await post(ghostBase, { ...DECK, wait: false })).status, 404);
+  assert.equal((await fetch(`${ghostBase}/${fakeId}`)).status, 404);
+  assert.equal((await fetch(`${ghostBase}/${fakeId}/wait?timeout=1`, { headers: CLIENT_HEADER })).status, 404);
+  assert.equal((await post(`${ghostBase}/${fakeId}/submit`, { submissionId: 'sub-ghost-1', answers: DEFAULTS })).status, 404);
+  assert.equal((await post(`${ghostBase}/${fakeId}/cancel`, {})).status, 404);
+  assert.equal((await fetch(`${ghostBase}/${fakeId}/media/0`)).status, 404);
+
+  // Private session: deleting its transcript must not expose its reviews without the PIN.
+  const pinSet = await fetch(`${owner}/api/private-sessions/pin`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '4321' }),
+  });
+  assert.equal(pinSet.status, 200);
+  const unlocked = await json(await fetch(`${owner}/api/private-sessions/unlock`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '4321' }),
+  }));
+  const unlockHeader = { 'x-pi-dish-private-unlock': String(unlocked.token) };
+  const privId = '2026-11-23T09-00-00-priv0001';
+  const privDir = path.join(home, '.local', 'state', 'pi-dish', 'private-sessions', 'pi');
+  fs.mkdirSync(privDir, { recursive: true, mode: 0o700 });
+  const privFile = path.join(privDir, `${privId}.jsonl`);
+  const cwd = path.join(home, 'project');
+  fs.writeFileSync(privFile, JSON.stringify({ type: 'session', cwd, timestamp: '2026-11-23T09:00:00.000Z' }) + '\n');
+  const privBase = `${owner}/api/sessions/${privId}/reviews`;
+  const privCreated = await post(privBase, { ...DECK, title: 'Private deck', wait: false }, unlockHeader);
+  assert.equal(privCreated.status, 201);
+  const privReviewId = String(record((await json(privCreated)).review).id);
+  // Locked request is refused while the private transcript exists.
+  assert.equal((await fetch(privBase)).status, 404);
+  assert.equal((await fetch(`${privBase}/${privReviewId}/media/0`)).status, 404);
+  // Even if the private file is removed on disk outside DELETE, every route still answers 404.
+  fs.unlinkSync(privFile);
+  assert.equal((await fetch(privBase)).status, 404);
+  assert.equal((await fetch(`${privBase}/${privReviewId}`)).status, 404);
+  assert.equal((await fetch(`${privBase}/${privReviewId}/media/0`)).status, 404);
+  assert.equal((await post(`${privBase}/${privReviewId}/submit`, { submissionId: 'sub-priv-01', answers: DEFAULTS })).status, 404);
+  assert.equal((await post(`${privBase}/${privReviewId}/cancel`, {})).status, 404);
+  assert.equal((await fetch(`${privBase}/${privReviewId}/wait?timeout=1`, { headers: CLIENT_HEADER })).status, 404);
+
+  // Permanent DELETE /api/sessions/:id purges stored reviews for both parent and nested OMP subagent.
+  const parentNative = 'omp-review-parent-01';
+  const childNative = 'omp-review-child-01';
+  assert.ok(sessionKey.validSessionId(parentNative) && sessionKey.validSessionId(childNative));
+  const parentRoute = sessionKey.encodeSessionKey('omp', parentNative);
+  const childRoute = sessionKey.encodeSessionKey('omp', childNative);
+  const ompDir = path.join(home, '.omp', 'agent', 'sessions', 'project');
+  const parentFile = path.join(ompDir, `${parentNative}.jsonl`);
+  const childDir = parentFile.slice(0, -'.jsonl'.length);
+  fs.mkdirSync(childDir, { recursive: true });
+  fs.writeFileSync(parentFile, JSON.stringify({ type: 'session', version: 3, id: parentNative, cwd }) + '\n');
+  fs.writeFileSync(path.join(childDir, 'Helper.jsonl'), JSON.stringify({ type: 'session', version: 3, id: childNative, cwd }) + '\n');
+  const storePath = (id: string) =>
+    path.join(home, '.pi', 'dish', 'reviews', `${crypto.createHash('sha256').update(sessionKey.canonicalSessionId(id)).digest('hex').slice(0, 32)}.json`);
+  assert.equal((await post(`${owner}/api/sessions/${encodeURIComponent(parentRoute)}/reviews`, { ...DECK, title: 'Parent', wait: false })).status, 201);
+  assert.equal((await post(`${owner}/api/sessions/${encodeURIComponent(childRoute)}/reviews`, { ...DECK, title: 'Child', wait: false })).status, 201);
+  assert.ok(fs.existsSync(storePath(parentRoute)) && fs.existsSync(storePath(childRoute)));
+  const deleted = await fetch(`${owner}/api/sessions/${encodeURIComponent(parentRoute)}`, { method: 'DELETE' });
+  assert.equal(deleted.status, 200);
+  assert.ok(!fs.existsSync(storePath(parentRoute)), 'parent reviews purged on delete');
+  assert.ok(!fs.existsSync(storePath(childRoute)), 'subagent reviews purged on delete');
+  assert.equal((await fetch(`${owner}/api/sessions/${encodeURIComponent(parentRoute)}/reviews`)).status, 404);
+  assert.equal((await fetch(`${owner}/api/sessions/${encodeURIComponent(childRoute)}/reviews`)).status, 404);
+});
+
+test('CLI wait retries dropped or malformed responses and exits non-zero when retries run out', async () => {
+  const reviewId = 'rv_0123456789abcdef';
+  let attempts = 0;
+  let mode: 'recover' | 'always-drop' = 'recover';
+  const fake = http.createServer((req, res) => {
+    attempts++;
+    assert.equal(req.headers['x-pi-dish-client'], '1', 'CLI sends CSRF header on wait');
+    if (mode === 'always-drop' || attempts === 1) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.flushHeaders();
+      req.socket.destroy();
+      return;
+    }
+    if (attempts === 2) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
+    if (attempts === 3) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ result: { status: 'submitted' } })); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      result: { reviewId, status: 'submitted', answers: { quick_mag: { value: 'vial', default: false } }, delivery: { state: 'delivered', via: 'waiter', at: 1, error: null } },
+    }));
+  });
+  await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve));
+  const address = fake.address();
+  assert.ok(address && typeof address !== 'string');
+  const fakeBase = `http://127.0.0.1:${address.port}`;
+  try {
+    const recovered = cli(['wait', reviewId], undefined, {
+      PI_DISH_URL: fakeBase, PI_DISH_REVIEW_WAIT_RETRY_MS: '10', PI_DISH_REVIEW_WAIT_RETRIES: '5',
+    });
+    assert.equal(await recovered.exited, 0, recovered.stderr());
+    assert.equal(attempts, 4);
+    assert.deepEqual(record(JSON.parse(recovered.stdout())).answers, { quick_mag: { value: 'vial', default: false } });
+
+    mode = 'always-drop';
+    attempts = 0;
+    const exhausted = cli(['wait', reviewId], undefined, {
+      PI_DISH_URL: fakeBase, PI_DISH_REVIEW_WAIT_RETRY_MS: '10', PI_DISH_REVIEW_WAIT_RETRIES: '2',
+    });
+    assert.equal(await exhausted.exited, 1, 'never exits 0 without answers');
+    assert.equal(exhausted.stdout().trim(), '', 'does not print {}');
+    assert.match(exhausted.stderr(), /wait response ended without a review result/);
+  } finally {
+    await new Promise<void>(resolve => fake.close(() => resolve()));
+  }
+});
+
+test('failed waiter writes stay pending for message fallback, and timer settle failures are caught and logged', async () => {
+  const prevHome = process.env.HOME;
+  const unitHome = createTestTempDir('pi-dish-reviews-unit-');
+  process.env.HOME = unitHome;
+  const delivered: string[] = [];
+  const logs: string[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  process.on('unhandledRejection', onUnhandled);
+  const handlers = reviewHandlersModule.createReviewHandlers({
+    sessionKnown: () => true,
+    sessionCwd: () => unitHome,
+    resolveSessionFile: async () => null,
+    pageExists: () => false,
+    lastMessageIndex: () => 0,
+    deliverMessage: async (_id, text) => { delivered.push(text); return null; },
+    log: line => logs.push(line),
+    graceMs: 120,
+  });
+
+  function mockReq(overrides: Record<string, unknown> = {}): ApplicationRequest {
+    return {
+      method: 'POST', params: { id: SESSION_ID }, query: {}, headers: { 'x-pi-dish-client': '1' }, body: {},
+      ...overrides,
+    } as unknown as ApplicationRequest;
+  }
+  function mockRes(options: { failWrite?: boolean } = {}) {
+    const emitter = new EventEmitter();
+    let statusCode = 200;
+    let body = '';
+    const res = Object.assign(emitter, {
+      writableEnded: false,
+      writableFinished: false,
+      destroyed: false,
+      socket: { destroyed: false },
+      status(code: number) { statusCode = code; return res; },
+      type() { return res; },
+      setHeader() { return res; },
+      flushHeaders() {},
+      json(value: unknown) { body = JSON.stringify(value); res.writableEnded = true; res.writableFinished = true; return res; },
+      end(chunk?: string, cb?: () => void) {
+        if (options.failWrite) {
+          res.destroyed = true;
+          res.socket.destroyed = true;
+          res.emit('error', new Error('EPIPE'));
+          res.emit('close');
+          cb?.();
+          return res;
+        }
+        if (chunk) body += chunk;
+        res.writableEnded = true;
+        res.writableFinished = true;
+        cb?.();
+        return res;
+      },
+    });
+    return { res: res as unknown as ApplicationResponse, status: () => statusCode, body: () => body };
+  }
+
+  const noMediaDeck = { ...DECK, cards: DECK.cards.map(item => ({ ...item, media: [] })) };
+  try {
+    // 1. Live waiter whose res.end fails: delivery stays pending, fallback timer delivers via message.
+    const c1 = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Broken live waiter', wait: true } }), c1.res, () => {});
+    assert.equal(c1.status(), 201);
+    const id1 = String(record(JSON.parse(c1.body()).review).id);
+    const brokenWait1 = mockRes({ failWrite: true });
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id1 }, query: { timeout: '10' } }), brokenWait1.res, () => {});
+    const s1 = mockRes();
+    await handlers.submit(mockReq({ params: { id: SESSION_ID, reviewId: id1 }, body: { submissionId: 'sub-fail-01', answers: DEFAULTS } }), s1.res, () => {});
+    assert.equal(s1.status(), 202);
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id1)?.submission?.delivery.state, 'pending',
+      'failed waiter write does not mark delivered');
+    await until(() => delivered.some(msg => msg.includes(id1)), 'fallback message after broken live waiter', 2000);
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id1)?.submission?.delivery.via, 'message');
+
+    // 2. Late GET /wait claiming a pending review whose res.end fails: still falls back to message.
+    const c2 = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Broken late waiter', wait: true } }), c2.res, () => {});
+    const id2 = String(record(JSON.parse(c2.body()).review).id);
+    await handlers.submit(mockReq({ params: { id: SESSION_ID, reviewId: id2 }, body: { submissionId: 'sub-fail-02', answers: DEFAULTS } }), mockRes().res, () => {});
+    const brokenWait2 = mockRes({ failWrite: true });
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id2 } }), brokenWait2.res, () => {});
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id2)?.submission?.delivery.state, 'pending',
+      'failed late waiter write leaves delivery pending');
+    await until(() => delivered.some(msg => msg.includes(id2)), 'fallback message after broken late waiter', 2000);
+
+    // 3. Timer-driven settle failure (unreadable store) is caught and logged with no unhandled rejection.
+    const c3 = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Corrupt timer', wait: true } }), c3.res, () => {});
+    const id3 = String(record(JSON.parse(c3.body()).review).id);
+    await handlers.submit(mockReq({ params: { id: SESSION_ID, reviewId: id3 }, body: { submissionId: 'sub-fail-03', answers: DEFAULTS } }), mockRes().res, () => {});
+    const storeFile = path.join(unitHome, '.pi', 'dish', 'reviews', `${crypto.createHash('sha256').update(SESSION_ID).digest('hex').slice(0, 32)}.json`);
+    const backup = fs.readFileSync(storeFile, 'utf8');
+    fs.writeFileSync(storeFile, '{corrupt');
+    await until(() => logs.some(line => line.includes(id3)), 'timer settle error logged', 2000);
+    assert.equal(unhandled.length, 0, 'no unhandled promise rejection from timer-driven settle');
+    fs.writeFileSync(storeFile, backup);
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id3)?.submission?.delivery.state, 'pending',
+      'answer stays pending and recoverable');
+  } finally {
+    handlers.stop();
+    process.off('unhandledRejection', onUnhandled);
+    process.env.HOME = prevHome;
+  }
 });

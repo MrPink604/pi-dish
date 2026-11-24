@@ -67,7 +67,7 @@ function sessionsPort(routeId: string): SessionsPort {
 /** pi-dish's own HTTP API, for routes the sessions CLI does not cover: GET, or POST with a body. */
 const hubApi: HubApi = async (pathname, body) => {
   const base = process.env.PI_DISH_URL || 'http://127.0.0.1:3333';
-  const headers: Record<string, string> = body ? { 'Content-Type': 'application/json' } : {};
+  const headers: Record<string, string> = { 'X-Pi-Dish-Client': '1', ...(body ? { 'Content-Type': 'application/json' } : {}) };
   if (process.env.PI_DISH_TOKEN) headers.Authorization = `Bearer ${process.env.PI_DISH_TOKEN}`;
   const response = await fetch(new URL(pathname, base), {
     method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(120_000),

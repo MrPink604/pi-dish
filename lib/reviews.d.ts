@@ -1,5 +1,7 @@
 // Generated from src/core/reviews.ts; edit that source and run npm run build:core.
 export declare const REVIEWS_CAPABILITY = "reviewsV1";
+export declare const REVIEW_CLIENT_HEADER = "x-pi-dish-client";
+export declare const REVIEW_CLIENT_VALUE = "1";
 export declare const MAX_CARDS = 6;
 export declare const MAX_QUESTIONS_PER_CARD = 3;
 export declare const MAX_MEDIA_PER_CARD = 4;
@@ -8,6 +10,8 @@ export declare const MAX_TEXT_ANSWER = 2000;
 export declare const MAX_NOTE = 1000;
 /** A deck's JSON as posted; far above anything the bounds above allow, so it only stops abuse. */
 export declare const MAX_SPEC_BYTES: number;
+/** A submission's JSON body; checked before validating answers. */
+export declare const MAX_SUBMIT_BYTES: number;
 /** Open decks per session: an agent that keeps posting without waiting is refused. */
 export declare const MAX_OPEN_REVIEWS = 10;
 export declare const REVIEW_ID_RE: RegExp;
@@ -158,6 +162,8 @@ export declare function readReviews(sessionId: string): ReviewRecord[];
 export declare function writeReviews(sessionId: string, reviews: ReviewRecord[]): void;
 /** Reads, changes and writes one deck; null when the session has no such deck. */
 export declare function updateReview(sessionId: string, reviewId: string, change: (review: ReviewRecord) => void): ReviewRecord | null;
+/** Removes one session's review store file, if it exists. */
+export declare function deleteReviews(sessionId: string): void;
 /** Every stored session's decks; an unreadable file is reported and skipped. */
 export declare function readAllReviews(log: (line: string) => void): ReviewRecord[];
 /** A shot as the browser loads it: `asset` is a slot under the review's media route; otherwise `url`. */

@@ -1646,19 +1646,28 @@ still resolves to that real path. The browser never sees host paths, only
 
 Store: one `0600` file per canonical session under `~/.pi/dish/reviews/`,
 named by a hash, replaced durably; read fails closed (a corrupt file is a
-500, never empty, so a delivered answer is never replayed). At most
-`MAX_OPEN_REVIEWS` open per session; answered and cancelled ones are evicted
-past 50, never one whose delivery is pending or in flight. A submission is
-written (status `submitted`, delivery `pending`) before the 202. `settle`
-then gives it to every attached `wait` long-poll (`via: waiter`), or holds it
-while a waiter detached less than the grace period ago (or, for a `wait: true`
-deck, within the grace period of its creation or the server's start) and otherwise writes `delivering`
-and sends one `[review response: …]` through `deliverText` (OMP syntax
-defused with page-forms' `literalPrompt`). A 409 refusal is `failed`; any other
-error or an unconfirmed admission is `uncertain`. `start()` reschedules
-`pending` answers after a restart and turns `delivering` into `uncertain`.
-A repeated submission id answers 200 `repeated`; another id on an answered deck
-is a 409. `PI_DISH_REVIEW_GRACE_MS` is a test seam (default 15 s).
+500, never empty, so a delivered answer is never replayed). Every review route
+requires the owning session to exist (`sessionKnown`, else 404, so deleting a
+private transcript never bypasses the PIN gate), and `DELETE /api/sessions/:id`
+purges the reviews for the deleted session and any deleted OMP subagents.
+`create`, `submit`, `cancel` and `wait` require `X-Pi-Dish-Client: 1` (403
+without it, forwarded through `/hosts/<peer>`), `HEAD …/wait` returns 405 with
+no side effects, and `submit` rejects bodies over 64 KiB (413) before answer
+validation. At most `MAX_OPEN_REVIEWS` open per session; answered and cancelled
+ones are evicted past 50, never one whose delivery is pending or in flight. A
+submission is written (status `submitted`, delivery `pending`) before the 202.
+`settle` hands it to attached `wait` long-polls and marks `via: waiter` only
+after `res.end`'s callback finishes on an intact socket; otherwise the answer
+stays `pending` and falls back after the grace period (for detached waiters, or
+within the grace period of a `wait: true` deck's creation or server start) to
+writing `delivering` and sending one `[review response: …]` through
+`deliverText` (OMP syntax defused with page-forms' `literalPrompt`, keeping
+selected values alongside `other`). Timer-driven `settle` errors are caught and
+logged, leaving answers pending. A 409 refusal is `failed`; any other error or
+an unconfirmed admission is `uncertain`. `start()` reschedules `pending`
+answers after a restart and turns `delivering` into `uncertain`. A repeated
+submission id answers 200 `repeated`; another id on an answered deck is a 409.
+`PI_DISH_REVIEW_GRACE_MS` is a test seam (default 15 s).
 
 ## Multi-host fleet (TASKS/multi-host.md; lib/host-identity.js, lib/remote-hosts.js)
 
