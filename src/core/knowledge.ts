@@ -360,8 +360,10 @@ export function openKnowledgeBase({ remote, dir, today = () => new Date().toISOS
     return next;
   };
   let cloned = false;
+  let recoverySeq = 0;
+  const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
-  function git(args: string[], cwd = dir): Promise<string> {
+  function git(args: string[], cwd = dir, extraEnv?: NodeJS.ProcessEnv): Promise<string> {
     return new Promise((resolve, reject) => {
       execFile('git', args, {
         cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 << 20,
@@ -370,12 +372,52 @@ export function openKnowledgeBase({ remote, dir, today = () => new Date().toISOS
         env: {
           ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_COMMITTER_NAME: 'pi-dish', GIT_COMMITTER_EMAIL: 'bots@pi-dish.invalid',
           GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes -o ConnectTimeout=15',
+          ...extraEnv,
         },
       }, (error, stdout, stderr) => {
         if (!error) return resolve(stdout);
         reject(new Error(`git ${args[0]}: ${String(stderr).trim() || error.message}`));
       });
     });
+  }
+
+  async function saveRecoveryRef(commitSha: string, reason: string): Promise<string> {
+    const stamp = new Date().toISOString().replace(/[-:.]/g, '');
+    const ref = `refs/pi-dish/kb-recovery/${stamp}-${++recoverySeq}`;
+    await git(['update-ref', ref, commitSha]);
+    console.warn(`[kb] saved local commit ${commitSha} to ${ref} (${reason})`);
+    return ref;
+  }
+
+  /**
+   * Snapshots any uncommitted staged index and working-tree files into a named
+   * recovery ref without altering HEAD or `.git/index`. Works across normal
+   * HEAD, detached HEAD during an interrupted rebase, unmerged index entries,
+   * and an unborn HEAD.
+   */
+  async function preserveDirtyTree(reason: string): Promise<string | null> {
+    if (!(await git(['status', '--porcelain'])).trim()) return null;
+    const headSha = (await git(['rev-parse', '--verify', 'HEAD']).catch(() => '')).trim() || null;
+    const headTree = headSha ? (await git(['rev-parse', '--verify', 'HEAD^{tree}']).catch(() => '')).trim() || null : null;
+    const indexTree = (await git(['write-tree']).catch(() => '')).trim() || null;
+    const tmpIndex = path.join(dir, '.git', `pi-dish-recovery-${process.pid}-${Date.now()}-${++recoverySeq}.index`);
+    let workTree: string;
+    try {
+      await git(['add', '-A'], dir, { GIT_INDEX_FILE: tmpIndex });
+      workTree = (await git(['write-tree'], dir, { GIT_INDEX_FILE: tmpIndex })).trim();
+    } finally {
+      try { fs.unlinkSync(tmpIndex); } catch {}
+    }
+    const authorEnv = { GIT_AUTHOR_NAME: 'pi-dish', GIT_AUTHOR_EMAIL: 'bots@pi-dish.invalid' };
+    let parent = headSha;
+    const baseTree = headTree ?? EMPTY_TREE_SHA;
+    if (indexTree && indexTree !== baseTree && indexTree !== workTree) {
+      const idxArgs = ['commit-tree', indexTree, ...(parent ? ['-p', parent] : []), '-m', `pi-dish: preserve staged index (${reason})`];
+      parent = (await git(idxArgs, dir, authorEnv)).trim();
+    }
+    const workArgs = ['commit-tree', workTree, ...(parent ? ['-p', parent] : []), '-m', `pi-dish: preserve working tree (${reason})`];
+    const workCommit = (await git(workArgs, dir, authorEnv)).trim();
+    return saveRecoveryRef(workCommit, reason);
   }
 
   async function ensureClone(): Promise<void> {
@@ -675,36 +717,49 @@ export function openKnowledgeBase({ remote, dir, today = () => new Date().toISOS
       const slug = path.basename(subRel, '.md');
       await ensureClone();
 
-      // Recover from any crash-interrupted rebase or uncommitted working-tree residue before syncing with origin,
-      // otherwise `git rebase` will refuse to run and wedge every subsequent write with 409.
-      await git(['rebase', '--abort']).catch(() => {});
+      // Recover from any crash-interrupted rebase or uncommitted working-tree residue before syncing with origin.
+      // Always preserve any dirty index/working files into a recovery ref BEFORE aborting or resetting.
+      const rebaseInProgress = fs.existsSync(path.join(dir, '.git', 'rebase-merge'))
+        || fs.existsSync(path.join(dir, '.git', 'rebase-apply'));
+      if (rebaseInProgress) {
+        await preserveDirtyTree('before-rebase-abort');
+        await git(['rebase', '--abort']).catch(() => {});
+      }
       if ((await git(['status', '--porcelain'])).trim()) {
-        const hasHead = await git(['rev-parse', '--verify', 'HEAD']).then(() => true, () => false);
-        if (hasHead) {
-          await git(['add', '-A']);
-          if ((await git(['status', '--porcelain'])).trim()) {
-            await git(['commit', '-q', '--author', 'pi-dish <bots@pi-dish.invalid>', '-m', 'pi-dish: recover uncommitted changes']);
-          }
+        await preserveDirtyTree('crash-dirty-tree');
+        await git(['add', '-A']);
+        if ((await git(['status', '--porcelain'])).trim()) {
+          await git(['commit', '-q', '--author', 'pi-dish <bots@pi-dish.invalid>', '-m', 'pi-dish: recover uncommitted changes']);
         }
       }
 
       // Sync with origin before inspecting or modifying files. If origin is unreachable, proceed locally;
-      // if origin is reachable and rebase conflicts, abort and throw 409 instead of stacking unpushable commits.
+      // if origin is reachable and rebase conflicts, preserve local commits to a recovery ref and reset to remote
+      // so subsequent unrelated writes succeed instead of failing with 409 forever.
       const fetchedBefore = await git(['fetch', '-q', 'origin']).then(() => true, () => false);
       if (fetchedBefore) {
         const remoteRef = await resolveRemoteRef();
         if (remoteRef) {
           const hasHead = await git(['rev-parse', '--verify', 'HEAD']).then(() => true, () => false);
           if (!hasHead) {
+            await preserveDirtyTree('before-initial-checkout');
             await git(['checkout', '-q', '-B', 'main', remoteRef]);
           } else {
             try {
               await git(['rebase', '-q', remoteRef]);
             } catch (error) {
               await git(['rebase', '--abort']).catch(() => {});
+              const localTip = (await git(['rev-parse', '--verify', 'HEAD']).catch(() => '')).trim();
+              let recoveryRef: string | null = null;
+              if (localTip && !(await isAncestor(localTip, remoteRef))) {
+                recoveryRef = await saveRecoveryRef(localTip, 'pre-write-rebase-conflict');
+              }
+              await preserveDirtyTree('before-conflict-reset');
+              await git(['reset', '--hard', remoteRef]);
               const detail = error instanceof Error ? error.message : String(error);
+              const savedNote = recoveryRef ? ` Local unpushed commits were saved to ${recoveryRef}.` : '';
               throw new KnowledgeError(
-                `Conflict: "${repoRel}" changed on the remote while committing (${detail}). Call kb_read("${slug}") to read the latest version and retry.`,
+                `Conflict: "${repoRel}" changed on the remote while committing (${detail}).${savedNote} Call kb_read("${slug}") to read the latest version and retry.`,
                 409,
               );
             }
@@ -851,14 +906,29 @@ export function openKnowledgeBase({ remote, dir, today = () => new Date().toISOS
           }
           if (conflictDetail !== null) {
             await git(['rebase', '--abort']).catch(() => {});
+            const recoveryRefs: string[] = [];
+            const currentTip = (await git(['rev-parse', '--verify', 'HEAD']).catch(() => '')).trim();
+            if (currentTip && !(await isAncestor(currentTip, rollbackRef))) {
+              recoveryRefs.push(await saveRecoveryRef(currentTip, 'push-conflict-rollback'));
+            }
+            await preserveDirtyTree('before-conflict-reset');
             if (headBefore) {
               await git(['reset', '--hard', headBefore]).catch(() => {});
-              await git(['rebase', '-q', rollbackRef]).catch(() => git(['rebase', '--abort']).catch(() => {}));
+              try {
+                await git(['rebase', '-q', rollbackRef]);
+              } catch {
+                await git(['rebase', '--abort']).catch(() => {});
+                if (headBefore !== currentTip && !(await isAncestor(headBefore, rollbackRef))) {
+                  recoveryRefs.push(await saveRecoveryRef(headBefore, 'push-conflict-prior-commits'));
+                }
+                await git(['reset', '--hard', rollbackRef]).catch(() => {});
+              }
             } else {
               await git(['reset', '--hard', rollbackRef]).catch(() => {});
             }
+            const savedNote = recoveryRefs.length ? ` Local commits were saved to ${recoveryRefs.join(', ')}.` : '';
             throw new KnowledgeError(
-              `Conflict: "${repoRel}" changed on the remote while committing (${conflictDetail}). Call kb_read("${slug}") to read the latest version and retry.`,
+              `Conflict: "${repoRel}" changed on the remote while committing (${conflictDetail}).${savedNote} Call kb_read("${slug}") to read the latest version and retry.`,
               409,
             );
           }

@@ -499,7 +499,7 @@ test('non-conflict push failure keeps the local commit intact instead of resetti
     assert.equal(flushed.pushed, true);
     assert.equal(git(baseA.dir, 'rev-parse', 'HEAD').trim(), git(remote, 'rev-parse', 'main').trim());
 });
-test('crash-left dirty working tree or interrupted rebase does not wedge subsequent writes', async (t) => {
+test('crash-left dirty working tree, staged index, unborn HEAD, or interrupted rebase preserves everything in recovery refs and never wedges writes', async (t) => {
     const { openClone, remote } = setup(t);
     const baseA = openClone('clone-a');
     const baseB = openClone('clone-b');
@@ -513,30 +513,112 @@ test('crash-left dirty working tree or interrupted rebase does not wedge subsequ
         page: 'tycho', scope: 'shared', mode: 'append', text: 'Tycho fact.', source: 'init',
         summary: 'Tycho GPU host', author: 'Other',
     });
-    // Simulate crash residue: dirty uncommitted edit on an existing page before commit.
-    fs.appendFileSync(path.join(baseA.dir, 'topics', 'beelink.md'), '\nUncommitted crash note. (Source: crash. Added 2026-11-20 by Fleet.)\n');
+    // 1. Dirty staged index + different unstaged working tree edit: both preserved, and working edit merges cleanly.
+    const beelinkFile = path.join(baseA.dir, 'topics', 'beelink.md');
+    fs.appendFileSync(beelinkFile, '\nStaged crash note. (Source: staged. Added 2026-11-20 by Fleet.)\n');
+    git(baseA.dir, 'add', 'topics/beelink.md');
+    fs.appendFileSync(beelinkFile, '\nUncommitted crash note. (Source: crash. Added 2026-11-20 by Fleet.)\n');
     const recovered = await baseA.write({
         page: 'beelink', scope: 'shared', mode: 'append', text: 'Post-crash write.', source: 'ops', author: 'Fleet',
     });
     assert.equal(recovered.pushed, true);
     assert.equal(git(baseA.dir, 'rev-parse', 'HEAD').trim(), git(remote, 'rev-parse', 'main').trim());
     const beelinkText = (await baseA.read('beelink')).text;
+    assert.match(beelinkText, /Staged crash note\./);
     assert.match(beelinkText, /Uncommitted crash note\./);
     assert.match(beelinkText, /Post-crash write\./);
     assert.match((await baseA.read('tycho')).text, /Tycho fact\./);
-    // Simulate an interrupted rebase directory left in .git/rebase-merge.
+    const crashRefs = git(baseA.dir, 'for-each-ref', '--format=%(refname)', 'refs/pi-dish/kb-recovery').trim().split('\n').filter(Boolean);
+    assert.ok(crashRefs.length >= 1, 'dirty tree snapshot saved to recovery ref');
+    // 2. Crash-interrupted rebase WITH dirty working files: preserve dirty files BEFORE aborting rebase.
     const rebaseMergeDir = path.join(baseA.dir, '.git', 'rebase-merge');
     const headSha = git(baseA.dir, 'rev-parse', 'HEAD').trim();
     fs.mkdirSync(rebaseMergeDir, { recursive: true });
     fs.writeFileSync(path.join(rebaseMergeDir, 'orig-head'), `${headSha}\n`);
     fs.writeFileSync(path.join(rebaseMergeDir, 'head-name'), 'refs/heads/main\n');
     fs.writeFileSync(path.join(rebaseMergeDir, 'onto'), `${headSha}\n`);
+    fs.appendFileSync(beelinkFile, '\nDirty edit during crashed rebase. (Source: crash2. Added 2026-11-20 by Fleet.)\n');
     const afterStaleRebase = await baseA.write({
         page: 'beelink', scope: 'shared', mode: 'append', text: 'After stale rebase abort.', source: 'ops', author: 'Fleet',
     });
     assert.equal(afterStaleRebase.pushed, true);
     assert.ok(!fs.existsSync(rebaseMergeDir));
     assert.match((await baseA.read('beelink')).text, /After stale rebase abort\./);
+    const rebaseRefs = git(baseA.dir, 'for-each-ref', '--format=%(refname)', 'refs/pi-dish/kb-recovery').trim().split('\n').filter(Boolean);
+    assert.ok(rebaseRefs.some(ref => git(baseA.dir, 'show', `${ref}:topics/beelink.md`).includes('Dirty edit during crashed rebase.')), 'dirty working file during crashed rebase was preserved in a recovery ref before rebase --abort');
+    // 3. Unborn HEAD with dirty working/staged files on a fresh clone while remote already has commits.
+    const unborn = openClone('clone-unborn');
+    fs.mkdirSync(unborn.dir, { recursive: true });
+    git(unborn.dir, 'init', '-q', '-b', 'main');
+    git(unborn.dir, 'remote', 'add', 'origin', remote);
+    fs.mkdirSync(path.join(unborn.dir, 'topics'), { recursive: true });
+    fs.writeFileSync(path.join(unborn.dir, 'topics', 'orphan.md'), '# Orphan\n\nUnborn staged note. (Source: u1. Added 2026-11-20 by Fleet.)\n');
+    git(unborn.dir, 'add', 'topics/orphan.md');
+    fs.writeFileSync(path.join(unborn.dir, 'topics', 'orphan.md'), '# Orphan\n\nUnborn working note. (Source: u2. Added 2026-11-20 by Fleet.)\n');
+    const fromUnborn = await unborn.write({
+        page: 'notes', scope: 'shared', mode: 'append', text: 'Fresh write after unborn dirty tree.', source: 'ops',
+        summary: 'Notes', author: 'Fleet',
+    });
+    assert.equal(fromUnborn.pushed, true);
+    assert.equal(git(unborn.dir, 'rev-parse', 'HEAD').trim(), git(remote, 'rev-parse', 'main').trim());
+    const unbornRefs = git(unborn.dir, 'for-each-ref', '--format=%(refname)', 'refs/pi-dish/kb-recovery').trim().split('\n').filter(Boolean);
+    assert.ok(unbornRefs.length >= 1, 'unborn HEAD dirty state saved to a recovery ref');
+    assert.ok(unbornRefs.some(ref => git(unborn.dir, 'show', `${ref}:topics/orphan.md`).includes('Unborn working note.')), 'unborn HEAD working file preserved in recovery ref');
+    assert.ok(unbornRefs.some(ref => git(unborn.dir, 'show', `${ref}^:topics/orphan.md`).includes('Unborn staged note.')), 'unborn HEAD distinct staged index preserved in recovery ref parent commit');
+    assert.match((await unborn.read('orphan')).text, /Unborn working note\./);
+    assert.match((await unborn.read('notes')).text, /Fresh write after unborn dirty tree\./);
+});
+test('pre-write rebase conflict saves local tip to a recovery ref and resets to remote so later unrelated writes succeed', async (t) => {
+    const { openClone, remote } = setup(t);
+    const baseA = openClone('clone-a');
+    const baseB = openClone('clone-b');
+    await baseA.write({
+        page: 'beelink', scope: 'shared', mode: 'append', text: 'Initial fact.', source: 'init',
+        summary: 'Beelink hub host', author: 'Fleet',
+    });
+    await baseB.read('beelink');
+    // Block remote pushes briefly so clone A keeps a local unpushed commit on topics/beelink.md.
+    const hook = path.join(remote, 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\necho "blocked" >&2\nexit 1\n', { mode: 0o755 });
+    const localOnly = await baseA.write({
+        page: 'beelink', scope: 'shared', mode: 'append', text: 'Local unpushed edit A.', source: 'local-a', author: 'Fleet',
+    });
+    assert.equal(localOnly.pushed, false);
+    const localSha = String(localOnly.commit);
+    fs.unlinkSync(hook);
+    // Meanwhile clone B pushes a conflicting edit to topics/beelink.md.
+    const remoteB = await baseB.write({
+        page: 'beelink', scope: 'shared', mode: 'append', text: 'Conflicting remote edit B.', source: 'remote-b', author: 'Other',
+    });
+    assert.equal(remoteB.pushed, true);
+    // Next write from clone A hits a pre-write rebase conflict: must report a recovery ref, save localSha, and reset to remote.
+    let conflictMessage = '';
+    await assert.rejects(baseA.write({
+        page: 'tycho', scope: 'shared', mode: 'append', text: 'Unrelated page attempt 1.', source: 'ops',
+        summary: 'Tycho host', author: 'Fleet',
+    }), (err) => {
+        assert.ok(err instanceof KnowledgeError);
+        assert.equal(err.status, 409);
+        conflictMessage = err.message;
+        return true;
+    });
+    const refMatch = /(refs\/pi-dish\/kb-recovery\/[^\s.,]+)/.exec(conflictMessage);
+    assert.ok(refMatch, `409 error must name the recovery ref (got: ${conflictMessage})`);
+    const savedRef = refMatch[1];
+    assert.equal(git(baseA.dir, 'rev-parse', savedRef).trim(), localSha, 'recovery ref points to exact unpushed local tip');
+    assert.match(git(baseA.dir, 'show', `${savedRef}:topics/beelink.md`), /Local unpushed edit A\./);
+    assert.equal(git(baseA.dir, 'rev-parse', 'HEAD').trim(), git(remote, 'rev-parse', 'main').trim(), 'active checkout reset to remote');
+    assert.equal(git(baseA.dir, 'status', '--porcelain').trim(), '');
+    // Subsequent unrelated write MUST succeed instead of returning 409 forever.
+    const unrelated = await baseA.write({
+        page: 'tycho', scope: 'shared', mode: 'append', text: 'Unrelated page succeeds after conflict reset.', source: 'ops',
+        summary: 'Tycho host', author: 'Fleet',
+    });
+    assert.equal(unrelated.pushed, true);
+    assert.match((await baseA.read('tycho')).text, /Unrelated page succeeds after conflict reset\./);
+    assert.match((await baseA.read('beelink')).text, /Conflicting remote edit B\./);
+    // Recovery ref still holds the original local commit intact.
+    assert.equal(git(baseA.dir, 'rev-parse', savedRef).trim(), localSha);
 });
 test('the routes say the knowledge base is off without a remote', async () => {
     const handlers = createKnowledgeHandlers(() => null);
