@@ -14,6 +14,8 @@ export interface SessionStreamPorts {
   viewers: Map<string, number>;
   /** Interval for SSE keepalive comments; keeps proxies (e.g. Cloudflare 100s read timeout) from dropping idle streams. */
   heartbeatMs?: number;
+  /** A session's review deck changes (`review_updated`); returns the unsubscribe. */
+  reviewUpdates?(sessionId: string, listener: (data: unknown) => void): () => void;
 }
 
 interface ExtensionUIPayload {
@@ -216,6 +218,7 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     sub('compaction_end', (data) => send('compaction_end', data));
     sub('auto_retry_start', (data) => send('auto_retry_start', data));
     sub('auto_retry_end', (data) => send('auto_retry_end', data));
+    if (ports.reviewUpdates) offs.push(ports.reviewUpdates(sessionId, data => send('review_updated', data)));
 
     let heartbeat: NodeJS.Timeout | null = null;
     const stopHeartbeat = () => {

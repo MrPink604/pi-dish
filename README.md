@@ -1144,6 +1144,37 @@ stops it fronting (and keeps it from being rediscovered). A `/page/<token>` or
 link or plain prose, from any host's session — opens in a new tab on the
 pi-dish address you're browsing, so the front door's discovery finds it.
 
+### Review decks
+
+Agents ask for decisions with a review deck instead of a list of questions at
+the end of a document: a few cards, each one short paragraph, up to four shots
+and one to three questions (`choice`, `multi`, `approve`, `text`) with the
+agent's recommended answer preselected. The `pi-dish-review` skill's CLI posts
+a deck from pi, OMP, Antigravity or any shell
+(`pi-dish-review.js ask deck.json`) and by default waits for the answers;
+bots use their `request_review` tool. The server refuses a deck over the hard
+limits (6 cards, 3 questions and 4 shots per card, 500 characters of context)
+with a 400 that says how to split it. Shots are image files the session's file
+viewer can reach (its directory, files its tools touched, uploads; a link
+that leads outside is refused), `/page/<token>/…` paths or https URLs; files are
+served from `/api/sessions/<id>/reviews/<review>/media/<slot>`, so a deck on a
+peer works through `/hosts/<name>` like any session route.
+
+Answers are stored before anything is sent, in owner-only
+`~/.pi/dish/reviews/` (one file per session, written durably; an unreadable
+file answers 500 rather than "no reviews"). They go to the agent's waiting CLI
+when one is attached; otherwise they arrive in the session as one
+`[review response: …]` message, waking a hibernated session or a bot. A CLI
+that was cut off, or is coming back after a pi-dish restart, gets a 15-second
+grace period first, so an answer is not delivered both ways; an answer that was
+being sent when pi-dish stopped is reported uncertain, never resent. A retry
+with the same submission id never sends again. The routes:
+`POST/GET /api/sessions/:id/reviews`, `GET …/:review`, `GET …/:review/wait`
+(long-poll), `POST …/:review/submit`, `POST …/:review/cancel` and
+`GET …/:review/media/:slot`; session streams carry `review_updated`, and hosts
+advertise the `reviewsV1` capability. Pages with a form block (above) keep
+working, but the skills now steer agents to decks.
+
 ### Anchored comments
 
 Select text in the file viewer, select lines in the uncommitted-diff view, or

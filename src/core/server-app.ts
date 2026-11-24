@@ -26,6 +26,7 @@ import { createPublicationHandlers } from './publication-handlers';
 import { createFileHandlers } from './file-handlers';
 import { createSessionReadHandlers } from './session-read-handlers';
 import { createSessionCommandHandlers } from './session-command-handlers';
+import { createReviewHandlers } from './review-handlers';
 import { createFeatureHandlers } from './feature-handlers';
 import { harnessCommandAvailable, runHarnessModelCommand } from './harness-feature-commands';
 import { decodeLaunchParents } from './session-catalog';
@@ -379,6 +380,30 @@ export function startServer(rootDirectory: string): Server {
   const uploadHandlers = createUploadHandlers({ root: uploadRoot, maxBytes: () => uploadMaxBytes() });
   app.get('/api/sessions/:id/uploads', uploadHandlers.limits);
   app.post('/api/sessions/:id/uploads', uploadHandlers.upload);
+
+  // Review decks: an agent's staged questions, answered inline in its transcript.
+  const reviewHandlers = createReviewHandlers({
+    sessionKnown,
+    sessionCwd: id => { const cwd = resolveSessionCwd(id); return typeof cwd === 'string' && cwd ? cwd : null; },
+    resolveSessionFile: fileHandlers.resolveSessionFile,
+    pageExists: token => !!pages.getPage(token) || fleetArtifacts.get(token)?.kind === 'page',
+    lastMessageIndex: id => {
+      const source = findSessionSource(id);
+      if (!source) return null;
+      try { const count = readSessionMessages(source).length; return count ? count - 1 : null; } catch { return null; }
+    },
+    deliverMessage: (sessionId, text) => sessionCommandHandlers.deliverText(sessionId, text, 'the session that asked for this review is not running'),
+    log: line => console.error(line),
+    // A test seam, like PI_DISH_MEMINFO_FILE: suites wait out a short grace period instead of the default.
+    graceMs: Number(process.env.PI_DISH_REVIEW_GRACE_MS) || undefined,
+  });
+  app.post('/api/sessions/:id/reviews', reviewHandlers.create);
+  app.get('/api/sessions/:id/reviews', reviewHandlers.list);
+  app.get('/api/sessions/:id/reviews/:reviewId', reviewHandlers.get);
+  app.get('/api/sessions/:id/reviews/:reviewId/wait', reviewHandlers.wait);
+  app.post('/api/sessions/:id/reviews/:reviewId/submit', reviewHandlers.submit);
+  app.post('/api/sessions/:id/reviews/:reviewId/cancel', reviewHandlers.cancel);
+  app.get('/api/sessions/:id/reviews/:reviewId/media/:slot', reviewHandlers.media);
 
   const mutationHandlers = createSessionMutationHandlers({ ownership, findSessionSource });
   app.post('/api/sessions/:id/queue/cancel', mutationHandlers.cancelQueued);
@@ -814,7 +839,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/knowledge/page', knowledgeHandlers.read);
   app.post('/api/knowledge/pages', knowledgeHandlers.write);
 
-  app.get('/api/sessions/:id/stream', createSessionStreamHandler({ getLiveSession, viewers: streamViewers }));
+  app.get('/api/sessions/:id/stream', createSessionStreamHandler({ getLiveSession, viewers: streamViewers, reviewUpdates: reviewHandlers.subscribe }));
 
   const terminalHandlers = terminal.isTerminalEnabled() ? createTerminalHandlers({
     upgradeAuthorized: accessHandlers.upgradeAuthorized,
@@ -836,6 +861,7 @@ export function startServer(rootDirectory: string): Server {
     routineRunner.stop();
     ciWatcher?.stop();
     messageHold.stop();
+    reviewHandlers.stop();
     // Detach from Prime's daemon: the poller and socket belong to this server.
     getPrimeDaemon().shutdown();
     if (shareServer) { try { shareServer.close(); } catch {} }
@@ -865,6 +891,7 @@ export function startServer(rootDirectory: string): Server {
       skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds(catalog.buildSessionCatalog) })
         .then(paths => sessionIndex.setSkillRoots(paths))
         .catch(() => {});
+      reviewHandlers.start();
       messageHold.start();
       sessionBounces.start();
       hibernation.start();

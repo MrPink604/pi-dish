@@ -1627,6 +1627,39 @@ cleared). The message escapes C0/C1, DEL, ALM, bidi and
 line-separator controls as `\xNN`/`\uNNNN`, caps each value at 2000 characters
 and the whole message, footer and omission marker included, at 32 KiB of UTF-8.
 
+## Review decks (src/core/reviews.ts, src/core/review-handlers.ts, skills/pi-dish-review)
+
+A deck is a server-owned record, not an in-process dialog, so it works mid-turn,
+after the turn, across restarts and for bots. `validateReviewSpec` is strict
+(unknown keys are errors) and its bounds are hard 400s: `MAX_CARDS` 6,
+`MAX_QUESTIONS_PER_CARD` 3, `MAX_MEDIA_PER_CARD` 4, `MAX_CONTEXT_CHARS` 500;
+question ids are unique across the deck because answers are keyed by them.
+Media is resolved once, at creation: an https URL or a `/page/<token>/…` path
+(the page must exist on this host) passes through as a URL; anything else must
+be an image the session's file viewer reaches exactly
+(`FileHandlers.resolveSessionFile`, compared to the requested absolute path so
+its fuzzy fallback never substitutes another file), and a symlink must not
+lead out: the real file is under the real cwd or itself in reach. The record
+keeps the path and its real path; the media route serves only while the path
+still resolves to that real path. The browser never sees host paths, only
+`asset` slots or URLs (`clientReview`).
+
+Store: one `0600` file per canonical session under `~/.pi/dish/reviews/`,
+named by a hash, replaced durably; read fails closed (a corrupt file is a
+500, never empty, so a delivered answer is never replayed). At most
+`MAX_OPEN_REVIEWS` open per session; answered and cancelled ones are evicted
+past 50, never one whose delivery is pending or in flight. A submission is
+written (status `submitted`, delivery `pending`) before the 202. `settle`
+then gives it to every attached `wait` long-poll (`via: waiter`), or holds it
+while a waiter detached less than the grace period ago (or, for a `wait: true`
+deck, within the grace period of its creation or the server's start) and otherwise writes `delivering`
+and sends one `[review response: …]` through `deliverText` (OMP syntax
+defused with page-forms' `literalPrompt`). A 409 refusal is `failed`; any other
+error or an unconfirmed admission is `uncertain`. `start()` reschedules
+`pending` answers after a restart and turns `delivering` into `uncertain`.
+A repeated submission id answers 200 `repeated`; another id on an answered deck
+is a 409. `PI_DISH_REVIEW_GRACE_MS` is a test seam (default 15 s).
+
 ## Multi-host fleet (TASKS/multi-host.md; lib/host-identity.js, lib/remote-hosts.js)
 
 One pane of glass over several pi-dish hosts, t3code-shaped: **the client is

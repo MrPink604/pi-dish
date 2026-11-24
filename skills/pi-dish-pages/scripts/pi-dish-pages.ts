@@ -39,9 +39,10 @@ Flags:
   --url URL        pi-dish base URL (default $PI_DISH_URL, else http://127.0.0.1:3333)
 
 The page is served live from disk: after edits, refresh; do not re-publish.
-A page with a <script type="application/pi-dish-form"> block is validated on
-publish; its answers arrive in this session as a "[form response: …]" message,
-and \`answers <token>\` prints the latest delivered answer set.
+To ask the user for decisions, use pi-dish-review (cards inline in the
+transcript), not a form in the page. A page that already has a
+<script type="application/pi-dish-form"> block keeps working: \`answers <token>\`
+prints its latest delivered answer set.
 
 Example:
   pi-dish-pages publish "$PWD/plan.html" --title "Refactor plan"`;

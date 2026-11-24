@@ -109,6 +109,31 @@ test('kb_search, kb_read and kb_write reach the knowledge routes, and a write ca
     assert.equal(results[1], '[shared] index.md (revision abcdef012345):\n\n# Knowledge\n\n- [Backups](topics/backups.md): Nightly backups\n');
     assert.equal(results[2], 'Saved: topics/tycho.md (revision 112233445566) (a new page, added to the index). It is not on the remote yet (git push: unreachable); the next write pushes it.');
 });
+test('request_review posts the deck to the bot\'s own session without waiting, and a refusal reaches the bot', async (t) => {
+    const calls = [];
+    const api = async (pathname, body) => {
+        // The knowledge index the bot reads as it opens is off here.
+        if (pathname.startsWith('/api/knowledge/'))
+            throw new Error('off');
+        calls.push([pathname, body]);
+        if (calls.length > 1)
+            throw new Error('cards has 7 items; max is 6 — ask fewer things now, or post a follow-up deck after these answers');
+        return { review: { id: 'rv_0123456789abcdef' } };
+    };
+    const bot = await openTestBot(t, noSessions, { api });
+    const cards = [{ id: 'mags', title: 'Magazines', context: 'Pick one.', questions: [{ id: 'q', type: 'choice', prompt: 'Which?', options: ['a', 'b'], default: 'a' }] }];
+    const call = (args) => bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('request_review', args)], { stopReason: 'toolUse' });
+    bot.respond(call({ title: 'Looks', cards }), call({ title: 'Too big', cards }), bot.faux.fauxAssistantMessage('Posted.'));
+    await bot.runtime.prompt('Ask me about the magazines', 'followUp');
+    await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === 'Posted.'), 'the run answers');
+    const route = `~sk1_${Buffer.from(JSON.stringify(['bot', BOT.id])).toString('base64url')}`;
+    assert.deepEqual(calls[0], [`/api/sessions/${encodeURIComponent(route)}/reviews`, { title: 'Looks', cards, wait: false }]);
+    const results = bot.mirrorLines().filter(line => line.type === 'message' && line.message.role === 'toolResult')
+        .map(line => line.message);
+    assert.match(textOf(results[0]), /^Posted review rv_0123456789abcdef: 1 card, shown in your chat\./);
+    assert.equal(results[1].isError, true);
+    assert.match(textOf(results[1]), /^The review was refused: cards has 7 items; max is 6/);
+});
 function textOf(message) {
     return runtimeModule.messageText(message);
 }
@@ -1399,13 +1424,13 @@ test('kb_read/kb_write/kb_search enforce required scope, expose revision to code
     });
 });
 test('at 90%-96% with an unsaved notebook, pi-dish grants one durable rescue turn; saving and calling new_context rolls over cleanly', async (t) => {
-    // fauxProvider estimates tokens as ceil(chars / 4); with contextWindow = 100_000 and ~3k system tokens,
-    // a ~356k-char prompt lands cleanly at ~92% (>= 90% FORCED_RATIO and < 97% HARD_FORCED_RATIO).
+    // fauxProvider estimates tokens as ceil(chars / 4); with contextWindow = 100_000 and ~8k system tokens,
+    // a ~340k-char prompt lands cleanly at ~93% (>= 90% FORCED_RATIO and < 97% HARD_FORCED_RATIO).
     const bot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
     bot.respond(bot.faux.fauxAssistantMessage('Finished the task.'), 
     // Rescue turn arrives: bot saves notebook and calls new_context.
     bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('context_notes', { action: 'write', text: 'Rescued facts.' })], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('new_context', { summary: 'Rescued before limit' })], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage('Rolled over cleanly.'));
-    await bot.runtime.prompt(`Do some heavy work ${'w'.repeat(356_000)}`, 'followUp');
+    await bot.runtime.prompt(`Do some heavy work ${'w'.repeat(340_000)}`, 'followUp');
     await until(() => said(bot, 'Rolled over cleanly.'), 'rescue turn completes rollover');
     const limits = customs(bot, 'bot-context-limit');
     assert.equal(limits.length, 1);
@@ -1417,10 +1442,10 @@ test('at 90%-96% with an unsaved notebook, pi-dish grants one durable rescue tur
     assert.match(instructionsText(bot.requests.at(-1)), /Rescued facts\./);
 });
 test('ignoring the 90% rescue turn force-closes after one turn with an unsaved-notebook WARNING, and >=97% skips the rescue turn', async (t) => {
-    // Case 1: ~92% unsaved, bot ignores rescue turn -> force-closes after that one turn with WARNING.
+    // Case 1: ~93% unsaved, bot ignores rescue turn -> force-closes after that one turn with WARNING.
     const ignoringBot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
     ignoringBot.respond(ignoringBot.faux.fauxAssistantMessage('First answer.'), ignoringBot.faux.fauxAssistantMessage('I ignored the rescue.'));
-    await ignoringBot.runtime.prompt(`Heavy work ${'w'.repeat(356_000)}`, 'followUp');
+    await ignoringBot.runtime.prompt(`Heavy work ${'w'.repeat(340_000)}`, 'followUp');
     await until(() => ignoringBot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'forced rollover after ignored rescue');
     assert.equal(customs(ignoringBot, 'bot-context-limit').length, 1, 'at most one rescue turn per window');
     const ignoredMarker = ignoringBot.mirrorLines().find(line => line.customType === 'bot-context-window');

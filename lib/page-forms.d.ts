@@ -118,6 +118,7 @@ export declare function validateAnswers(spec: FormSpec, raw: unknown): {
 /** Questions with a default whose answer differs from it, in form order. */
 export declare function changedQuestions(spec: FormSpec, answers: Record<string, Answer | null>): FormQuestion[];
 export declare function visibleText(text: string): string;
+export declare function literalPrompt(text: string): string;
 export interface FormMessageInput {
     spec: FormSpec;
     answers: Record<string, Answer | null>;

@@ -53,7 +53,7 @@ function sanitizeImages(images: unknown): ImageAttachment[] {
 /** HTTP admission plus server-originated text input; lifecycle, routine and recovery delivery keep their owners. */
 export function createSessionCommandHandlers(ports: SessionCommandPorts): {
   prompt: CommandHandler; steer: CommandHandler; followUp: CommandHandler;
-  deliverText(id: string, text: string): Promise<string | null>;
+  deliverText(id: string, text: string, inactiveMessage?: string): Promise<string | null>;
 } {
   async function deliver(req: CommandRequest, res: CommandResponse, operation: 'prompt' | 'steer' | 'followUp') {
     const body: CommandBody = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
@@ -120,9 +120,9 @@ export function createSessionCommandHandlers(ports: SessionCommandPorts): {
    * every other transport applies its own admission default to plain input.
    * Resolves to null once the session took it, or to why that is unconfirmed.
    */
-  async function deliverText(id: string, text: string): Promise<string | null> {
+  async function deliverText(id: string, text: string, inactiveMessage = 'the session that published this page is not running'): Promise<string | null> {
     const session = await ports.getLiveSession(id) ?? await ports.wake(id);
-    if (!session) throw httpError('the session that published this page is not running', 409);
+    if (!session) throw httpError(inactiveMessage, 409);
     const followUp = ports.supports(session, 'followUp');
     const prompt = ports.supports(session, 'prompt');
     if (!followUp && !prompt) throw httpError('this session does not accept messages', 409);

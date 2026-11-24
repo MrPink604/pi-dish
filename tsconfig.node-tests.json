@@ -12,6 +12,7 @@
     "test/skill-sessions-fleet.test.ts",
     "test/fleet-artifacts.test.ts",
     "test/page-forms.test.ts",
+    "test/reviews.test.ts",
     "test/omp-bridge-session-switch.test.ts",
     "test/omp-tree-bridge.test.ts",
     "test/session-refs.test.ts",

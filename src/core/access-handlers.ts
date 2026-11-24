@@ -11,6 +11,7 @@ import * as terminal from './terminal';
 import * as tmux from './tmux';
 import { PRIVATE_UNLOCK_HEADER } from './private-access';
 import { FORM_CLIENT_HEADER, PAGE_FORMS_CAPABILITY } from './page-forms';
+import { REVIEWS_CAPABILITY } from './reviews';
 
 export type TransportRequest = express.Request<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 export type TransportResponse = express.Response<unknown, Record<string, unknown>>;
@@ -152,6 +153,8 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
       refAliases: true, cacheLifetimes: true, hostHealth: true, push: true, privateUnlock: true,
       // The page-form protocol (owner view, receipts, fingerprints); bump the name on a breaking change.
       [PAGE_FORMS_CAPABILITY]: true,
+      // Review decks under /api/sessions/:id/reviews (src/core/reviews.ts).
+      [REVIEWS_CAPABILITY]: true,
     };
     if (terminal.isTerminalEnabled()) capabilities.terminal = true;
     if (tmux.isTmuxAvailable()) capabilities.tmux = true;

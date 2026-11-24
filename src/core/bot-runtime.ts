@@ -41,6 +41,7 @@ import { sessionRefAliases } from './helper-refs';
 import type { ProtocolRecord } from './wire-protocol';
 import { loadCacheRetentionConfig, type CacheRetentionConfig } from './cache-retention';
 import { readDishSettings } from './dish-store';
+import { encodeSessionKey, validSessionId } from './session-key';
 import {
   composeIdleDraftRequest,
   idleRolloverConfig,
@@ -682,6 +683,10 @@ const PREAMBLE = [
   'prompt to your future self, complete on its own. Answer a routine\'s message in this chat as you would the user; it',
   'comes from the schedule, not from the user. A run missed while pi-dish was down arrives once when it is back.',
   '',
+  'Reviews: when the user must decide two or more things, or pick between visuals, ask with request_review: a few cards,',
+  'one idea and at most three questions each, your recommendation preselected. Never list open questions at the end of a',
+  'message, and on a status check point to the open deck instead of asking again.',
+  '',
   'Code mode: the codemode tool runs a short JavaScript script that calls your tools as `await tools.<name>(args)`;',
   'only what the script prints or returns enters this conversation. Use it when a request takes several calls whose',
   'results you filter or combine, or the same call across hosts or sessions ("which sessions on any host have been',
@@ -689,7 +694,7 @@ const PREAMBLE = [
   'for at most ten minutes and you are busy while it runs, so keep it short. In a script, sessions wait returns a',
   'session\'s answer once it settles, so a script may start short work with spawn_worker and use the answer; a',
   'worker\'s answer a script took is not reported to you again. Longer work still goes to a worker and comes back as',
-  'its report. Scripts cannot call new_context, bot_create or bot_update.',
+  'its report. Scripts cannot call new_context, bot_create, bot_update or request_review.',
 ].join('\n');
 
 // ---------------------------------------------------------------------------
@@ -1918,6 +1923,44 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     },
   });
 
+  const requestReview = durable.defineTool({
+    name: 'request_review',
+    description: 'Ask the user for decisions as a short deck of cards shown in your own chat, one card at a time with your '
+      + 'recommended answers preselected. Use it instead of listing questions in a message. Limits: 1-6 cards; each card has '
+      + 'an id, a title, one short paragraph of context (at most 500 characters: what is decided and what changes), 0-4 '
+      + 'labelled shots and 1-3 questions. Pre-select your recommendation on every question with a one-line "why". The '
+      + 'answers arrive later as a message starting "[review response:"; end your turn after posting and do not repeat the '
+      + 'questions in chat.',
+    parameters: obj({
+      title: str(),
+      companionPage: opt(str({ description: 'A /page/<token> path or https URL holding the full detail' })),
+      cards: arr(anyValue({
+        description: '{ id, title, context, media?: [{ src, label? }], questions: [...] }. src: an https URL or a /page/<token>/… '
+          + 'path. A question is { id, type, prompt, ... }: type "choice" or "multi" with options (2-6 of { value, label?, '
+          + 'description? } or plain strings), default (a value; a list for multi), why?, allowOther?; type "approve" with '
+          + 'default "approve" or "revise", approveLabel?, reviseLabel?, why?; type "text" with placeholder?, default?, required?',
+      })),
+    }),
+    // A deck is one deliberate call: scripts cannot post one, and its long description stays out of the code mode budget.
+    callers: ['model'],
+    // A rerun would post the deck twice.
+    replay: 'unsafe',
+    execute: async (args) => {
+      const botId = bot.id;
+      if (!validSessionId(botId)) return refusal(`This bot's id ${botId} cannot name a session.`);
+      let posted: { review: { id: string } };
+      try {
+        posted = await hub(`/api/sessions/${encodeURIComponent(encodeSessionKey('bot', botId))}/reviews`, {
+          title: args.title, cards: args.cards, wait: false, ...(args.companionPage ? { companionPage: args.companionPage } : {}),
+        } as ProtocolRecord) as typeof posted;
+      } catch (error) {
+        return refusal(`The review was refused: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return text(`Posted review ${posted.review.id}: ${args.cards.length} card${args.cards.length === 1 ? '' : 's'}, shown in your chat. `
+        + 'The answers arrive as a "[review response:" message. End your turn now without repeating the questions.');
+    },
+  });
+
   type OwnRoutine = {
     name: string; description: string; prompt: string; enabled: boolean; schedule: { cron: string } | null;
     stats?: { nextRunAt: number | null; lastInvocation: { status: string; startedAt: number } | null };
@@ -2232,7 +2275,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   const BotExtension = durable.defineExtension({
     name: 'bot',
     sections: [durable.section('bot-rules', () => PREAMBLE, { tag: false })],
-    tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite, botsTool, botUpdate, botCreate, roomPost, roomRead, askBot, scheduleTool],
+    tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite, botsTool, botUpdate, botCreate, roomPost, roomRead, requestReview, askBot, scheduleTool],
     tasks: [WorkerWatch],
     hooks: [reminder, draftGuard],
   });

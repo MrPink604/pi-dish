@@ -27,6 +27,12 @@ export interface FileHandlers {
   filePreview: FileHandler;
   diffPatch: FileHandler;
   diffSummary: FileHandler;
+  /**
+   * A path as the session's file viewer reaches it (cwd, files its tools
+   * touched, agy brain, uploads); null when the session is unknown or the
+   * path is outside its reach.
+   */
+  resolveSessionFile(sessionId: string, mention: string): Promise<string | null>;
   retireSession(sessionId: string): void;
 }
 
@@ -70,15 +76,11 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     }
   };
 
-  async function prepareViewerFile(req: FileRequest) {
-    const mention = String(req.query.path || '');
-    if (!mention || mention.length > 1024) {
-      return { status: 400, body: { error: 'path required' } } as const;
-    }
-    const sessionId = req.params.id;
+  /** null: the session is unknown. */
+  async function resolveMention(sessionId: string, mention: string) {
     const cwd = sessionCwd(sessionId);
     const session = ports.findSessionSource(sessionId);
-    if (!cwd && !session) return { status: 404, body: { error: 'Unknown session' } } as const;
+    if (!cwd && !session) return null;
     let messages: readonly unknown[] = [];
     if (session) { try { messages = readSessionMessages(session); } catch {} }
     const extraRoots: Array<{ root: string; denySubdirs?: readonly string[] }> = [];
@@ -87,6 +89,17 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     const uploadDir = sessionUploadDir(ports.uploadRoot(), sessionId);
     if (uploadDir) extraRoots.push({ root: uploadDir });
     const resolved = await resolveFileMention(mention, { cwd, messages, extraRoots: extraRoots.length ? extraRoots : undefined });
+    return { cwd, session, resolved };
+  }
+
+  async function prepareViewerFile(req: FileRequest) {
+    const mention = String(req.query.path || '');
+    if (!mention || mention.length > 1024) {
+      return { status: 400, body: { error: 'path required' } } as const;
+    }
+    const reach = await resolveMention(req.params.id, mention);
+    if (!reach) return { status: 404, body: { error: 'Unknown session' } } as const;
+    const { cwd, session, resolved } = reach;
     if (!resolved) {
       return { status: 404, body: { error: `Couldn't find "${mention}" among this session's files` } } as const;
     }
@@ -181,6 +194,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
   return {
     searchDirectories, directoryChildren, searchSessionFiles, fileContent,
     filePreview, diffPatch, diffSummary,
+    resolveSessionFile: async (sessionId, mention) => (await resolveMention(sessionId, mention))?.resolved?.absPath ?? null,
     retireSession: diffView.retireSession,
   };
 }

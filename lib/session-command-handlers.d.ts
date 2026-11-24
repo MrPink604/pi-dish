@@ -19,6 +19,6 @@ export declare function createSessionCommandHandlers(ports: SessionCommandPorts)
     prompt: CommandHandler;
     steer: CommandHandler;
     followUp: CommandHandler;
-    deliverText(id: string, text: string): Promise<string | null>;
+    deliverText(id: string, text: string, inactiveMessage?: string): Promise<string | null>;
 };
 export {};

@@ -15,6 +15,12 @@ export interface FileHandlers {
     filePreview: FileHandler;
     diffPatch: FileHandler;
     diffSummary: FileHandler;
+    /**
+     * A path as the session's file viewer reaches it (cwd, files its tools
+     * touched, agy brain, uploads); null when the session is unknown or the
+     * path is outside its reach.
+     */
+    resolveSessionFile(sessionId: string, mention: string): Promise<string | null>;
     retireSession(sessionId: string): void;
 }
 export declare function createFileHandlers(ports: FileHandlerPorts): FileHandlers;

@@ -542,7 +542,7 @@ export function visibleText(text: string): string {
 // opens with `[`, so an answer's leading `/` (a command) or `!` never reaches
 // the start of the prompt.
 const MAGIC_KEYWORDS = /(?<![\p{L}\p{N}_./\\-])(ultrathink|chillax|orchestrate|workflowz|jevify)(?![\p{L}\p{N}_/\\-])/gu;
-function literalPrompt(text: string): string {
+export function literalPrompt(text: string): string {
   return text
     .replace(/(^|\s)\^/g, '$1\\^')
     .replace(/(^|[\s([{<"'`])@/g, '$1\\@')

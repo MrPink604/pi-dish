@@ -7,5 +7,7 @@ export interface SessionStreamPorts {
     viewers: Map<string, number>;
     /** Interval for SSE keepalive comments; keeps proxies (e.g. Cloudflare 100s read timeout) from dropping idle streams. */
     heartbeatMs?: number;
+    /** A session's review deck changes (`review_updated`); returns the unsubscribe. */
+    reviewUpdates?(sessionId: string, listener: (data: unknown) => void): () => void;
 }
 export declare function createSessionStreamHandler(ports: SessionStreamPorts): RouteHandler;
