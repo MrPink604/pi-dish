@@ -493,13 +493,18 @@ async function startApp(): Promise<void> {
 
   appChrome.setFocus(localStorage.getItem('pi-dish-focus') === '1');
 
-  // A backgrounded phone or slept laptop can leave the event stream half-open
-  // without an error, so returning to the tab reconnects the selected session.
+  // A restored PWA may receive pageshow/resume or online without a visible
+  // transition. The stream owner coalesces these signals for the same wake.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
+    messageStreamController.resume();
     sidebarLists.refresh();
-    if (sessionState.currentSession?.isActive) void messageStreamController.start();
   });
+  document.addEventListener('resume', messageStreamController.resume);
+  window.addEventListener('pageshow', event => {
+    if (event.persisted || !document.hidden) messageStreamController.resume();
+  });
+  window.addEventListener('online', () => { if (!document.hidden) messageStreamController.resume(); });
 
   // Only self identity must precede list publication and client-key migration.
   // Peer identification publishes independently; it is not a startup barrier.
@@ -932,7 +937,7 @@ const messageStreamController: ReturnType<typeof createMessageStream> = createMe
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
   reviewUpdate: (payload, session) => reviewDecks.applyUpdate(payload, session),
   reviews: owner => reviewDecks.load(owner),
-  status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: refreshSessions, artifacts: owner => sessionInfo.refreshArtifacts(owner),
+  status: setStatus, catchup: (owner, preserveLive) => transcriptController.catchup(owner, preserveLive), refresh: refreshSessions, artifacts: owner => sessionInfo.refreshArtifacts(owner),
   ...chromeScroll, follow: () => appChrome.following, highlight: root => richText.highlight(root),
   select: selectSession, deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),
 });

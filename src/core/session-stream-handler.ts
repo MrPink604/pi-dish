@@ -12,7 +12,7 @@ export interface SessionStreamPorts {
   getLiveSession(sessionId: string): Promise<LiveSession | null>;
   /** Open browser event streams per canonical session; hibernation reads it. */
   viewers: Map<string, number>;
-  /** Interval for SSE keepalive comments; keeps proxies (e.g. Cloudflare 100s read timeout) from dropping idle streams. */
+  /** Interval for observable SSE heartbeats, also below reverse-proxy idle timeouts. */
   heartbeatMs?: number;
   /** A session's review deck changes (`review_updated`); returns the unsubscribe. */
   reviewUpdates?(sessionId: string, listener: (data: unknown) => void): () => void;
@@ -227,7 +227,7 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     if (heartbeatMs > 0) {
       heartbeat = setInterval(() => {
         if (req.destroyed || res.destroyed || res.writableEnded) { stopHeartbeat(); return; }
-        res.write(': keepalive\n\n');
+        res.write('event: keepalive\ndata: {}\n\n');
         res.flush?.();
       }, heartbeatMs);
       heartbeat.unref();

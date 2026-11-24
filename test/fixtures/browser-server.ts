@@ -1,4 +1,5 @@
 // Started by browser fixtures only, with a sanitized environment and HOME.
+import type { Server, ServerResponse } from 'node:http';
 import fs = require('node:fs');
 import net = require('node:net');
 import path = require('node:path');
@@ -7,6 +8,8 @@ import { record as isRecord } from '../../lib/helper-values.js';
 process.once('disconnect', () => process.exit(0));
 
 (async () => {
+  // Drop the phone-facing socket without ending the underlying agent session.
+  const streamResponses = new Set<ServerResponse>();
   if (process.env.PI_DISH_TEST_LIVE_SESSION) {
     const id = process.env.PI_DISH_TEST_LIVE_SESSION;
     const home = process.env.HOME;
@@ -47,6 +50,13 @@ process.once('disconnect', () => process.exit(0));
     }));
     process.on('message', (message: unknown) => {
       if (!isRecord(message)) throw new Error('Invalid browser fixture event');
+      if (message.control === 'kill-streams') {
+        const killed = streamResponses.size;
+        for (const response of streamResponses) response.destroy();
+        streamResponses.clear();
+        process.send?.({ type: 'streams-killed', count: killed });
+        return;
+      }
       const { event, data, entry } = message;
       if (entry) fs.appendFileSync(sessionFile, JSON.stringify(entry) + '\n');
       if (event === 'turn_start') turnInProgress = true;
@@ -57,7 +67,14 @@ process.once('disconnect', () => process.exit(0));
       if (event) for (const socket of clients) socket.write(JSON.stringify({ type: 'event', event, data }) + '\n');
     });
   }
-  const server: import('node:http').Server = require('../../server');
+  const server: Server = require('../../server');
+  if (process.env.PI_DISH_TEST_LIVE_SESSION) {
+    server.on('request', (req, res) => {
+      if (!req.url || !/\/api\/sessions\/[^/]+\/stream(?:\?|$)/.test(req.url)) return;
+      streamResponses.add(res);
+      res.on('close', () => streamResponses.delete(res));
+    });
+  }
   const ready = () => {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Browser fixture server lacks a TCP address');

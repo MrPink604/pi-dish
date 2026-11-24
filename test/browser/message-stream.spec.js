@@ -1,6 +1,8 @@
 // Generated test/tool from test/browser/message-stream.spec.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const node_fs_1 = require("node:fs");
+const node_path_1 = require("node:path");
 const fixtures_js_1 = require("./fixtures.js");
 async function setup(page, fleet) {
     await fleet.select(fleet.self);
@@ -190,4 +192,95 @@ async function setup(page, fleet) {
     });
     (0, fixtures_js_1.expect)(await page.evaluate(() => window.streamOriginFailures)).toEqual([null]);
     await page.evaluate(() => window.ownedStream.dispose());
+});
+// Playwright normally forces focus, in which case Chromium acknowledges
+// Page.setWebLifecycleState without actually freezing the renderer.
+const wakeTest = fixtures_js_1.test.extend({
+    page: async ({ playwright, launchOptions }, use) => {
+        const server = await playwright.chromium.launchServer({ ...launchOptions, args: [...launchOptions.args ?? [], '--remote-debugging-port=0'] });
+        try {
+            const profile = server.process().spawnargs.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+            const port = (0, node_fs_1.readFileSync)((0, node_path_1.join)(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0];
+            const browser = await playwright.chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true });
+            try {
+                await use(await browser.contexts()[0].newPage());
+            }
+            finally {
+                await browser.close();
+            }
+        }
+        finally {
+            await server.close();
+        }
+    },
+});
+wakeTest.describe('production wake recovery', () => {
+    wakeTest.use({ instrumentApp: false, liveSessions: true });
+    for (const signal of ['visibilitychange', 'pageshow', 'resume', 'online']) {
+        wakeTest(`recovers missed and live messages on ${signal}`, async ({ page, fleet }) => {
+            const host = signal === 'visibilitychange' ? fleet.peer : fleet.self;
+            const path = `${host.base}/api/sessions/${fixtures_js_1.ROOT}`;
+            const initial = page.waitForResponse(r => r.url().startsWith(`${path}/messages?after=`));
+            await fleet.select(host);
+            await initial;
+            let opens = 0, catchups = 0, navigations = 0;
+            page.on('request', r => {
+                if (r.url().startsWith(`${path}/stream`))
+                    opens++;
+                if (r.url().startsWith(`${path}/messages?after=`))
+                    catchups++;
+            });
+            page.on('framenavigated', f => { if (f === page.mainFrame())
+                navigations++; });
+            const cdp = await page.context().newCDPSession(page);
+            if (signal === 'resume') {
+                await page.evaluate(() => {
+                    document.addEventListener('freeze', () => { document.documentElement.dataset.froze = 'yes'; }, { once: true });
+                });
+                // Model elapsed wall time without running background timers.
+                await page.clock.setFixedTime(new Date(Date.now() + 120_000));
+                await cdp.send('Page.setWebLifecycleState', { state: 'frozen' });
+            }
+            else {
+                await page.evaluate(kind => {
+                    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+                    document.dispatchEvent(new Event('visibilitychange'));
+                    if (kind === 'pageshow')
+                        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+                    // Observe the app parking its native source, not just TCP close on the server.
+                    const close = EventSource.prototype.close;
+                    EventSource.prototype.close = function () { close.call(this); document.documentElement.dataset.parked = 'yes'; };
+                }, signal);
+            }
+            (0, fixtures_js_1.expect)(await host.killStreams()).toBe(1);
+            if (signal !== 'resume')
+                await page.waitForFunction(() => document.documentElement.dataset.parked === 'yes');
+            if (host === fleet.peer)
+                host.emit('turn_start', {}); // catch up before this turn ends
+            host.emit('', {}, { type: 'message', message: { role: 'user', content: 'written during sleep' } });
+            if (signal === 'resume') {
+                await cdp.send('Page.setWebLifecycleState', { state: 'active' });
+                (0, fixtures_js_1.expect)(await page.evaluate(() => document.documentElement.dataset.froze)).toBe('yes');
+            }
+            else {
+                await page.evaluate(kind => {
+                    Reflect.deleteProperty(document, 'hidden');
+                    if (kind === 'visibilitychange')
+                        document.dispatchEvent(new Event(kind));
+                    else if (kind === 'pageshow')
+                        window.dispatchEvent(new PageTransitionEvent(kind, { persisted: true }));
+                    else
+                        window.dispatchEvent(new Event('online'));
+                    if (kind === 'visibilitychange')
+                        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+                }, signal);
+            }
+            await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('written during sleep');
+            host.emit('message_end', { message: { role: 'assistant', content: [{ type: 'text', text: 'streaming after wake' }] } });
+            await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('streaming after wake');
+            await (0, fixtures_js_1.expect)(fleet.row(host)).toHaveClass(/\bactive\b/);
+            (0, fixtures_js_1.expect)({ opens, catchups, navigations }).toEqual({ opens: 1, catchups: 1, navigations: 0 });
+            await cdp.detach();
+        });
+    }
 });

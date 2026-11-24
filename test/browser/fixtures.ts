@@ -1,6 +1,7 @@
 import { test as base, expect, type Locator, type Route, type TestInfo } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
 import { fork } from 'node:child_process';
+import { on } from 'node:events';
 import fs = require('node:fs');
 import path = require('node:path');
 import { createTestTempDir, sanitizeTestEnv } from '../test-env.js';
@@ -18,6 +19,8 @@ export interface BrowserHost {
   child: ChildProcess;
   commands: Record<string, unknown>[];
   emit(event: string, data: unknown, entry?: unknown): boolean;
+  /** Destroys accepted SSE responses server-side, like a dropped mobile socket. */
+  killStreams(): Promise<number>;
   base: string;
   hostId: string;
 }
@@ -90,6 +93,14 @@ async function startHost(label: string, logs: string[], started: StoppingHost[],
     }
   });
   const emit = (event: string, data: unknown, entry?: unknown): boolean => child.send({ event, data, entry });
+  async function killStreams(): Promise<number> {
+    const replies = on(child, 'message', { signal: AbortSignal.timeout(5000) });
+    child.send({ control: 'kill-streams' });
+    for await (const [reply] of replies) {
+      if (isRecord(reply) && reply.type === 'streams-killed' && typeof reply.count === 'number') return reply.count;
+    }
+    throw new Error(`${label} closed before acknowledging the SSE drop`);
+  }
   const base = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label} startup timed out`)), 15000);
     const failed = (err: Error) => { clearTimeout(timer); reject(err); };
@@ -102,7 +113,7 @@ async function startHost(label: string, logs: string[], started: StoppingHost[],
   const descriptor: unknown = await response.json();
   if (!isRecord(descriptor)) throw new Error(`${label} descriptor is invalid`);
   if (typeof descriptor.hostId !== 'string') throw new Error(`${label} descriptor lacks hostId`);
-  return { home, label, token, child, commands, emit, base, hostId: descriptor.hostId };
+  return { home, label, token, child, commands, emit, killStreams, base, hostId: descriptor.hostId };
 }
 
 async function stopHost(host: StoppingHost): Promise<void> {

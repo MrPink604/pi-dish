@@ -66,7 +66,9 @@ Rules of thumb:
   activity; search across every session, and save reusable filters as chips.
 - **Live streaming** — markdown renders live mid-stream via an incremental
   block renderer; tool activity folds into per-turn accordions; a working
-  badge shows elapsed time and the currently running tool.
+  badge shows elapsed time and the currently running tool. When the phone
+  returns to the chat, it reconnects a missing or stale stream and catches
+  up on messages written while the app was asleep.
 - **Prompting** — send prompts, steer mid-run, or queue follow-ups. Paste, drop
   or attach any file: images reach the model as images (downscaled
   client-side, phone photos are huge), and everything else is uploaded to the

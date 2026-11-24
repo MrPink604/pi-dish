@@ -1,13 +1,14 @@
 // Generated test/tool from test/fixtures/browser-server.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-// Started by browser fixtures only, with a sanitized environment and HOME.
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const helper_values_js_1 = require("../../lib/helper-values.js");
 process.once('disconnect', () => process.exit(0));
 (async () => {
+    // Drop the phone-facing socket without ending the underlying agent session.
+    const streamResponses = new Set();
     if (process.env.PI_DISH_TEST_LIVE_SESSION) {
         const id = process.env.PI_DISH_TEST_LIVE_SESSION;
         const home = process.env.HOME;
@@ -53,6 +54,14 @@ process.once('disconnect', () => process.exit(0));
         process.on('message', (message) => {
             if (!(0, helper_values_js_1.record)(message))
                 throw new Error('Invalid browser fixture event');
+            if (message.control === 'kill-streams') {
+                const killed = streamResponses.size;
+                for (const response of streamResponses)
+                    response.destroy();
+                streamResponses.clear();
+                process.send?.({ type: 'streams-killed', count: killed });
+                return;
+            }
             const { event, data, entry } = message;
             if (entry)
                 fs.appendFileSync(sessionFile, JSON.stringify(entry) + '\n');
@@ -71,6 +80,14 @@ process.once('disconnect', () => process.exit(0));
         });
     }
     const server = require('../../server');
+    if (process.env.PI_DISH_TEST_LIVE_SESSION) {
+        server.on('request', (req, res) => {
+            if (!req.url || !/\/api\/sessions\/[^/]+\/stream(?:\?|$)/.test(req.url))
+                return;
+            streamResponses.add(res);
+            res.on('close', () => streamResponses.delete(res));
+        });
+    }
     const ready = () => {
         const address = server.address();
         if (!address || typeof address === 'string')

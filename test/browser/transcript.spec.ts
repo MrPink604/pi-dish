@@ -59,6 +59,18 @@ test('out-of-order catchup cannot regress the cursor or blank the retained final
   await reply(page, 3, { messages: [{ role: 'assistant', index: 12, content: 'authoritative answer' }], lastIndex: 12, totalMessages: 13 }); await page.evaluate(() => window.finalCatchup);
   await expect(page.locator('#messages')).not.toContainText('retained answer'); await expect(page.locator('#messages')).toContainText('authoritative answer');
 });
+test('a mid-turn wake catchup keeps replayed tools and the new streaming answer after missed history', async ({ page, fleet }) => {
+  await setup(page, fleet); await initial(page);
+  await page.evaluate(() => {
+    window.newCatchup = window.ownedTranscript.catchup(undefined, true);
+    fixtureApp.features.liveToolsController.append({ toolCallId: 'wake-read', toolName: 'read', args: { path: 'notes' } });
+    fixtureApp.features.streamingRenderer.render({ role: 'assistant', content: [{ type: 'text', text: 'still writing' }] });
+  });
+  await reply(page, 1, { messages: [{ role: 'assistant', index: 11, content: 'finished while asleep' }], lastIndex: 11 });
+  await page.evaluate(() => window.newCatchup);
+  await expect(page.locator('#messages [data-msg-index="11"] ~ [data-tool-call-id="wake-read"]')).toBeVisible();
+  await expect(page.locator('#messages [data-msg-index="11"] ~ [data-streaming="true"]')).toContainText('still writing');
+});
 test('cached DOM keeps host identity, node state and endpoint ownership', async ({ page, fleet }) => {
   await setup(page, fleet); await initial(page);
   const result = await page.evaluate(({ id, self, peer }) => {

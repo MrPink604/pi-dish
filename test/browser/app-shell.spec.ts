@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test, expect, ROOT, CHILD, heldRoute } from './fixtures.js';
 test('startup restoration cannot replace a selection made while initial lists are loading', async ({ page, fleet }) => {
   await page.evaluate(({ host, id }) => localStorage.setItem('pi-dish-session', `${host} ${id}`), { host: fleet.self.hostId, id: ROOT });
@@ -70,26 +72,44 @@ test('static bindings retire detached controls and disposal removes listeners', 
 test.describe('backgrounded-tab revival', () => {
   test.use({ liveSessions: true });
 
-  test('returning to the tab reconnects the live stream; going hidden alone does not', async ({ page, fleet }) => {
-    await fleet.select(fleet.self);
-    await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.url ?? '')).toContain(`/api/sessions/${ROOT}/stream`);
+  test('a short app switch keeps a healthy stream; a stale OPEN stream is replaced', async ({ page, fleet }) => {
+    // Exercise the hub's real streaming proxy, not just a peer-looking URL.
+    writeFileSync(join(fleet.self.home, '.pi/dish/settings.json'), JSON.stringify({
+      remotes: [{ name: 'peer', url: fleet.peer.base, token: fleet.peer.token }],
+    }));
+    await page.reload();
+    await expect.poll(() => page.evaluate(id => fixtureApp.features.hostDirectory.resolveHost(id).base, fleet.peer.hostId)).toBe('/hosts/peer');
+    await expect(fleet.row(fleet.peer)).toBeVisible();
+    await fleet.select(fleet.peer);
+    await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
     await page.evaluate(() => { window.firstStream = fixtureApp.features.messageStreamController.source; });
-    // A backgrounded phone kills the socket without an error the browser acts
-    // on; the page only learns it is stale once it becomes visible again.
+    // No socket error is necessary for an idle OPEN stream to go stale.
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    await page.waitForTimeout(150);
     expect(await page.evaluate(() => fixtureApp.features.messageStreamController.source === window.firstStream)).toBe(true);
     await page.evaluate(() => {
       Reflect.deleteProperty(document, 'hidden');
       document.dispatchEvent(new Event('visibilitychange'));
     });
+    expect(await page.evaluate(() => fixtureApp.features.messageStreamController.source === window.firstStream)).toBe(true);
+    // A heartbeat is traffic even when the transcript has been idle for minutes.
+    const later = Date.now() + 120_000;
+    await page.clock.setFixedTime(new Date(later));
+    await page.evaluate(() => {
+      window.firstStream!.dispatchEvent(new MessageEvent('keepalive', { data: '{}' }));
+      window.dispatchEvent(new Event('online'));
+    });
+    expect(await page.evaluate(() => fixtureApp.features.messageStreamController.source === window.firstStream)).toBe(true);
+    await page.clock.setFixedTime(new Date(later + 120_000));
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await expect.poll(() => page.evaluate(() => {
       const source = fixtureApp.features.messageStreamController.source;
-      return source && source !== window.firstStream ? source.url : '';
-    })).toContain(`/api/sessions/${ROOT}/stream`);
+      return source && source !== window.firstStream && source.readyState === source.OPEN ? source.url : '';
+    })).toContain(`/hosts/peer/api/sessions/${ROOT}/stream`);
+    fleet.peer.emit('message_end', { message: { role: 'assistant', content: [{ type: 'text', text: 'live through the hub' }] } });
+    await expect(page.locator('#messages')).toContainText('live through the hub');
   });
 });
 

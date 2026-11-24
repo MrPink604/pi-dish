@@ -290,7 +290,7 @@ export function createTranscript(options: {
       } else if (cursors.oldestIndex === before) { cursors.hasOlder = false; container.querySelector('#loadOlderBar')?.remove(); bindBar(); }
     } catch (error) { if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${errorMessage(error)} — retry`; }
   }
-  async function catchup(selection = sessionState.captureSelection()): Promise<void> {
+  async function catchup(selection = sessionState.captureSelection(), preserveLive = false): Promise<void> {
     const owner = capture(selection); if (!owner) return;
     if (cursors.lastIndex == null) { if (retryTimer === undefined) return load(selection); return; }
     const sequence = ++catchupSequence, after = cursors.lastIndex;
@@ -305,14 +305,18 @@ export function createTranscript(options: {
       options.updateMood(fresh);
       if (!fresh.length) { if (data.lastIndex != null) cursors.lastIndex = Math.max(cursors.lastIndex ?? 0, data.lastIndex); return; }
       const pinned = options.pinned(container), assistant = fresh.some(message => message.role === 'assistant');
-      container.querySelectorAll('.message:not([data-msg-index])').forEach(el => { if (el.classList.contains('assistant') && !assistant) return; el.remove(); });
+      container.querySelectorAll<HTMLElement>('.message:not([data-msg-index])').forEach(el => {
+        if ((preserveLive && el.dataset.streaming === 'true') || (el.classList.contains('assistant') && !assistant)) return;
+        el.remove();
+      });
       // A search can find output newer than the last SSE catch-up. Fill that
       // sparse window chronologically, but keep the normal live append cheap.
-      if (Number(indexed[indexed.length - 1]?.dataset.msgIndex) > after) insertWindow(fresh, true);
+      if (Number(indexed[indexed.length - 1]?.dataset.msgIndex) > after) insertWindow(fresh, !preserveLive);
       else {
-        const inserted = insertHtml(fresh.map(renderMessage).join(''), null);
+        const liveTail = preserveLive ? container.querySelector<HTMLElement>(':scope > [data-streaming="true"], :scope > .live-tool-panel') : null;
+        const inserted = insertHtml(fresh.map(renderMessage).join(''), liveTail);
         if (boundActive()) refreshPaging();
-        options.finalize(container, { inserted: inserted.filter(node => node.isConnected) });
+        options.finalize(container, { stripLive: !preserveLive, inserted: inserted.filter(node => node.isConnected) });
       }
       if (data.lastIndex != null) cursors.lastIndex = Math.max(cursors.lastIndex ?? 0, data.lastIndex);
       if (pinned) options.scroll(container); else options.jump(container);

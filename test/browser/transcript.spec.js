@@ -76,6 +76,19 @@ async function initial(page) { await page.evaluate(() => { window.transcriptLoad
     await (0, fixtures_js_1.expect)(page.locator('#messages')).not.toContainText('retained answer');
     await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('authoritative answer');
 });
+(0, fixtures_js_1.test)('a mid-turn wake catchup keeps replayed tools and the new streaming answer after missed history', async ({ page, fleet }) => {
+    await setup(page, fleet);
+    await initial(page);
+    await page.evaluate(() => {
+        window.newCatchup = window.ownedTranscript.catchup(undefined, true);
+        fixtureApp.features.liveToolsController.append({ toolCallId: 'wake-read', toolName: 'read', args: { path: 'notes' } });
+        fixtureApp.features.streamingRenderer.render({ role: 'assistant', content: [{ type: 'text', text: 'still writing' }] });
+    });
+    await reply(page, 1, { messages: [{ role: 'assistant', index: 11, content: 'finished while asleep' }], lastIndex: 11 });
+    await page.evaluate(() => window.newCatchup);
+    await (0, fixtures_js_1.expect)(page.locator('#messages [data-msg-index="11"] ~ [data-tool-call-id="wake-read"]')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('#messages [data-msg-index="11"] ~ [data-streaming="true"]')).toContainText('still writing');
+});
 (0, fixtures_js_1.test)('cached DOM keeps host identity, node state and endpoint ownership', async ({ page, fleet }) => {
     await setup(page, fleet);
     await initial(page);

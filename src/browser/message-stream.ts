@@ -44,6 +44,8 @@ export interface MessageStreamSideChat {
   apply(value: unknown, session: { id: string; host: string | null }): void;
 }
 function parseRecord(text: string): Record<string, unknown> { const value: unknown = JSON.parse(text); return record(value) ? value : {}; }
+// Two missed 25s heartbeats plus scheduling slack. Check on wake, never poll.
+const STALE_STREAM_MS = 60_000;
 export function createMessageStream(options: {
   document: Document; sessionState: SessionState; endpoint: (host: string | null) => HostEndpoint; ticket: (host: HostEndpoint) => Promise<string>; source?: (url: string) => EventSource;
   /** Adds the private-session unlock query; EventSource cannot send its header. */
@@ -54,7 +56,7 @@ export function createMessageStream(options: {
   tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI; sideChat: MessageStreamSideChat;
   reviewUpdate?: (payload: unknown, session: ExtensionSession) => void;
   reviews?: (owner: SelectionOwner) => unknown;
-  status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
+  status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner, preserveLive?: boolean) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void; highlight: (root: Element) => void;
   select: (id: string, options: { forceTranscriptReload: boolean; host: string | null }) => unknown;
   deleteCached: (key: string) => void; loadSessions: (query: undefined, options: { withPrevious: boolean }) => Promise<unknown>;
@@ -62,6 +64,7 @@ export function createMessageStream(options: {
   const { document, sessionState, renderer, tools } = options;
   let source: EventSource | null = null, reconnect: ReturnType<typeof setTimeout> | null = null, connectionGeneration = 0, disposed = false;
   let current: { owner: SelectionOwner; base: string } | null = null, failures = 0, opened = false, statusActive = false;
+  let lastActivityAt = -Infinity, resyncOnInit = false;
   function ownsConnection(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number) {
     return !disposed && generation === connectionGeneration && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === target.base;
   }
@@ -76,7 +79,7 @@ export function createMessageStream(options: {
     failures = 0;
     opened = false;
   }
-  async function start(owner = sessionState.captureSelection()) {
+  async function start(owner = sessionState.captureSelection(), resync = false) {
     if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
     const target = Object.freeze({ ...options.endpoint(owner.host) });
     if (current?.base === target.base && sessionState.ownsSelection(current.owner)) {
@@ -84,18 +87,31 @@ export function createMessageStream(options: {
       failures = 0;
     } else stop();
     current = { owner, base: target.base };
+    resyncOnInit = resync;
+    lastActivityAt = Date.now();
     return connect(owner, target, connectionGeneration);
+  }
+  function resume() {
+    if (disposed) return;
+    // A parked retry still owns its session even if a list refresh is late.
+    const owner = current?.owner ?? (sessionState.currentSession?.isActive ? sessionState.captureSelection() : null);
+    if (!owner || !sessionState.ownsSelection(owner) || (current && current.base !== options.endpoint(owner.host).base)) return;
+    const age = Date.now() - lastActivityAt;
+    const openingOnWake = current && resyncOnInit && (!source || source.readyState === source.CONNECTING);
+    if (age >= 0 && age < STALE_STREAM_MS && ((source && source.readyState === source.OPEN) || openingOnWake)) return;
+    void start(owner, true);
   }
   function retry(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number, message: string, failure: OriginFailure | null) {
     if (!ownsConnection(owner, target, generation)) return;
     source?.close();
     source = null;
-    // Hidden tabs (locked phone / backgrounded app) cannot reliably reconnect;
-    // pause until visibilitychange calls start() instead of churning failures.
+    lastActivityAt = -Infinity;
+    resyncOnInit ||= opened;
+    // Park without a timer while hidden; lifecycle signals drive recovery.
     if (document.hidden) {
       clearTimeout(reconnect ?? undefined);
       reconnect = null;
-      opened = false;
+      // Preserve the quiet first retry for an established connection.
       return;
     }
     // Reconnect a previously open stream quietly once before flashing an error
@@ -137,8 +153,12 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     source = evtSource;
     const ownsStream = () => source === evtSource && ownsConnection(owner, target, generation);
     const addOwnedListener = (event: string, listener: (event: MessageEvent<string>) => void) => evtSource.addEventListener(event, event => {
-      if (ownsStream() && event instanceof MessageEvent && typeof event.data === 'string') listener(event);
+      if (ownsStream() && event instanceof MessageEvent && typeof event.data === 'string') {
+        lastActivityAt = Date.now();
+        listener(event);
+      }
     });
+    evtSource.addEventListener('keepalive', () => { if (ownsStream()) lastActivityAt = Date.now(); });
     let switchSequence = 0;
     let turnCleanupDone = false;
     // OMP can redeliver completed messages. Custom messages key on the full
@@ -152,6 +172,7 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     evtSource.onopen = () => {
       if (!ownsStream()) return;
       opened = true;
+      lastActivityAt = Date.now();
       failures = 0;
       statusActive = false;
       if (target.base === '') options.originFailure?.(null);
@@ -169,9 +190,9 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
         // first so the turn-off path doesn't wipe a live compaction's status.
         options.activity.setCompacting(!!data.compacting);
         options.activity.setTurn(!!data.turnInProgress);
-        if (!data.turnInProgress) {
-          // Incremental catch-up avoids a full-reload stall.
-          options.catchup(owner);
+        if (!data.turnInProgress || resyncOnInit) {
+          resyncOnInit = false;
+          options.catchup(owner, !!data.turnInProgress);
         }
         // Reconcile review decks on every connect/reconnect without polling.
         options.reviews?.(owner);
@@ -416,5 +437,5 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
   }
 }
 
-return { start, stop, get source() { return source; }, dispose() { if (disposed) return; stop(); disposed = true; } };
+return { start, resume, stop, get source() { return source; }, dispose() { if (disposed) return; stop(); disposed = true; } };
 }

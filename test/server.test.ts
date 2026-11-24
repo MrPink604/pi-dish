@@ -5526,7 +5526,7 @@ test('DELETE /api/sessions/:id removes a closed transcript and its OMP subagents
   }
 });
 
-test('SSE stream handler sends periodic keepalive comments and stops them on close', async () => {
+test('SSE stream handler sends observable keepalives and stops them on close', async () => {
   const { EventEmitter } = require('node:events') as typeof import('node:events');
   const { createSessionStreamHandler } = require('../lib/session-stream-handler') as typeof import('../lib/session-stream-handler');
   const fakeSession = Object.assign(new EventEmitter(), {
@@ -5556,7 +5556,7 @@ test('SSE stream handler sends periodic keepalive comments and stops them on clo
   await handler(req as never, res as never, () => {});
   assert.equal(headers['x-accel-buffering'], 'no');
   await new Promise(resolve => setTimeout(resolve, 90));
-  const keepalivesBeforeClose = chunks.filter(chunk => chunk === ': keepalive\n\n').length;
+  const keepalivesBeforeClose = chunks.filter(chunk => chunk === 'event: keepalive\ndata: {}\n\n').length;
   assert.ok(keepalivesBeforeClose >= 2, `expected >= 2 keepalive frames, got ${keepalivesBeforeClose}`);
   assert.ok(flushCount >= keepalivesBeforeClose, 'keepalive frames are flushed');
   req.emit('close');

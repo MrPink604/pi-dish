@@ -7,6 +7,7 @@ exports.heldRoute = heldRoute;
 const test_1 = require("@playwright/test");
 Object.defineProperty(exports, "expect", { enumerable: true, get: function () { return test_1.expect; } });
 const node_child_process_1 = require("node:child_process");
+const node_events_1 = require("node:events");
 const fs = require("node:fs");
 const path = require("node:path");
 const test_env_js_1 = require("../test-env.js");
@@ -72,6 +73,15 @@ async function startHost(label, logs, started, origin, liveSessions) {
         }
     });
     const emit = (event, data, entry) => child.send({ event, data, entry });
+    async function killStreams() {
+        const replies = (0, node_events_1.on)(child, 'message', { signal: AbortSignal.timeout(5000) });
+        child.send({ control: 'kill-streams' });
+        for await (const [reply] of replies) {
+            if ((0, helper_values_js_1.record)(reply) && reply.type === 'streams-killed' && typeof reply.count === 'number')
+                return reply.count;
+        }
+        throw new Error(`${label} closed before acknowledging the SSE drop`);
+    }
     const base = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`${label} startup timed out`)), 15000);
         const failed = (err) => { clearTimeout(timer); reject(err); };
@@ -88,7 +98,7 @@ async function startHost(label, logs, started, origin, liveSessions) {
         throw new Error(`${label} descriptor is invalid`);
     if (typeof descriptor.hostId !== 'string')
         throw new Error(`${label} descriptor lacks hostId`);
-    return { home, label, token, child, commands, emit, base, hostId: descriptor.hostId };
+    return { home, label, token, child, commands, emit, killStreams, base, hostId: descriptor.hostId };
 }
 async function stopHost(host) {
     const child = host.child;
