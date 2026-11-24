@@ -167,6 +167,7 @@
     "test/browser/reachability.spec.ts",
     "test/browser/artifact-comments.spec.ts",
     "test/browser/page-forms.spec.ts",
+    "test/browser/review-deck.spec.ts",
     "test/browser/new-session-options.spec.ts",
     "test/browser/harness-settings.spec.ts",
     "test/browser/harness-discovery.spec.ts",

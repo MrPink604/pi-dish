@@ -52,6 +52,7 @@ export function createMessageStream(options: {
   probeOrigin?: () => Promise<OriginFailure | null>;
   activity: MessageStreamActivity; renderer: MessageStreamRenderer; streaming: MessageStreamRendering;
   tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI; sideChat: MessageStreamSideChat;
+  reviewUpdate?: (payload: unknown, session: ExtensionSession) => void;
   status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void; highlight: (root: Element) => void;
   select: (id: string, options: { forceTranscriptReload: boolean; host: string | null }) => unknown;
@@ -310,6 +311,10 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
 
     addOwnedListener('side_chat', (e) => {
       try { options.sideChat.apply(parseRecord(e.data).sideChat, { id: sessionId, host: hostId }); } catch {}
+    });
+
+    addOwnedListener('review_updated', (e) => {
+      try { options.reviewUpdate?.(parseRecord(e.data), { id: sessionId, host: hostId }); } catch {}
     });
 
     // Dialog answered elsewhere (TUI or another browser) — dismiss ours.

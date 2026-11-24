@@ -1670,6 +1670,19 @@ answers after a restart and turns `delivering` into `uncertain`. A repeated
 submission id answers 200 `repeated`; another id on an answered deck is a 409.
 `PI_DISH_REVIEW_GRACE_MS` is a test seam (default 15 s).
 
+Browser deck (`src/browser/review-deck.ts`, `src/browser/review-deck-data.ts`):
+mounts top-level `.review-deck` cards inline in `#messages` (never swept into
+`details.tool-group`, visible in Focus mode), stepping one card at a time with
+native `hidden` attributes so version skew degrades safely, preselected defaults,
+lazy-loaded media shots opened in `.lightbox-overlay`, host-scoped `sessionStorage`
+drafts with a stable idempotent `submissionId`, an off-screen `.review-jump-bar`
+in `.input-area`, and in-place collapse to a 1-line receipt on submission.
+Requests carry `X-Pi-Dish-Client: 1` (working through `/hosts/<peer>` as well),
+reject stale delivery regressions when a `202` reply races SSE `review_updated`,
+and use only existing theme CSS variables in `public/style.css` (Solarized Dark
+and Graphite). Fallback `[review response: …]` user messages render collapsed as
+`.message.custom-message.review-response-notice`.
+
 ## Multi-host fleet (TASKS/multi-host.md; lib/host-identity.js, lib/remote-hosts.js)
 
 One pane of glass over several pi-dish hosts, t3code-shaped: **the client is

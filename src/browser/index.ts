@@ -78,6 +78,8 @@ export { copyTextToClipboard } from './clipboard';
 
 export { createExtensionUI } from './extension-ui';
 export { decodeExtensionRequest } from './extension-ui-data';
+export { createReviewDecks } from './review-deck';
+export { decodeClientReview, decodeReviewList, initialDraft, hydrateDraft, buildSubmitAnswers, reviewReceiptSummary, parseReviewResponseMessage } from './review-deck-data';
 
 export { createFileViews } from './file-views';
 export { decodeFilePreview, decodeDiffView, decodeDiffPatch } from './file-view-data';

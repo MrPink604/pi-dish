@@ -14,6 +14,7 @@ import {
 import {
   parseSpawnWorkerResult, renderAgentRefCard, renderAgentRefChip, type AgentRefSession,
 } from './agent-ref';
+import { parseReviewResponseMessage } from './review-deck-data';
 import { extractImageBlocks, extractVideoBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { mediaFileName } from '../core/helper-media';
 import { splitSessionRefContext } from '../core/helper-refs';
@@ -255,6 +256,19 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
       attrs, timestamp: String(msg.timestamp || Date.now()), time, actionsHtml: messageActionsHtml(msg, null),
       markdown: options.markdown, matchRef: options.matchRef, contextHost: renderHost() ?? null,
     });
+  }
+  const reviewResponse = parseReviewResponseMessage(rawText);
+  if (reviewResponse) {
+    return `<div${attrs} class="message custom-message review-response-notice" data-timestamp="${escapeHtml(String(msg.timestamp || Date.now()))}" data-review-response-id="${escapeHtml(reviewResponse.reviewId)}">
+      <details class="review-response-details">
+        <summary class="review-response-summary">
+          <span class="review-icon done" aria-hidden="true">✓</span>
+          <span class="review-response-title">Review response · ${escapeHtml(reviewResponse.title)}</span>
+          ${time ? `<span class="message-time">${time}</span>` : ''}
+        </summary>
+        ${reviewResponse.body ? `<pre class="review-response-body">${escapeHtml(reviewResponse.body)}</pre>` : ''}
+      </details>
+    </div>`;
   }
   const { text, refs } = splitSessionRefContext(rawText);
   const imagesHtml = imageBlocksHtml(msg.content, 'attached image');

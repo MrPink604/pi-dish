@@ -115,6 +115,7 @@
     "test/browser/agy-tasks-swarm.spec.ts",
     "test/browser/bot-display.spec.ts",
     "test/browser/bots.spec.ts",
-    "test/browser/agent-ref.spec.ts"
+    "test/browser/agent-ref.spec.ts",
+    "test/browser/review-deck.spec.ts"
   ]
 }

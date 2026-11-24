@@ -32,11 +32,15 @@ export interface SessionViewResume {
   load(session: SessionEntry | null): Promise<void>;
   dispose(): void;
 }
+export interface SessionViewReviews {
+  clear(): void;
+  load(owner?: SelectionOwner | null): unknown;
+}
 export interface SessionSelectOptions { forceTranscriptReload?: boolean; host?: string | null; keepBounceView?: boolean }
 export function createSessionView(options: {
   document: Document; sessionState: SessionState; storage: Pick<Storage, 'setItem'>; endpoint: (host: string | null) => HostEndpoint;
   drafts: SessionViewDrafts; activity: SessionViewActivity; transcript: SessionViewTranscript;
-  stream: SessionViewStream; resume: SessionViewResume; spawn: (id: string) => PendingSessionSpawn | null | undefined;
+  stream: SessionViewStream; resume: SessionViewResume; reviews?: SessionViewReviews; spawn: (id: string) => PendingSessionSpawn | null | undefined;
   closeViews: (keepBounce: boolean) => void; resetSearch: () => void; cancelStreaming: () => void; stopFollowing: () => void;
   closeTerminal: () => void; clearExtension: () => void; clearRelations: () => void; closeControls: () => void; hideAutocomplete: () => void;
   retireModels: () => void; retireCommands: () => void; queue: (value: null) => void; resetSideChat: () => void; resetArtifacts: () => void;
@@ -73,6 +77,7 @@ function retireSessionResources() {
   options.closeTerminal();
   options.clearExtension();
   options.clearRelations();
+  options.reviews?.clear();
 }
 
 function resetSelectionActivity(current: SessionEntry | null) {
@@ -222,6 +227,7 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   // The lineage handler scans the catalog synchronously server-side; hydrate first.
   options.artifacts(owner);
   options.relations(owner);
+  options.reviews?.load(owner);
   
   if (sessionState.currentSession?.isActive) {
     options.stream.start(owner);

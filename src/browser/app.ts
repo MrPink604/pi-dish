@@ -62,6 +62,7 @@ import { groupToolActivity } from './message-groups';
 import { createStreamingRenderer } from './streaming-render';
 import { createMood } from './mood';
 import { createExtensionUI } from './extension-ui';
+import { createReviewDecks } from './review-deck';
 import { createBrowserAssets } from './browser-assets';
 import { createDiagrams } from './diagrams';
 import { createRichText } from './rich-text';
@@ -468,6 +469,7 @@ async function startApp(): Promise<void> {
   sidebarControls.mount();
   bots.mount();
   appChrome.mount();
+  reviewDecks.mount();
 
   // Inline refs, chips, and worker-card Open buttons share one host-aware
   // resolver that handles active, closed, and cross-host sessions (including
@@ -688,7 +690,7 @@ function refreshSessionControls() {
 }
 
 const sessionView: ReturnType<typeof createSessionView> = createSessionView({ document, sessionState, storage: localStorage, endpoint: resolveHost,
-  get drafts() { return composerDrafts; }, get activity() { return sessionActivity; }, get transcript() { return transcriptController; }, get stream() { return messageStreamController; }, get resume() { return sessionResume; },
+  get drafts() { return composerDrafts; }, get activity() { return sessionActivity; }, get transcript() { return transcriptController; }, get stream() { return messageStreamController; }, get resume() { return sessionResume; }, get reviews() { return reviewDecks; },
   spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: () => appChrome.stopFollowing(),
   closeViews: keepBounce => mainPane.beforeSelection(keepBounce),
   closeTerminal: () => terminalController.close(), clearExtension: () => extensionUI.clear(), clearRelations: () => sessionRelationsController.clear(), closeControls: () => appChrome.closePanel(), hideAutocomplete: () => composerAutocomplete.hide(),
@@ -928,6 +930,7 @@ const messageStreamController: ReturnType<typeof createMessageStream> = createMe
   originFailure: failure => noteReachability('stream', failure),
   probeOrigin: () => probeOriginFailure(requestOrigin),
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
+  reviewUpdate: (payload, session) => reviewDecks.applyUpdate(payload, session),
   status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: refreshSessions, artifacts: owner => sessionInfo.refreshArtifacts(owner),
   ...chromeScroll, follow: () => appChrome.following, highlight: root => richText.highlight(root),
   select: selectSession, deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),
@@ -1060,6 +1063,7 @@ function finalizeRender(container: HTMLElement, { stripLive = true, inserted }: 
   if (inserted) {
     for (const root of inserted) richText.highlight(root);
   } else richText.highlight(container);
+  reviewDecks.sync(container);
 }
 
 
@@ -1083,6 +1087,28 @@ const moodController: ReturnType<typeof createMood> = createMood(document);
 const extensionUI: ReturnType<typeof createExtensionUI> = createExtensionUI({
   document, sessionState, storage: localStorage, request, host: hostEntryFor,
   status: setStatus,
+});
+
+const reviewDecks: ReturnType<typeof createReviewDecks> = createReviewDecks({
+  document, sessionState, request: readHostApi, host: hostEntryFor,
+  supports: endpoint => {
+    const entry = effectiveHosts().find(candidate => candidate.base === endpoint.base);
+    if (!entry?.capabilities) return true;
+    return hostSupportsCapability(entry, 'reviewsV1', appConfig);
+  },
+  mediaUrl: (hostId, apiPath) => {
+    const base = resolveHost(hostId).base;
+    return privateSessions.withUnlock(hostAssetUrl(hostId, apiPath), base);
+  },
+  pageUrl: (hostId, rawUrl) => {
+    if (/^https:\/\//i.test(rawUrl)) return rawUrl;
+    const base = resolveHost(hostId).base;
+    return /^https?:\/\//i.test(base) ? base + rawUrl : rawUrl;
+  },
+  markdown: text => richText.format(text),
+  originFailure: failure => noteReachability('transcript', failure),
+  pinned: chromeScroll.pinned,
+  scroll: chromeScroll.scroll,
 });
 
 const browserAssets: ReturnType<typeof createBrowserAssets> = createBrowserAssets(document);
