@@ -1210,11 +1210,15 @@ export function createSubagentsView(options: {
         const startBtn = document.createElement('button'); startBtn.type = 'button'; startBtn.id = 'swarmStartBtn'; startBtn.className = 'btn btn-small btn-primary'; startBtn.textContent = 'Start Swarm';
         const launch = async () => {
           if (swarmStartCard !== card) return;
-          const task = ta.value.trim();
+          const submitted = ta.value;
+          const task = submitted.trim();
           if (!task) { ta.focus(); return; }
           startBtn.disabled = true;
           const ok = await dispatchCoordinatorText(`/swarm ${task}`, 'prompt', { fullReload: true, successText: 'Swarm start sent' });
-          if (owns() && swarmStartCard === card) { startBtn.disabled = false; if (ok) ta.value = ''; }
+          if (owns() && swarmStartCard === card) {
+            startBtn.disabled = false;
+            if (ok && ta.value === submitted) ta.value = '';
+          }
         };
         startBtn.addEventListener('click', () => { void launch(); }, { signal: events.signal });
         ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void launch(); } }, { signal: events.signal });
@@ -1800,7 +1804,7 @@ export function createSubagentsView(options: {
           `Send stdin to running task "${targetId}" using manage_task with Action="send_input", TaskId=${JSON.stringify(targetId)}, and Input=${JSON.stringify(line + '\n')}.`,
           `Sent input to ${entry.taskId}`,
         );
-        if (ok && owns() && tasksStdin === entry) input.value = '';
+        if (ok && owns() && tasksStdin === entry && input.value === line) input.value = '';
       };
       sendBtn.addEventListener('click', () => { void submitStdin(); }, { signal: events.signal });
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void submitStdin(); } }, { signal: events.signal });

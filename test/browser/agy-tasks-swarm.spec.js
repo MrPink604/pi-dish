@@ -711,3 +711,63 @@ const lineagePayload = {
         focused: document.activeElement === document.getElementById('tasksStdinInput'),
     }))).toEqual({ sameNode: true, focused: true });
 });
+(0, fixtures_js_1.test)('delayed submit ack in #swarmStartInput and #tasksStdinInput does not erase text typed while pending', async ({ page, fleet }) => {
+    const promptResolvers = [];
+    const prompts = [];
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/lineage`, route => route.fulfill({ json: lineagePayload }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/tasks`, route => route.fulfill({ json: tasksPayload }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/tasks/task-42/log*`, route => route.fulfill({
+        json: { taskId: 'task-42', content: 'running\n', totalBytes: 8, truncated: false, updatedAt: '2026-11-19T14:01:12Z' },
+    }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/swarm*`, route => route.fulfill({
+        json: {
+            supported: true, hasSwarm: false, isActive: true,
+            coordinatorTurnInProgress: false, coordinatorId: fixtures_js_1.ROOT, coordinatorNativeId: 'coord-native',
+            title: null, goal: null, head: 0, channels: [], members: [], posts: [], groups: [], plan: null, timeline: [],
+        },
+    }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/{prompt,steer}`, async (route) => {
+        const body = route.request().postDataJSON();
+        prompts.push(String(body.message || ''));
+        await new Promise(resolve => { promptResolvers.push(resolve); });
+        await route.fulfill({ json: { ok: true } });
+    });
+    await fleet.select(fleet.self, fixtures_js_1.ROOT);
+    await page.evaluate((id) => {
+        window.fixtureSessionListPatch(id, { harnessId: 'agy', isActive: true });
+        return fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection());
+    }, fixtures_js_1.ROOT);
+    await page.locator('#promptInput').fill('/swarm board');
+    await page.locator('#promptInput').press('Enter');
+    // 1. Start Swarm: edit while pending -> ack must preserve the new text; unmodified submit clears.
+    const startInput = page.locator('#swarmStartInput');
+    await (0, fixtures_js_1.expect)(startInput).toBeVisible();
+    await startInput.fill('First swarm goal');
+    await page.locator('#swarmStartBtn').click();
+    await fixtures_js_1.expect.poll(() => promptResolvers.length).toBe(1);
+    await startInput.fill('Edited while pending');
+    promptResolvers.shift()();
+    await (0, fixtures_js_1.expect)(page.locator('#swarmStartBtn')).toBeEnabled();
+    await (0, fixtures_js_1.expect)(startInput).toHaveValue('Edited while pending');
+    // Submitting without editing while pending still clears on ack.
+    await page.locator('#swarmStartBtn').click();
+    await fixtures_js_1.expect.poll(() => promptResolvers.length).toBe(1);
+    promptResolvers.shift()();
+    await (0, fixtures_js_1.expect)(startInput).toHaveValue('');
+    // 2. Tasks stdin: edit while pending -> ack must preserve the new text; unmodified submit clears.
+    await page.locator('#subagentsTree .lineage-row', { hasText: 'Watch build' }).click();
+    const stdinInput = page.locator('#tasksStdinInput');
+    await (0, fixtures_js_1.expect)(stdinInput).toBeVisible();
+    await stdinInput.fill('first-line');
+    await page.locator('#tasksStdinSendBtn').click();
+    await fixtures_js_1.expect.poll(() => promptResolvers.length).toBe(1);
+    await stdinInput.fill('typed-while-pending');
+    promptResolvers.shift()();
+    await page.waitForTimeout(100);
+    await (0, fixtures_js_1.expect)(stdinInput).toHaveValue('typed-while-pending');
+    await page.locator('#tasksStdinSendBtn').click();
+    await fixtures_js_1.expect.poll(() => promptResolvers.length).toBe(1);
+    promptResolvers.shift()();
+    await (0, fixtures_js_1.expect)(stdinInput).toHaveValue('');
+    (0, fixtures_js_1.expect)(prompts.length).toBe(4);
+});

@@ -752,4 +752,70 @@ test('2.5s subagents polling preserves focus and draft text in #swarmStartInput 
   }))).toEqual({ sameNode: true, focused: true });
 });
 
+test('delayed submit ack in #swarmStartInput and #tasksStdinInput does not erase text typed while pending', async ({ page, fleet }) => {
+  const promptResolvers: Array<() => void> = [];
+  const prompts: string[] = [];
+  await page.route(`**/api/sessions/${ROOT}/lineage`, route => route.fulfill({ json: lineagePayload }));
+  await page.route(`**/api/sessions/${ROOT}/tasks`, route => route.fulfill({ json: tasksPayload }));
+  await page.route(`**/api/sessions/${ROOT}/tasks/task-42/log*`, route => route.fulfill({
+    json: { taskId: 'task-42', content: 'running\n', totalBytes: 8, truncated: false, updatedAt: '2026-11-19T14:01:12Z' },
+  }));
+  await page.route(`**/api/sessions/${ROOT}/swarm*`, route => route.fulfill({
+    json: {
+      supported: true, hasSwarm: false, isActive: true,
+      coordinatorTurnInProgress: false, coordinatorId: ROOT, coordinatorNativeId: 'coord-native',
+      title: null, goal: null, head: 0, channels: [], members: [], posts: [], groups: [], plan: null, timeline: [],
+    },
+  }));
+  await page.route(`**/api/sessions/${ROOT}/{prompt,steer}`, async route => {
+    const body = route.request().postDataJSON() as { message?: string };
+    prompts.push(String(body.message || ''));
+    await new Promise<void>(resolve => { promptResolvers.push(resolve); });
+    await route.fulfill({ json: { ok: true } });
+  });
+
+  await fleet.select(fleet.self, ROOT);
+  await page.evaluate((id) => {
+    window.fixtureSessionListPatch(id, { harnessId: 'agy', isActive: true });
+    return fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection());
+  }, ROOT);
+  await page.locator('#promptInput').fill('/swarm board');
+  await page.locator('#promptInput').press('Enter');
+
+  // 1. Start Swarm: edit while pending -> ack must preserve the new text; unmodified submit clears.
+  const startInput = page.locator('#swarmStartInput');
+  await expect(startInput).toBeVisible();
+  await startInput.fill('First swarm goal');
+  await page.locator('#swarmStartBtn').click();
+  await expect.poll(() => promptResolvers.length).toBe(1);
+  await startInput.fill('Edited while pending');
+  promptResolvers.shift()!();
+  await expect(page.locator('#swarmStartBtn')).toBeEnabled();
+  await expect(startInput).toHaveValue('Edited while pending');
+
+  // Submitting without editing while pending still clears on ack.
+  await page.locator('#swarmStartBtn').click();
+  await expect.poll(() => promptResolvers.length).toBe(1);
+  promptResolvers.shift()!();
+  await expect(startInput).toHaveValue('');
+
+  // 2. Tasks stdin: edit while pending -> ack must preserve the new text; unmodified submit clears.
+  await page.locator('#subagentsTree .lineage-row', { hasText: 'Watch build' }).click();
+  const stdinInput = page.locator('#tasksStdinInput');
+  await expect(stdinInput).toBeVisible();
+  await stdinInput.fill('first-line');
+  await page.locator('#tasksStdinSendBtn').click();
+  await expect.poll(() => promptResolvers.length).toBe(1);
+  await stdinInput.fill('typed-while-pending');
+  promptResolvers.shift()!();
+  await page.waitForTimeout(100);
+  await expect(stdinInput).toHaveValue('typed-while-pending');
+
+  await page.locator('#tasksStdinSendBtn').click();
+  await expect.poll(() => promptResolvers.length).toBe(1);
+  promptResolvers.shift()!();
+  await expect(stdinInput).toHaveValue('');
+  expect(prompts.length).toBe(4);
+});
+
 export {};
