@@ -255,13 +255,26 @@ export function formatPromptForHistory(sentMessage: string, stagedImageTokens: r
   return removeTokensFromText(sentMessage, stagedImageTokens).value.trim();
 }
 
-/** Decodes `pi-dish-draft-refs-<owner>` from localStorage, failing closed on bad data. */
+const IMAGE_TOKEN_RE = /^\[Image #[1-9]\d*\]$/;
+// eslint-disable-next-line no-control-regex
+const FILE_TOKEN_RE = /^\[File #[1-9]\d*: ([^\u0000-\u001f\u007f[\]]+)\]$/;
+
+/** True only for canonical `[Image #N]` or `[File #N: name]` tokens we emit. */
+export function isCanonicalAttachmentToken(value: string): boolean {
+  if (IMAGE_TOKEN_RE.test(value)) return true;
+  const match = FILE_TOKEN_RE.exec(value);
+  if (!match) return false;
+  const name = match[1]!;
+  return name === name.trim() && !/\s{2,}/.test(name) && Array.from(name).length <= FILE_REF_NAME_MAX;
+}
+
+/** Decodes `pi-dish-draft-refs-<owner>` from localStorage, rejecting non-canonical entries. */
 export function decodeDraftRefs(raw: string | null): string[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return [...new Set(parsed.filter((item: unknown): item is string => typeof item === 'string' && item.length > 0))];
+    return [...new Set(parsed.filter((item: unknown): item is string => typeof item === 'string' && isCanonicalAttachmentToken(item)))];
   } catch {
     return [];
   }

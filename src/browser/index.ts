@@ -105,7 +105,8 @@ export { createComposerImages, decodeComposerImages, attachmentRefToken } from '
 export {
   FILE_REF_NAME_MAX, sanitizeAttachmentRefName, formatAttachmentToken, formatAttachmentBadge,
   insertTokensAtSelection, findTokenRanges, atomicDeleteRange, removeTokensFromText,
-  rewriteTokensInText, resolveAttachmentsForSend, appendFileManifest, formatPromptForHistory, decodeDraftRefs,
+  rewriteTokensInText, resolveAttachmentsForSend, appendFileManifest, formatPromptForHistory,
+  isCanonicalAttachmentToken, decodeDraftRefs,
 } from './composer-refs';
 export { createComposerDrafts, mergeComposerText } from './composer-drafts';
 

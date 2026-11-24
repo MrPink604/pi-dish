@@ -6302,6 +6302,10 @@ button.badge-context {
   color: var(--accent);
 }
 
+.attachment-chip.preparing {
+  opacity: 0.78;
+}
+
 /* Non-image attachments: icon, name and size; an upload bar while sending */
 .attachment-chip {
   position: relative;

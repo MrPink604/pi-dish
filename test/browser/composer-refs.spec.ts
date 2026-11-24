@@ -1,6 +1,6 @@
 import path = require('node:path');
 import type { Page } from '@playwright/test';
-import { test, expect, ROOT, type BrowserHost } from './fixtures.js';
+import { test, expect, ROOT, heldRoute, type BrowserHost } from './fixtures.js';
 
 test.use({ liveSessions: true });
 
@@ -276,6 +276,170 @@ test('version skew: cached old shell without composerNote and legacy drafts with
   await expect(page.locator('#attachmentStrip .attachment-thumb .attachment-ref-badge')).toHaveText(['#1']);
   await expect(page.locator('#promptInput')).toHaveValue('Legacy draft mentioning [Image #1] [Image #1] ');
   expect(owner).toBeTruthy();
+});
+
+test('image prep reserves label at attach time, gates send/steer/follow-up per owner, and never overwrites later selection', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const input = page.locator('#promptInput');
+  await input.fill('Draft before image');
+  await input.focus();
+  await input.evaluate(el => { const ta = el as HTMLTextAreaElement; ta.setSelectionRange(ta.value.length, ta.value.length); });
+
+  await page.evaluate(png => {
+    window.bitmapClosed = 0;
+    Object.defineProperty(window, 'createImageBitmap', {
+      configurable: true,
+      value: () => new Promise<ImageBitmap>(resolve => {
+        window.finishBitmap = async () => {
+          resolve({ width: 1, height: 1, close() { window.bitmapClosed++; } });
+        };
+      }),
+    });
+    const bytes = Uint8Array.from(atob(png), c => c.charCodeAt(0));
+    window.imagePending = fixtureApp.features.composerDrafts.images.add([new File([bytes], 'slow.png', { type: 'image/png' })]);
+  }, PNG_A);
+
+  // Immediately at attach time: token inserted, pending card shown with accessible remove button, send buttons disabled.
+  await expect(input).toHaveValue('Draft before image [Image #1] ');
+  await expect(page.locator('#attachmentStrip .attachment-chip.preparing .attachment-ref-badge')).toHaveText(['#1']);
+  await expect(page.getByRole('button', { name: 'Remove image #1' })).toBeVisible();
+  await expect(page.locator('#btnSend')).toBeDisabled();
+  await expect(page.locator('#btnSteer')).toBeDisabled();
+  await expect(page.locator('#btnFollowUp')).toBeDisabled();
+
+  // Send, Steer, and Follow-up are gated while preparing.
+  for (const method of ['sendPrompt', 'sendSteer', 'sendFollowUp'] as const) {
+    await page.evaluate(m => fixtureApp.features.composerSubmit[m](), method);
+    await expect(page.locator('#status')).toContainText('Wait for the attachments to finish preparing');
+  }
+  expect(sentPrompts(fleet.self)).toHaveLength(0);
+
+  // Gating is per owner: peer stays enabled, and switching back preserves pending state without reload stripping.
+  await fleet.select(fleet.peer);
+  await expect(page.locator('#btnSend')).toBeEnabled();
+  await fleet.select(fleet.self);
+  await expect(page.locator('#btnSend')).toBeDisabled();
+  await expect(input).toHaveValue('Draft before image [Image #1] ');
+  await expect(page.locator('#composerNote')).toBeHidden();
+
+  // Selecting prose while decode is in flight must not be replaced when decode completes.
+  await input.focus();
+  await input.evaluate(el => { const ta = el as HTMLTextAreaElement; ta.setSelectionRange(0, ta.value.length); });
+  await page.evaluate(async () => { void window.finishBitmap(); await window.imagePending; });
+
+  await expect(page.locator('#attachmentStrip .attachment-thumb .attachment-ref-badge')).toHaveText(['#1']);
+  await expect(page.getByRole('button', { name: 'Remove image #1' })).toBeVisible();
+  await expect(page.locator('#btnSend')).toBeEnabled();
+  const afterDecode = await input.evaluate(el => {
+    const ta = el as HTMLTextAreaElement;
+    return { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd };
+  });
+  expect(afterDecode).toEqual({ value: 'Draft before image [Image #1] ', start: 0, end: 30 });
+
+  await input.press('Enter');
+  await expect.poll(() => sentPrompts(fleet.self).length).toBe(1);
+  expect(sentPrompts(fleet.self)[0]!.message).toBe('Draft before image [Image #1]');
+  expect(sentPrompts(fleet.self)[0]!.images).toEqual([{ type: 'image', data: PNG_A, mimeType: 'image/png' }]);
+
+  // Failed decode removes pending entry, re-enables send, and leaves label text untouched (strip is truth).
+  await page.evaluate(id => {
+    window.fixtureSessionListPatch(id, { harnessId: 'bot' });
+    Object.defineProperty(window, 'createImageBitmap', {
+      configurable: true,
+      value: () => Promise.reject(new Error('decode failed')),
+    });
+  }, ROOT);
+  await input.fill('Before broken');
+  await input.focus();
+  await input.evaluate(el => { const ta = el as HTMLTextAreaElement; ta.setSelectionRange(ta.value.length, ta.value.length); });
+  await page.locator('#attachFileInput').setInputFiles([{ name: 'broken.webp', mimeType: 'image/webp', buffer: Buffer.from('bad') }]);
+  await expect(page.locator('#status')).toContainText('Could not attach broken.webp');
+  await expect(page.locator('#attachmentStrip')).toBeHidden();
+  await expect(page.locator('#btnSend')).toBeEnabled();
+  await expect(input).toHaveValue('Before broken [Image #1] ');
+});
+
+test('reload mid-upload recovers prose from prompt history and normal upload upgrades the history entry in place', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const input = page.locator('#promptInput');
+  await input.fill('Important prose for');
+  await input.focus();
+  await input.evaluate(el => { const ta = el as HTMLTextAreaElement; ta.setSelectionRange(ta.value.length, ta.value.length); });
+  await page.locator('#attachFileInput').setInputFiles([notesFile]);
+  await expect(page.getByRole('button', { name: 'Remove file #1: notes.txt' })).toBeVisible();
+  await expect(input).toHaveValue('Important prose for [File #1: notes.txt] ');
+
+  const upload = heldRoute();
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/uploads?*`, upload.hold);
+  await input.press('Enter');
+  await upload.received;
+
+  // Prose is persisted in history before the upload settles, surviving a mid-upload reload.
+  const preUploadHistory = await page.evaluate(() => fixtureApp.features.composerDrafts.prompts());
+  expect(preUploadHistory).toEqual(['Important prose for [File #1: notes.txt]']);
+
+  // Reload while the upload is still in flight; draft is gone, ↑ recovers prose from history.
+  await page.reload();
+  await page.unroute(`${fleet.self.base}/api/sessions/${ROOT}/uploads?*`);
+  await expect(page.locator('#messages')).toContainText('self root transcript');
+  await expect(input).toHaveValue('');
+  await input.focus();
+  await input.evaluate(el => { (el as HTMLTextAreaElement).setSelectionRange(0, 0); });
+  await input.press('ArrowUp');
+  await expect(input).toHaveValue('Important prose for [File #1: notes.txt]');
+
+  // When a file upload completes normally, history holds one upgraded entry (no duplicate).
+  await input.fill('Second upload for');
+  await input.focus();
+  await input.evaluate(el => { const ta = el as HTMLTextAreaElement; ta.setSelectionRange(ta.value.length, ta.value.length); });
+  await page.locator('#attachFileInput').setInputFiles([notesFile]);
+  await input.press('Enter');
+  await expect.poll(() => sentPrompts(fleet.self).length).toBe(1);
+  const finalHistory = await page.evaluate(() => fixtureApp.features.composerDrafts.prompts());
+  expect(finalHistory).toHaveLength(2);
+  expect(finalHistory[0]).toBe('Important prose for [File #1: notes.txt]');
+  expect(finalHistory[1]).toMatch(/^Second upload for \[File #1: notes\.txt\]\n\n\[File #1\] \[Attached file: \/.*\/notes\.txt \(text\/plain, 11 B\)\]$/);
+});
+
+test('bare-key migration preserves pi-dish-draft-refs- prefix, non-canonical refs never strip prose, and IME Enter does not send', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  // Seed legacy bare keys (both draft and draft-refs containing a non-canonical entry "hello") and re-run migration on reload.
+  await page.evaluate(id => {
+    localStorage.removeItem('pi-dish-keys-migrated');
+    const owner = fixtureElement(fixtureApp.features.composerDrafts.key, 'draft key');
+    localStorage.removeItem(fixtureApp.features.composerDrafts.draftKey(owner));
+    localStorage.removeItem(fixtureApp.features.composerDrafts.draftRefsKey(owner));
+    localStorage.setItem(`pi-dish-draft-${id}`, 'Keep hello and [Image #1]');
+    localStorage.setItem(`pi-dish-draft-refs-${id}`, JSON.stringify(['hello', '[Image #1]']));
+  }, ROOT);
+
+  await page.reload();
+  await expect(page.locator('#messages')).toContainText('self root transcript');
+  // Bare pi-dish-draft-refs-<id> migrated under pi-dish-draft-refs- (not mangled into pi-dish-draft-<host> refs-<id>),
+  // canonical `[Image #1]` was stripped, and non-canonical `"hello"` stayed untouched in prose.
+  await expect(page.locator('#promptInput')).toHaveValue('Keep hello and');
+  await expect(page.locator('#composerNote')).toBeVisible();
+  const keys = await page.evaluate(() => {
+    const out: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith('pi-dish-draft-')) out.push(k);
+    }
+    return out;
+  });
+  expect(keys.some(k => k.includes(' refs-'))).toBe(false);
+  expect(keys.includes(`pi-dish-draft-refs-${ROOT}`)).toBe(false);
+
+  // IME composition Enter (isComposing or keyCode 229) must not submit the composer.
+  await page.evaluate(() => {
+    const input = fixtureInput(document.getElementById('promptInput'), '#promptInput');
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }));
+    const legacy = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    Object.defineProperty(legacy, 'keyCode', { value: 229 });
+    input.dispatchEvent(legacy);
+  });
+  await expect(page.locator('#promptInput')).toHaveValue('Keep hello and');
+  expect(sentPrompts(fleet.self)).toHaveLength(0);
 });
 
 export {};

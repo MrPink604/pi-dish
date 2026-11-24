@@ -184,7 +184,7 @@ function migrateClientKeys() {
     if (localStorage.getItem(KEYS_MIGRATED_KEY) === hostDirectory.self.hostId) return;
     const isBare = (key: string) => parseSessionKey(key).hostId === null;
     const compose = (id: string) => sessionKey(hostDirectory.self.hostId, id);
-    const prefixes = ['pi-dish-draft-', 'pi-dish-history-', 'pi-dish-terminal-mode-'];
+    const prefixes = ['pi-dish-draft-refs-', 'pi-dish-draft-', 'pi-dish-history-', 'pi-dish-terminal-mode-'];
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
     for (const key of keys) {
@@ -326,6 +326,7 @@ async function startApp(): Promise<void> {
   const promptInput = document.querySelector<HTMLTextAreaElement>('#promptInput');
 
   promptInput?.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
     if (composerAutocomplete.visible) {
       if (e.key === 'ArrowDown') { e.preventDefault(); composerAutocomplete.move(1); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); composerAutocomplete.move(-1); return; }

@@ -107,7 +107,7 @@ export function createComposerSubmit(options: {
     return chat ? { question: message, fresh: false } : null;
   }
   async function askInSideChat(route: { question: string; fresh: boolean }, message: string, input: HTMLTextAreaElement, ownerKey: string, owns: () => boolean) {
-    if (composerDrafts.images.current().length) {
+    if (composerDrafts.images.current().length || composerDrafts.images.isPreparing(composerDrafts.ownerKey(ownerKey))) {
       options.status('Side chat messages cannot include attachments', 'error');
       return;
     }
@@ -139,15 +139,21 @@ async function sendPrompt() {
     }
     return;
   }
-  if ((!message && !composerDrafts.images.current().length) || !sessionState.currentSession) return;
+  if (!sessionState.currentSession) return;
   const owner = sessionState.captureSelection();
   if (!owner || disposed) return;
   const endpoint = Object.freeze({ ...options.endpoint(owner.host) }), sequence = ++feedbackSequence;
   const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
   const { id: sessionId } = owner;
   const ownerKey = sessionRefKey(owner);
+  const preparing = composerDrafts.images.isPreparing(composerDrafts.ownerKey(ownerKey));
+  if (!message && !composerDrafts.images.current().length && !preparing) return;
   if (sessionActivity.isAborting(ownerKey)) {
     options.status('Wait for the current turn to finish stopping', 'working');
+    return;
+  }
+  if (preparing) {
+    options.status('Wait for the attachments to finish preparing', 'working');
     return;
   }
   if (composerDrafts.images.isUploading(composerDrafts.ownerKey(ownerKey))) {
@@ -212,8 +218,12 @@ async function sendPrompt() {
   input.value = '';
   input.style.height = '';
   const attachments = composerDrafts.images.take();
-  composerDrafts.clearDraft(ownerKey);
   const resolved = resolveSubmission(message, attachments);
+  // Record prose before clearing the draft / starting uploads so a reload
+  // mid-upload can still recover it from ↑ history; upgrade in place on finish.
+  const preUploadHistory = formatPromptForHistory(resolved.message, resolved.imageTokens);
+  if (preUploadHistory) composerDrafts.record(preUploadHistory, ownerKey);
+  composerDrafts.clearDraft(ownerKey);
   const images = resolved.images;
   const refs = options.refs(resolved.message);
   const hibernated = !sessionState.currentSession.isActive && !!sessionState.currentSession.hibernation;
@@ -222,8 +232,10 @@ async function sendPrompt() {
     ? await withUploads(endpoint, sessionId, ownerKey, owns, message, resolved.message, resolved.hasFileTokens, resolved.files, attachments)
     : resolved.message;
   if (text === null) return;
-  const historyText = formatPromptForHistory(text, resolved.imageTokens);
-  if (historyText) composerDrafts.record(historyText, ownerKey);
+  if (resolved.files.length) {
+    const historyText = formatPromptForHistory(text, resolved.imageTokens);
+    if (historyText) composerDrafts.record(historyText, ownerKey, { replaceLast: preUploadHistory || undefined });
+  }
   // Uploads can outlast the selection; the prompt still goes to its owner, unseen.
   const visible = owns();
   if (visible) options.status(hibernated ? 'Resuming hibernated session...' : 'Sending...', 'working');
@@ -292,15 +304,21 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
     }
     return;
   }
-  if ((!message && !composerDrafts.images.current().length) || !sessionState.currentSession || !sessionState.currentSession.isActive) return;
+  if (!sessionState.currentSession || !sessionState.currentSession.isActive) return;
   const owner = sessionState.captureSelection();
   if (!owner || disposed) return;
   const endpoint = Object.freeze({ ...options.endpoint(owner.host) }), sequence = ++feedbackSequence;
   const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
   const { id: sessionId } = owner;
   const ownerKey = sessionRefKey(owner);
+  const preparing = composerDrafts.images.isPreparing(composerDrafts.ownerKey(ownerKey));
+  if (!message && !composerDrafts.images.current().length && !preparing) return;
   if (sessionActivity.isAborting(ownerKey)) {
     options.status('Wait for the current turn to finish stopping', 'working');
+    return;
+  }
+  if (preparing) {
+    options.status('Wait for the attachments to finish preparing', 'working');
     return;
   }
   if (composerDrafts.images.isUploading(composerDrafts.ownerKey(ownerKey))) {
@@ -322,15 +340,19 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
   input.value = '';
   input.style.height = '';
   const attachments = composerDrafts.images.take();
-  composerDrafts.clearDraft(ownerKey);
   const resolved = resolveSubmission(message, attachments);
+  const preUploadHistory = formatPromptForHistory(resolved.message, resolved.imageTokens);
+  if (preUploadHistory) composerDrafts.record(preUploadHistory, ownerKey);
+  composerDrafts.clearDraft(ownerKey);
   const images = resolved.images;
   const text = resolved.files.length
     ? await withUploads(endpoint, sessionId, ownerKey, owns, message, resolved.message, resolved.hasFileTokens, resolved.files, attachments)
     : resolved.message;
   if (text === null) return;
-  const historyText = formatPromptForHistory(text, resolved.imageTokens);
-  if (historyText) composerDrafts.record(historyText, ownerKey);
+  if (resolved.files.length) {
+    const historyText = formatPromptForHistory(text, resolved.imageTokens);
+    if (historyText) composerDrafts.record(historyText, ownerKey, { replaceLast: preUploadHistory || undefined });
+  }
   if (owns()) options.status(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
 
   const body: Record<string, unknown> = steer ? { message: text } : { message: text, deliverAs: 'followUp' };

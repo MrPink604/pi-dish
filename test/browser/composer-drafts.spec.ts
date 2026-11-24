@@ -71,7 +71,7 @@ test('malformed history is narrowed and disposal flushes text while closing late
   if (owner === null) throw new Error('Missing disposal composer owner');
   await page.evaluate(png => { fixtureApp.features.composerDrafts.images.openLightbox('data:image/png;base64,' + png); fixtureApp.features.composerDrafts.dispose(); }, PNG);
   await page.evaluate(async () => { void window.finishBitmap(); await window.imagePending; });
-  expect(await page.evaluate(owner => ({ text: localStorage.getItem(fixtureApp.features.composerDrafts.draftKey(owner)), closed: window.bitmapClosed }), owner)).toEqual({ text: 'Flush on disposal', closed: 1 });
+  expect(await page.evaluate(owner => ({ text: localStorage.getItem(fixtureApp.features.composerDrafts.draftKey(owner)), closed: window.bitmapClosed }), owner)).toEqual({ text: 'Flush on disposal [Image #1] ', closed: 1 });
   await expect(page.locator('.lightbox-overlay')).toHaveCount(0); await expect(page.locator('.attachment-thumb')).toHaveCount(0);
 });
 

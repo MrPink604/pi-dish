@@ -15,6 +15,7 @@ const {
   resolveAttachmentsForSend,
   appendFileManifest,
   formatPromptForHistory,
+  isCanonicalAttachmentToken,
   decodeDraftRefs,
 } = loadBrowser();
 
@@ -142,8 +143,22 @@ test('formatPromptForHistory strips unbacked image tokens while preserving file 
   assert.equal(formatPromptForHistory('See [Image #1] above', []), 'See [Image #1] above');
 });
 
-test('decodeDraftRefs validates and deduplicates persisted ref lists', () => {
-  assert.deepEqual(plain(decodeDraftRefs(JSON.stringify(['[Image #1]', '[Image #1]', 42, '', '[File #1: a.txt]']))), ['[Image #1]', '[File #1: a.txt]']);
+test('decodeDraftRefs validates canonical tokens and rejects arbitrary prose strings', () => {
+  assert.equal(isCanonicalAttachmentToken('[Image #1]'), true);
+  assert.equal(isCanonicalAttachmentToken('[File #2: report.pdf]'), true);
+  assert.equal(isCanonicalAttachmentToken('[File #3: quarterly-revenue-s….pdf]'), true);
+  assert.equal(isCanonicalAttachmentToken('hello'), false);
+  assert.equal(isCanonicalAttachmentToken('[Image #0]'), false);
+  assert.equal(isCanonicalAttachmentToken('[Image #1] extra'), false);
+  assert.equal(isCanonicalAttachmentToken('[File #1: ]'), false);
+  assert.equal(isCanonicalAttachmentToken('[File #1: bad[name]]'), false);
+  assert.equal(isCanonicalAttachmentToken(`[File #1: ${'x'.repeat(FILE_REF_NAME_MAX + 1)}]`), false);
+
+  assert.deepEqual(
+    plain(decodeDraftRefs(JSON.stringify(['hello', '[Image #1]', '[Image #1]', '[Image #0]', 42, '', '[File #1: a.txt]', '[File #2: ]']))),
+    ['[Image #1]', '[File #1: a.txt]'],
+  );
+  assert.deepEqual(plain(decodeDraftRefs(JSON.stringify(['hello']))), []);
   assert.deepEqual(plain(decodeDraftRefs('not json')), []);
   assert.deepEqual(plain(decodeDraftRefs('{"a":1}')), []);
   assert.deepEqual(plain(decodeDraftRefs(null)), []);

@@ -1,5 +1,5 @@
 import type { ComposerAttachment } from './composer-images';
-import { attachmentRefToken, createComposerImages } from './composer-images';
+import { createComposerImages } from './composer-images';
 import { decodeDraftRefs, insertTokensAtSelection, removeTokensFromText, rewriteTokensInText } from './composer-refs';
 import { pushPromptHistory } from './helper-format';
 export function mergeComposerText(existing: string, restored: string) { const current = existing.trim(); return !current || current === restored ? restored : `${existing}\n\n${restored}`; }
@@ -26,7 +26,7 @@ export function createComposerDrafts(options: {
   isBotTarget?: (owner: string) => boolean; historyChanged?: () => void; showNote?: (text: string) => void;
 }) {
   const { document, storage } = options;
-  let key: string | null = null, dirty = false, history: string[] = [], historyIndex = -1, historyStash = '', timer: ReturnType<typeof setTimeout> | null = null, generation = 0, disposed = false;
+  let key: string | null = null, dirty = false, waitPending = false, history: string[] = [], historyIndex = -1, historyStash = '', timer: ReturnType<typeof setTimeout> | null = null, generation = 0, disposed = false;
   const input = () => document.getElementById('promptInput') as HTMLTextAreaElement;
   function ownerKey(id: string) { return id.startsWith('spawn:') || id.includes(' ') ? id : options.keyForSession(id); }
   function draftKey(id: string) { return 'pi-dish-draft-' + ownerKey(id); }
@@ -49,6 +49,26 @@ export function createComposerDrafts(options: {
     try { if (value.trim() && value.length < 50000) storage.setItem(draftKey(id), value); else storage.removeItem(draftKey(id)); } catch {}
     writeRefs(id, images.tokens(ownerKey(id)));
   }
+  function syncSendDisabled() {
+    if (disposed) return;
+    const preparing = !!key && images.isPreparing(key);
+    const btnSend = document.getElementById('btnSend') as HTMLButtonElement | null;
+    if (btnSend) {
+      btnSend.disabled = waitPending || preparing;
+      btnSend.title = waitPending ? 'Your draft will be preserved until Pi connects'
+        : preparing ? 'Preparing attachments…' : 'Send';
+    }
+    const btnSteer = document.getElementById('btnSteer') as HTMLButtonElement | null;
+    if (btnSteer) {
+      btnSteer.disabled = preparing;
+      btnSteer.title = preparing ? 'Preparing attachments…' : 'Steer (Ctrl+Enter)';
+    }
+    const btnFollowUp = document.getElementById('btnFollowUp') as HTMLButtonElement | null;
+    if (btnFollowUp) {
+      btnFollowUp.disabled = preparing;
+      btnFollowUp.title = preparing ? 'Preparing attachments…' : 'Queue after agent finishes';
+    }
+  }
   function insertTokensIntoInput(el: HTMLTextAreaElement, tokens: readonly string[]) {
     const result = insertTokensAtSelection(el.value, el.selectionStart, el.selectionEnd, tokens);
     if (document.activeElement === el && typeof document.execCommand === 'function') {
@@ -63,10 +83,8 @@ export function createComposerDrafts(options: {
   }
   const images = createComposerImages({
     document, owner: () => key, isBotTarget: options.isBotTarget, status: options.status,
-    onAdded(owner, added) {
-      if (disposed) return;
-      const tokens = added.map(attachmentRefToken).filter((token): token is string => token !== null);
-      if (!tokens.length) return;
+    onAdded(owner, tokens) {
+      if (disposed || !tokens.length) return;
       if (key === owner) {
         const el = input();
         if (el) {
@@ -83,9 +101,8 @@ export function createComposerDrafts(options: {
       }
       writeRefs(owner, images.tokens(owner));
     },
-    onRemoved(owner, removed) {
+    onRemoved(owner, token) {
       if (disposed) return;
-      const token = attachmentRefToken(removed);
       if (token && key === owner) {
         const el = input();
         if (el) {
@@ -107,19 +124,25 @@ export function createComposerDrafts(options: {
       }
       writeRefs(owner, images.tokens(owner));
     },
+    onStateChanged(owner) {
+      if (disposed) return;
+      writeRefs(owner, images.tokens(owner));
+      syncSendDisabled();
+    },
   });
   function stash() {
     cancelTimer(); generation++; if (!key) return;
-    if (dirty) write(key, input().value); key = null; dirty = false; images.render(); changed();
+    if (dirty) write(key, input().value); key = null; dirty = false; images.render(); syncSendDisabled(); changed();
   }
   function clear() {
     cancelTimer(); generation++;
     if (key) { images.discard(key); try { storage.removeItem(draftRefsKey(key)); } catch {} }
-    key = null; dirty = false; input().value = ''; input().style.height = ''; images.render(); changed();
+    key = null; dirty = false; input().value = ''; input().style.height = ''; images.render(); syncSendDisabled(); changed();
   }
   function waiting(value: boolean) {
-    input().placeholder = value ? 'Write your prompt while Pi starts…' : 'Send a message...'; const button = document.getElementById('btnSend') as HTMLButtonElement | null;
-    if (button) { button.disabled = value; button.title = value ? 'Your draft will be preserved until Pi connects' : 'Send'; }
+    waitPending = value;
+    input().placeholder = value ? 'Write your prompt while Pi starts…' : 'Send a message...';
+    syncSendDisabled();
   }
   function saveSoon() {
     if (disposed) return; cancelTimer(); const owner = key, version = generation; dirty = true;
@@ -135,15 +158,20 @@ export function createComposerDrafts(options: {
     if (key && dirty) write(key, input().value); cancelTimer(); key = owner; dirty = false; generation++;
     let draft = read(draftKey(owner));
     const savedRefs = decodeDraftRefs(read(draftRefsKey(owner)));
-    if (!images.stored(owner).length && savedRefs.length) {
+    if (!images.stored(owner).length && !images.isPreparing(owner) && savedRefs.length) {
       draft = removeTokensFromText(draft, savedRefs).value;
       write(owner, draft);
       options.showNote?.('Attachments were cleared on reload; re-attach if needed.');
     }
-    input().value = draft; images.render(); options.autosize(input()); historyIndex = -1; historyStash = ''; history = readHistory(owner); changed();
+    input().value = draft; images.render(); syncSendDisabled(); options.autosize(input()); historyIndex = -1; historyStash = ''; history = readHistory(owner); changed();
   }
-  function record(message: string, id: string | null = key) {
-    if (disposed || !id) return; const owner = ownerKey(id), next = pushPromptHistory(key === owner ? history : readHistory(owner), message, HISTORY_LIMIT);
+  function record(message: string, id: string | null = key, opts?: { replaceLast?: string }) {
+    if (disposed || !id) return; const owner = ownerKey(id);
+    const currentHistory = key === owner ? history : readHistory(owner);
+    const base = opts?.replaceLast && currentHistory.at(-1) === opts.replaceLast
+      ? currentHistory.slice(0, -1)
+      : currentHistory;
+    const next = pushPromptHistory(base, message, HISTORY_LIMIT);
     if (key === owner) { history = next; historyIndex = -1; }
     try { storage.setItem(historyKey(owner), JSON.stringify(next)); } catch {}
     changed();
