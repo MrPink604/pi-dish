@@ -117,6 +117,14 @@ test('bot workers (local, remote, and sub-bot workers) nest under their owning b
   }).html;
   assert.match(allExpanded, /data-bot-closed="fleet" aria-expanded="true"/);
   assert.match(allExpanded, /bot-closed-list[\s\S]*?data-id="w-closed"/);
+  // Neither bots nor their active/closed workers render pin buttons (they live in the Bots group, never Pinned).
+  const botsSegExpanded = allExpanded.slice(allExpanded.indexOf('bots-segment'), allExpanded.indexOf('host-section'));
+  assert.doesNotMatch(botsSegExpanded, /session-pin-btn/, 'bots and bot workers never render a pin button');
+  assert.match(restSeg, /data-id="ordinary"[\s\S]*?session-pin-btn/, 'ordinary sessions still render a pin button');
+  // Even in search results, a bot session row never renders a pin button.
+  const searchHtml = render({ active, previous, tab: 'all', query: 'Fleet', queriedFor: 'Fleet', multiHost: true, hosts, selfHostId: HUB, bots, hostChip }).html;
+  const fleetRowMatch = /data-id="route-fleet"[\s\S]*?<\/div>\s*<div class="session-item-meta"/.exec(searchHtml);
+  assert.ok(fleetRowMatch && !fleetRowMatch[0].includes('session-pin-btn'), 'bot row omits pin button in search results too');
 
   // Search flattens bots and workers into the ranked list.
   const searched = render({ active, previous, tab: 'all', multiHost: true, hosts, selfHostId: HUB, bots, query: 'gpu' }).html;

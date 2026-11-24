@@ -35,9 +35,9 @@ const MAX_VISUAL_INDENT_DEPTH = 3;
 interface RowOptions {
   familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; visualDepth?: number; familyPinned?: boolean;
   pinnedRow?: boolean; showCwd?: boolean; showHost?: boolean; bridge?: boolean; botActions?: string;
-  botToggle?: string; forceLeaf?: boolean; statusOverride?: readonly SessionEntry[]; timeOverride?: number;
+  botToggle?: string; forceLeaf?: boolean; statusOverride?: readonly SessionEntry[]; timeOverride?: number; pinnable?: boolean;
 }
-interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean; forceLeaf?: boolean; baseDepth?: number }
+interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean; forceLeaf?: boolean; baseDepth?: number; pinnable?: boolean }
 export function harnessBadgeInnerHtml(info: ReturnType<typeof harnessBadgeInfo>) {
   const icon = info.icon
     ? `<img class="harness-badge-icon" src="${escapeHtml(info.icon)}" alt="">`
@@ -199,7 +199,10 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const timeAgo = formatRelativeTime(opts.timeOverride !== undefined ? opts.timeOverride : hasChildren ? familyNode!.activity : session.lastActivity);
   const canonicalRootKey = canonical(opts.familyRootKey || key);
   const isPinned = opts.familyPinned ?? pinnedRoots.has(canonicalRootKey);
-  const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin family' : 'Pin family to top'}">📌</button>`;
+  const canPin = opts.pinnable !== false && session.harnessId !== 'bot';
+  const pinBtn = canPin
+    ? `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin family' : 'Pin family to top'}">📌</button>`
+    : '';
   const familyToggle = opts.botToggle !== undefined ? opts.botToggle
     : opts.bridge
       ? '<span class="session-family-leaf session-bridge-marker" aria-hidden="true">↳</span>'
@@ -299,6 +302,7 @@ function renderSessionFamily(node: SessionFamily<SessionEntry>, opts: FamilyOpti
     showHost: depth === 0 ? (!!opts.showCwd || !!opts.pinnedFamily) : diffHost,
     bridge: !!node.bridge,
     forceLeaf: !!opts.forceLeaf && depth === 0,
+    pinnable: opts.pinnable,
   });
   const childrenClass = visualDepth + 1 > MAX_VISUAL_INDENT_DEPTH
     ? 'session-family-children depth-capped'
@@ -393,6 +397,7 @@ function renderBotsSegment(tree: BotSessionTree) {
           botToggle: toggleHtml,
           statusOverride: isCollapsed ? node.allSessions : undefined,
           timeOverride: isCollapsed && node.activity > 0 ? node.activity : undefined,
+          pinnable: false,
         })
       : `<div class="bot-item bot-stopped">${toggleHtml ?? (depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '')}${depth > MAX_VISUAL_INDENT_DEPTH ? `<span class="session-depth-badge" title="Nesting depth ${depth}">L${depth}</span>` : ''}${isCollapsed ? aggregatedStatusDot(node.allSessions) : ''}<span class="bot-item-name">${escapeHtml(bot.name)}</span><span class="bot-item-state">not running</span>${actions}</div>`;
 
@@ -401,7 +406,7 @@ function renderBotsSegment(tree: BotSessionTree) {
       const workerDepth = depth + 1;
       const workerIndent = Math.min(workerDepth, MAX_VISUAL_INDENT_DEPTH) * 14;
       const activeHtml = node.activeWorkers.map(worker =>
-        `<div class="bot-worker-node" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true, baseDepth: workerDepth })}</div>`
+        `<div class="bot-worker-node" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true, baseDepth: workerDepth, pinnable: false })}</div>`
       ).join('');
       let closedHtml = '';
       if (node.closedWorkers.length) {
@@ -414,7 +419,7 @@ function renderBotsSegment(tree: BotSessionTree) {
           + `</button></div>`;
         if (closedExpanded) {
           closedHtml += `<div class="bot-closed-list">${node.closedWorkers.map(worker =>
-            `<div class="bot-worker-node bot-worker-closed" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true, baseDepth: workerDepth })}</div>`
+            `<div class="bot-worker-node bot-worker-closed" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true, baseDepth: workerDepth, pinnable: false })}</div>`
           ).join('')}</div>`;
         }
       }

@@ -270,7 +270,7 @@ export function createSidebarControls(options: {
       const botClosedToggle = target.closest<HTMLElement>('.bot-closed-toggle'); if (botClosedToggle) { if (botClosedToggle.dataset.botClosed) toggleBotClosed(botClosedToggle.dataset.botClosed); return; }
       const familyToggle = target.closest<HTMLElement>('.session-family-toggle'); if (familyToggle) { if (familyToggle.dataset.familyId) toggleFamily(familyToggle.dataset.familyId, host); return; }
       if (target.closest('.session-pin-btn')) {
-        if (id && item) {
+        if (id && item && !item.closest('.bots-segment') && sessionState.findSession(id, host)?.harnessId !== 'bot') {
           const family = item.closest<HTMLElement>('.session-family-root');
           const members = family
             ? Array.from(family.querySelectorAll<HTMLElement>('.session-item[data-id]'))
