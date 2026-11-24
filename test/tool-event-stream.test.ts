@@ -119,6 +119,10 @@ test('codemode updates and completions preserve bounded call rows without readin
     calls: [{ id: 1, name: 'sessions', args: '{"action":"read","ref":"desktop/01a1fc02"}', status: 'running' }],
   });
 
+  const nestedExplosive = {
+    get boom() { throw new Error('nested object args must not be walked or stringified'); },
+  };
+  const hugeArgs = { command: 'x'.repeat(2000), nested: nestedExplosive };
   const circular: Record<string, unknown> = {};
   circular.self = circular;
   const doneDetails = {
@@ -127,6 +131,7 @@ test('codemode updates and completions preserve bounded call rows without readin
       { id: 1, name: 'sessions', args: 'a'.repeat(700), status: 'ok', durationMs: 42, rawResult: { huge: true } },
       { id: 2, name: 'bash', args: { command: 'ls' }, status: 'error', durationMs: 120, error: 'e'.repeat(700), extra: 9 },
       { id: 3, name: 'read', args: circular, status: 'cancelled' },
+      { id: 4, name: 'bash', args: hugeArgs, status: 'ok' },
     ],
   };
   const ended = JSON.parse(JSON.stringify(projectToolEvent('tool_execution_end', {
@@ -137,7 +142,8 @@ test('codemode updates and completions preserve bounded call rows without readin
     calls: [
       { id: 1, name: 'sessions', args: 'a'.repeat(500), status: 'ok', durationMs: 42 },
       { id: 2, name: 'bash', args: '{"command":"ls"}', status: 'error', durationMs: 120, error: 'e'.repeat(500) },
-      { id: 3, name: 'read', status: 'cancelled' },
+      { id: 3, name: 'read', args: '{"self":"{…}"}', status: 'cancelled' },
+      { id: 4, name: 'bash', args: `{"command":"${'x'.repeat(200)}","nested":"{…}"}`, status: 'ok' },
     ],
   });
 
@@ -147,8 +153,17 @@ test('codemode updates and completions preserve bounded call rows without readin
     result: { content: [], details: { calls: manyCalls } },
   })));
   assert.equal(capped.result.details.calls.length, 100);
+  assert.equal(capped.result.details.callsTruncated, true);
   assert.equal(capped.result.details.calls[0].id, 1);
   assert.equal(capped.result.details.calls[99].id, 100);
+
+  const exactCalls = Array.from({ length: 100 }, (_, i) => ({ id: i + 1, name: 'read', args: '{}', status: 'ok', durationMs: 1 }));
+  const exact = JSON.parse(JSON.stringify(projectToolEvent('tool_execution_end', {
+    toolCallId: 'cm_exact', toolName: 'codemode', isError: false,
+    result: { content: [], details: { calls: exactCalls } },
+  })));
+  assert.equal(exact.result.details.calls.length, 100);
+  assert.equal('callsTruncated' in exact.result.details, false);
 
   const nonArray = JSON.parse(JSON.stringify(projectToolEvent('tool_execution_end', {
     toolCallId: 'cm_3', toolName: 'codemode', isError: false,

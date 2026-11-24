@@ -138,6 +138,22 @@ test('codemode result parsing, output formatting, bot tool bodies and places cha
     assert.ok(parsed && parsed.ok === true && parsed.wallLabel === '1.4s');
     const chips = codemodeResultChipsHtml({ kind: 'codemode', calls: [{ op: 'sessions', facts: [] }] }, parsed, (t, cls) => `[${cls || ''}:${t}]`);
     assert.equal(chips, '[job:1 call][duration:1.4s]');
+    const exactDetails = decodeToolDetails('codemode', {
+        calls: Array.from({ length: 100 }, (_, i) => ({ id: i + 1, name: 'read', status: 'ok' })),
+    });
+    assert.ok(exactDetails && exactDetails.kind === 'codemode');
+    assert.equal(codemodeResultChipsHtml(exactDetails, parsed, (t, cls) => `[${cls || ''}:${t}]`), '[job:100 calls][duration:1.4s]');
+    const cappedProjected = decodeToolDetails('codemode', {
+        calls: Array.from({ length: 100 }, (_, i) => ({ id: i + 1, name: 'read', status: 'ok' })),
+        callsTruncated: true,
+    });
+    assert.ok(cappedProjected && cappedProjected.kind === 'codemode');
+    assert.equal(codemodeResultChipsHtml(cappedProjected, parsed, (t, cls) => `[${cls || ''}:${t}]`), '[job:100+ calls][duration:1.4s]');
+    const cappedRaw = decodeToolDetails('codemode', {
+        calls: Array.from({ length: 120 }, (_, i) => ({ id: i + 1, name: 'read', status: 'ok' })),
+    });
+    assert.ok(cappedRaw && cappedRaw.kind === 'codemode' && cappedRaw.calls.length === 100);
+    assert.equal(codemodeResultChipsHtml(cappedRaw, parsed, (t, cls) => `[${cls || ''}:${t}]`), '[job:100+ calls][duration:1.4s]');
     const jsonOut = formatCodemodeOutput(parsed.output, text => `<p>${text}</p>`);
     assert.equal(jsonOut.kind, 'json');
     assert.match(jsonOut.html, /language-json/);

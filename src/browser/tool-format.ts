@@ -25,7 +25,7 @@ export interface EvalCell {
 /** OMP eval result details: per-cell status, timing and host-tool activity. */
 export interface EvalToolDetails { readonly kind: 'eval'; readonly cells: readonly EvalCell[] }
 /** A bot's code mode result details: the tool calls its script made, as eval activity rows. */
-export interface CodemodeToolDetails { readonly kind: 'codemode'; readonly calls: readonly EvalEvent[] }
+export interface CodemodeToolDetails { readonly kind: 'codemode'; readonly calls: readonly EvalEvent[]; readonly truncated?: boolean }
 export type ToolDetails = BashToolDetails | WaitToolDetails | EvalToolDetails | CodemodeToolDetails;
 
 /** OMP's `wait` returns a still-running snapshot after this cap even if no job settled. */
@@ -67,7 +67,8 @@ export function decodeToolDetails(toolName: string | undefined, value: unknown):
     }] : []) };
   }
   if (toolName === 'codemode' && Array.isArray(value.calls)) {
-    return { kind: 'codemode', calls: value.calls.flatMap((call: unknown): EvalEvent[] => {
+    const truncated = value.callsTruncated === true || value.calls.length > EVAL_EVENT_LIMIT;
+    return { kind: 'codemode', ...(truncated ? { truncated: true } : {}), calls: value.calls.slice(0, EVAL_EVENT_LIMIT).flatMap((call: unknown): EvalEvent[] => {
       if (!record(call) || !string(call.name)) return [];
       const name = String(call.name);
       let summary: string | undefined;
@@ -197,7 +198,10 @@ export function codemodeResultChipsHtml(
 ) {
   let html = '';
   const count = details?.calls.length ?? 0;
-  if (count) html += chip(`${count} call${count === 1 ? '' : 's'}`, 'job', 'Tool calls made by the script');
+  if (count) {
+    const label = details?.truncated ? `${count}+ calls` : `${count} call${count === 1 ? '' : 's'}`;
+    html += chip(label, 'job', 'Tool calls made by the script');
+  }
   if (parsed) html += chip(parsed.wallLabel, 'duration', 'Script wall time');
   if (parsed && !parsed.ok) html += chip('failed', 'error-badge');
   return html;

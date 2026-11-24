@@ -16,6 +16,35 @@ function pick(source: Record<string, unknown>, keys: readonly string[]): Record<
   return out;
 }
 
+const CODEMODE_ARG_KEYS_LIMIT = 8;
+const CODEMODE_ARG_KEY_LIMIT = 64;
+const CODEMODE_ARG_VALUE_LIMIT = 200;
+
+/** Bounded shallow JSON preview for object-shaped codemode call args, capped before stringifying. */
+function summarizeCodemodeObjectArgs(args: Record<string, unknown>): string | undefined {
+  const parts: string[] = [];
+  let budget = CODEMODE_CALL_TEXT_LIMIT;
+  let keys: string[];
+  try { keys = Object.keys(args); } catch { return undefined; }
+  for (let i = 0; i < keys.length && parts.length < CODEMODE_ARG_KEYS_LIMIT && budget > 0; i++) {
+    const rawKey = keys[i]!;
+    let value: unknown;
+    try { value = args[rawKey]; } catch { continue; }
+    let rendered: string;
+    if (typeof value === 'string') rendered = JSON.stringify(value.slice(0, Math.min(budget, CODEMODE_ARG_VALUE_LIMIT)));
+    else if (typeof value === 'number') rendered = Number.isFinite(value) ? String(value) : 'null';
+    else if (typeof value === 'boolean' || value === null) rendered = String(value);
+    else if (Array.isArray(value)) rendered = JSON.stringify(`[${value.length} items]`);
+    else if (record(value)) rendered = '"{…}"';
+    else continue;
+    const entry = `${JSON.stringify(rawKey.slice(0, CODEMODE_ARG_KEY_LIMIT))}:${rendered}`;
+    parts.push(entry);
+    budget -= entry.length + 1;
+  }
+  if (!parts.length) return undefined;
+  return `{${parts.join(',')}}`.slice(0, CODEMODE_CALL_TEXT_LIMIT);
+}
+
 /**
  * The few result details the browser formats: OMP bash timing/exit/deadline,
  * wait job rows, eval cell status/activity and codemode call rows. Everything
@@ -39,7 +68,8 @@ function projectToolDetails(toolName: unknown, details: unknown): Record<string,
     }) };
   }
   if (toolName === 'codemode' && Array.isArray(details.calls)) {
-    return { calls: details.calls.slice(0, CODEMODE_CALL_LIMIT).flatMap((call: unknown) => {
+    const callsTruncated = details.calls.length > CODEMODE_CALL_LIMIT;
+    const calls = details.calls.slice(0, CODEMODE_CALL_LIMIT).flatMap((call: unknown) => {
       if (!record(call) || typeof call.name !== 'string' || !call.name) return [];
       const out: Record<string, unknown> = {};
       if (finite(call.id)) out.id = call.id;
@@ -47,16 +77,15 @@ function projectToolDetails(toolName: unknown, details: unknown): Record<string,
       out.name = call.name.slice(0, CODEMODE_CALL_TEXT_LIMIT);
       if (typeof call.args === 'string') out.args = call.args.slice(0, CODEMODE_CALL_TEXT_LIMIT);
       else if (record(call.args)) {
-        try {
-          const serialized = JSON.stringify(call.args);
-          if (typeof serialized === 'string') out.args = serialized.slice(0, CODEMODE_CALL_TEXT_LIMIT);
-        } catch {}
+        const preview = summarizeCodemodeObjectArgs(call.args);
+        if (preview) out.args = preview;
       }
       if (typeof call.status === 'string') out.status = call.status.slice(0, CODEMODE_CALL_TEXT_LIMIT);
       if (finite(call.durationMs)) out.durationMs = call.durationMs;
       if (typeof call.error === 'string') out.error = call.error.slice(0, CODEMODE_CALL_TEXT_LIMIT);
       return [out];
-    }) };
+    });
+    return callsTruncated ? { calls, callsTruncated: true } : { calls };
   }
   if (toolName === 'eval' && Array.isArray(details.cells)) {
     const multi = details.cells.length > 1;
