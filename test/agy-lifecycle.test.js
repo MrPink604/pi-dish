@@ -44,17 +44,107 @@ const MEMINFO_CALM = [
 ].join('\n') + '\n';
 const children = new Set();
 const ownedRoots = new Set();
-const tmuxDirs = new Set();
+const tmuxDirs = new Map();
+function pidAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function descendantPids(rootPid) {
+    const seen = new Set();
+    const queue = [rootPid];
+    while (queue.length > 0) {
+        const pid = queue.shift();
+        if (!Number.isInteger(pid) || pid <= 1 || seen.has(pid))
+            continue;
+        seen.add(pid);
+        try {
+            const taskDir = `/proc/${pid}/task`;
+            for (const tid of fs.readdirSync(taskDir)) {
+                const raw = fs.readFileSync(path.join(taskDir, tid, 'children'), 'utf8').trim();
+                for (const token of raw.split(/\s+/).filter(Boolean)) {
+                    const child = Number(token);
+                    if (Number.isInteger(child) && child > 1 && !seen.has(child))
+                        queue.push(child);
+                }
+            }
+        }
+        catch { /* process exited */ }
+    }
+    return [...seen];
+}
+function collectRelayTreePids(tmuxDir, home) {
+    const roots = new Set();
+    const socket = path.join(tmuxDir, 'pi-dish');
+    try {
+        const out = (0, node_child_process_1.execFileSync)('tmux', ['-S', socket, 'list-panes', '-a', '-F', '#{pane_pid}'], {
+            encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: (0, test_env_js_1.sanitizeTestEnv)(process.env),
+        });
+        for (const line of out.trim().split('\n').filter(Boolean)) {
+            const pid = Number(line.trim());
+            if (Number.isInteger(pid) && pid > 1)
+                roots.add(pid);
+        }
+    }
+    catch { /* no tmux server */ }
+    try {
+        const sessionsDir = path.join(home, '.pi', 'dish', 'sessions');
+        for (const name of fs.readdirSync(sessionsDir)) {
+            if (!name.endsWith('.json'))
+                continue;
+            const claim = readJsonFile(path.join(sessionsDir, name));
+            const pid = typeof claim?.pid === 'number' ? claim.pid : NaN;
+            if (Number.isInteger(pid) && pid > 1)
+                roots.add(pid);
+        }
+    }
+    catch { /* no claims */ }
+    const all = new Set();
+    for (const pid of roots) {
+        for (const member of descendantPids(pid))
+            all.add(member);
+    }
+    return [...all];
+}
+async function stopTmuxServer(tmuxDir, home) {
+    const pids = collectRelayTreePids(tmuxDir, home);
+    try {
+        (0, node_child_process_1.execFileSync)('tmux', ['-S', path.join(tmuxDir, 'pi-dish'), 'kill-server'], {
+            stdio: 'ignore', env: (0, test_env_js_1.sanitizeTestEnv)(process.env),
+        });
+    }
+    catch { /* already stopped */ }
+    if (pids.length === 0)
+        return;
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && pids.some(pidAlive)) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    for (const pid of pids) {
+        if (pidAlive(pid)) {
+            try {
+                process.kill(pid, 'SIGKILL');
+            }
+            catch { }
+        }
+    }
+    const killDeadline = Date.now() + 2_000;
+    while (Date.now() < killDeadline && pids.some(pidAlive)) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+}
 test.after(async () => {
     for (const booted of children)
         await booted.stop().catch(() => { });
-    // Relay panes outlive the server; the isolated tmux servers must not.
-    for (const dir of tmuxDirs) {
-        try {
-            (0, node_child_process_1.execFileSync)('tmux', ['-S', path.join(dir, 'pi-dish'), 'kill-server'], { stdio: 'ignore' });
-        }
-        catch { }
+    // Relay panes and their agy children outlive the server; stop every isolated tmux server and wait for them to exit.
+    for (const [dir, home] of tmuxDirs) {
+        await stopTmuxServer(dir, home);
     }
+    tmuxDirs.clear();
     for (const root of ownedRoots)
         fs.rmSync(root, { recursive: true, force: true });
 });
@@ -63,17 +153,22 @@ function ownedRoot(prefix) {
     ownedRoots.add(root);
     return root;
 }
-function makeHome(settings) {
+function makeHome(t, settings) {
     const home = ownedRoot('pi-dish-agy-life-');
     fs.mkdirSync(path.join(home, '.pi', 'dish'), { recursive: true });
     fs.mkdirSync(path.join(home, 'proj'), { recursive: true });
     fs.writeFileSync(path.join(home, '.pi', 'dish', 'settings.json'), JSON.stringify(settings));
+    t.after(async () => {
+        const dir = path.join(home, 'tmux');
+        if (tmuxDirs.delete(dir))
+            await stopTmuxServer(dir, home);
+    });
     return home;
 }
 function makeTmuxDir(home) {
     const dir = path.join(home, 'tmux');
     fs.mkdirSync(dir, { recursive: true });
-    tmuxDirs.add(dir);
+    tmuxDirs.set(dir, home);
     return dir;
 }
 function meminfoFile(home, text) {
@@ -114,6 +209,7 @@ async function boot(home, extraEnv = {}) {
             if (child.exitCode === null && child.signalCode === null)
                 child.kill('SIGTERM');
             await exited;
+            children.delete(booted);
         },
     };
     children.add(booted);
@@ -274,7 +370,7 @@ function sessionRow(body, id) {
     return rows.find(row => row.id === id) || null;
 }
 test('an idle agy relay hibernates under pressure and a message wakes it with a completed turn', { timeout: 120000 }, async (t) => {
-    const home = makeHome({ hibernation: 'pressure' });
+    const home = makeHome(t, { hibernation: 'pressure' });
     const projDir = path.join(home, 'proj');
     const server = await boot(home, {
         PI_DISH_AGY_COMMAND: agyCommand('default'),
@@ -319,9 +415,11 @@ test('an idle agy relay hibernates under pressure and a message wakes it with a 
     assert.ok(fs.existsSync(claimPath(home)), 'a fresh relay published a claim');
     const resumedSpawn = (0, test_types_js_1.present)(spawnOf(home, sessionId), 'resume recorded a new pane');
     assert.equal(paneExists(String(resumedSpawn.socket), String(resumedSpawn.paneId)), true, 'the relay runs again');
+    const closed = await post(server.base, sessionPath(sessionId, '/close'), {});
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
 });
 test('a busy agy relay is never hibernated', { timeout: 120000 }, async (t) => {
-    const home = makeHome({ hibernation: 'pressure' });
+    const home = makeHome(t, { hibernation: 'pressure' });
     const projDir = path.join(home, 'proj');
     const server = await boot(home, {
         PI_DISH_AGY_COMMAND: agyCommand('slow'),
@@ -348,7 +446,7 @@ test('a busy agy relay is never hibernated', { timeout: 120000 }, async (t) => {
     assert.equal(closed.status, 200, JSON.stringify(closed.body));
 });
 test('a relay whose agent dies mid-turn leaves a resumable session with the partial text', { timeout: 120000 }, async (t) => {
-    const home = makeHome({ hibernation: 'off' });
+    const home = makeHome(t, { hibernation: 'off' });
     const projDir = path.join(home, 'proj');
     const server = await boot(home, {
         PI_DISH_AGY_COMMAND: agyCommand('slow'),
@@ -390,7 +488,7 @@ test('a relay whose agent dies mid-turn leaves a resumable session with the part
     assert.equal(closed.status, 200, JSON.stringify(closed.body));
 });
 test('automatic recovery resumes an interrupted agy relay and delivers one recovery prompt', { timeout: 180000 }, async (t) => {
-    const home = makeHome({ hibernation: 'off', recoveryMode: 'continue' });
+    const home = makeHome(t, { hibernation: 'off', recoveryMode: 'continue' });
     const projDir = path.join(home, 'proj');
     const first = await boot(home, {
         PI_DISH_AGY_COMMAND: agyCommand('crash'),
