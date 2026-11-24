@@ -588,4 +588,83 @@ test('small transfer KTX2 companions exceeding the 256 MiB decoded budget pause 
   await expect(page.locator('#fileViewBody canvas')).toHaveCount(0);
 });
 
+test('large root GLB (>25 MiB) with a large external companion prompts twice with zero companion GETs before the second', async ({ page, fleet }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fleet.select(fleet.self);
+
+  const rootGlb = buildFixtureGlb({ textureUri: '../../textures/material/giant_albedo.ktx2' });
+  const giantTexPath = '/fixture/assets/textures/material/giant_albedo.ktx2';
+  const rootBytes = 26 * 1024 * 1024;
+  const companionBytes = 80 * 1024 * 1024;
+  let rootGets = 0;
+  let companionHeads = 0;
+  let companionGets = 0;
+
+  await page.route('**/api/sessions/*/file?*', route => route.fulfill({
+    json: {
+      path: '/fixture/assets/environments/berth/huge_root.glb',
+      relPath: 'assets/environments/berth/huge_root.glb',
+      size: rootBytes,
+      mtime: 202,
+      model: { url: `/api/sessions/${ROOT}/file/content?path=huge_root.glb&v=202-${rootBytes}`, mimeType: 'model/gltf-binary' },
+    },
+  }));
+  await page.route('**/api/sessions/*/file/content?*', route => {
+    const reqPath = new URL(route.request().url()).searchParams.get('path') ?? '';
+    const method = route.request().method();
+    if (reqPath.endsWith('huge_root.glb')) {
+      rootGets++;
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'model/gltf-binary' }, body: rootGlb });
+    }
+    if (reqPath === giantTexPath) {
+      if (method === 'HEAD') {
+        companionHeads++;
+        return route.fulfill({
+          status: 200,
+          headers: { 'Content-Type': 'image/ktx2', 'Content-Length': String(companionBytes) },
+          body: Buffer.alloc(0),
+        });
+      }
+      companionGets++;
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'image/ktx2' }, body: FIXTURE_KTX2 });
+    }
+    return route.fulfill({ status: 404, json: { error: 'Not found' } });
+  });
+
+  // 1. First prompt gates the 26 MiB root before any root or companion requests.
+  await page.evaluate(() => fixtureApp.features.fileViews.openFile('huge_root.glb'));
+  const viewer = page.locator('#fileViewBody .model-viewer');
+  await expect(viewer).toHaveAttribute('data-model-state', 'gated', { timeout: 10000 });
+  await expect(viewer.locator('.model-load-btn')).toContainText('Load (26.0 MB)');
+  expect(rootGets).toBe(0);
+  expect(companionHeads).toBe(0);
+  expect(companionGets).toBe(0);
+
+  // 2. Accepting the root prompt probes the companion and asks a second time
+  //    for the combined ~106.0 MB total with zero companion GETs issued.
+  await viewer.locator('.model-load-btn').click();
+  await expect(viewer.locator('.model-load-btn')).toContainText('Load ~106.0 MB', { timeout: 10000 });
+  await expect(viewer).toHaveAttribute('data-model-state', 'gated');
+  expect(rootGets).toBe(1);
+  expect(companionHeads).toBe(1);
+  expect(companionGets).toBe(0);
+  await expect(page.locator('#fileViewBody canvas')).toHaveCount(0);
+
+  // Declining the second prompt cancels cleanly with zero companion GETs.
+  await viewer.locator('.model-cancel-btn').click();
+  await expect(viewer).toHaveAttribute('data-model-state', 'cancelled');
+  expect(companionGets).toBe(0);
+
+  // 3. Reopening and accepting both prompts downloads the companion and renders.
+  await page.evaluate(() => fixtureApp.features.fileViews.openFile('huge_root.glb'));
+  await expect(viewer.locator('.model-load-btn')).toContainText('Load (26.0 MB)', { timeout: 10000 });
+  await viewer.locator('.model-load-btn').click();
+  await expect(viewer.locator('.model-load-btn')).toContainText('Load ~106.0 MB', { timeout: 10000 });
+  expect(companionGets).toBe(0);
+  await viewer.locator('.model-load-btn').click();
+  await expect(viewer).toHaveAttribute('data-model-state', 'ready', { timeout: 15000 });
+  expect(companionGets).toBe(1);
+  await expect(page.locator('#fileViewBody canvas')).toHaveCount(1);
+});
+
 export {};

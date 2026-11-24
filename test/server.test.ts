@@ -1916,18 +1916,23 @@ test('GET /file and /file/content serve .glb/.gltf models with 206 Range and gat
   const traverseRes = await fetch(`${base}/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent('../../outside.ktx2')}`);
   assert.equal(traverseRes.status, 404);
 
-  // Published .glb downloads carry Content-Disposition attachment with the original filename while keeping sandbox CSP.
+  // Published .glb downloads carry Content-Disposition attachment with RFC 5987 filename* encoding while keeping sandbox CSP.
+  const specialGlb = path.join(meshesDir, "rifle'(1)*.glb");
+  fs.writeFileSync(specialGlb, glbBytes);
   const pubRes = await fetch(`${base}/api/pages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: path.join(meshesDir, 'rifle.glb'), renderer: 'file' }),
+    body: JSON.stringify({ path: specialGlb, renderer: 'file' }),
   });
   assert.equal(pubRes.status, 200);
   const pub = record(await pubRes.json());
   const dlRes = await fetch(`${base}${text(pub.path)}?content=1`);
   assert.equal(dlRes.status, 200);
   assert.equal(dlRes.headers.get('content-type'), 'model/gltf-binary');
-  assert.equal(dlRes.headers.get('content-disposition'), 'attachment; filename="rifle.glb"; filename*=UTF-8\'\'rifle.glb');
+  assert.equal(
+    dlRes.headers.get('content-disposition'),
+    `attachment; filename="rifle'(1)*.glb"; filename*=UTF-8''rifle%27%281%29%2A.glb`,
+  );
   assert.match(dlRes.headers.get('content-security-policy') || '', /\bsandbox\b/);
   assert.deepEqual(Buffer.from(await dlRes.arrayBuffer()), glbBytes);
 });

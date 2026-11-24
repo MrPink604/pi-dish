@@ -609,7 +609,7 @@ export function createModelViewer(options: {
       await Promise.all(workers);
     }
 
-    async function loadAndRender(initialTransferApproved: boolean): Promise<void> {
+    async function loadAndRender(approvedRootBytes: number): Promise<void> {
       if (!isAlive()) return;
       showOverlay('<div class="model-overlay-msg">Loading 3D viewer…</div>', 'loading');
       const prefetchedBuffers = new Map<string, ArrayBuffer>();
@@ -624,14 +624,19 @@ export function createModelViewer(options: {
 
         // Track cumulative unique transfer bytes (root + unique local companions)
         // and decoded KTX2 mip bytes before buffering/WASM-decoding large assets.
-        let transferApproved = initialTransferApproved;
+        // Root-only consent covers only the root bytes; any companions pushing
+        // total transfer above what was shown must ask again.
+        const rootBytes = Math.max(sizeBytes, modelBuffer.byteLength);
+        const transferBudget = Math.max(MODEL_LARGE_FILE_BYTES, approvedRootBytes > 0 ? rootBytes : 0);
+        let transferApproved = false;
         let decodedApproved = false;
         const knownCompanionSizes = new Map<string, number>();
         const sumKnownTransfer = () => {
-          let total = modelBuffer.byteLength;
+          let total = rootBytes;
           for (const sz of knownCompanionSizes.values()) total += sz;
           return total;
         };
+        const exceedsTransferBudget = (total: number) => Number.isFinite(total) && total > transferBudget;
 
         const rawUris = extractGltfExternalUris(modelBuffer);
         const uniqueLocalCompanions: string[] = [];
@@ -653,12 +658,12 @@ export function createModelViewer(options: {
             });
             if (!isAlive()) return;
             const probedTotal = sumKnownTransfer();
-            if (!transferApproved && shouldGateModelLoad(probedTotal)) {
+            if (!transferApproved && exceedsTransferBudget(probedTotal)) {
               const totalLabel = formatMediaSize(probedTotal);
-              const compBytes = Math.max(0, probedTotal - modelBuffer.byteLength);
+              const compBytes = Math.max(0, probedTotal - rootBytes);
               const accepted = await requestConsent({
                 title: `Large 3D model (~${totalLabel})`,
-                subtitle: `${formatMediaSize(modelBuffer.byteLength)} model + ${formatMediaSize(compBytes)} across ${uniqueLocalCompanions.length} external ${uniqueLocalCompanions.length === 1 ? 'asset' : 'assets'}. Tap to download and render.`,
+                subtitle: `${formatMediaSize(rootBytes)} model + ${formatMediaSize(compBytes)} across ${uniqueLocalCompanions.length} external ${uniqueLocalCompanions.length === 1 ? 'asset' : 'assets'}. Tap to download and render.`,
                 loadLabel: `Load ~${totalLabel}`,
               });
               if (!accepted || !isAlive()) throw new ModelLoadDeclinedError();
@@ -667,7 +672,7 @@ export function createModelViewer(options: {
           }
 
           // 2. Fetch unique companions, guarding against unprobed / chunked responses
-          //    passing the 25 MiB cumulative budget before buffering.
+          //    passing the cumulative transfer budget before buffering.
           showOverlay('<div class="model-overlay-msg">Loading assets…</div>', 'loading');
           const pendingCompanions = [...uniqueLocalCompanions];
           while (pendingCompanions.length > 0) {
@@ -688,7 +693,7 @@ export function createModelViewer(options: {
                     checkSize: async bytes => {
                       knownCompanionSizes.set(absPath, bytes);
                       const total = sumKnownTransfer();
-                      if (!transferApproved && shouldGateModelLoad(total)) {
+                      if (!transferApproved && exceedsTransferBudget(total)) {
                         if (!pausedError) pausedError = new TransferBudgetPausedError(total, uniqueLocalCompanions.length);
                         batchAbort.abort();
                         return false;
@@ -713,7 +718,7 @@ export function createModelViewer(options: {
               const totalLabel = formatMediaSize(paused.totalBytes);
               const accepted = await requestConsent({
                 title: `Large 3D model (~${totalLabel})`,
-                subtitle: `Model and ${paused.companionCount} external ${paused.companionCount === 1 ? 'asset exceed' : 'assets exceed'} ${formatMediaSize(MODEL_LARGE_FILE_BYTES)}. Tap to download and render.`,
+                subtitle: `Model and ${paused.companionCount} external ${paused.companionCount === 1 ? 'asset exceed' : 'assets exceed'} ${formatMediaSize(transferBudget)}. Tap to download and render.`,
                 loadLabel: `Load ~${totalLabel}`,
               });
               if (!accepted || !isAlive()) throw new ModelLoadDeclinedError();
@@ -823,18 +828,25 @@ export function createModelViewer(options: {
         ktx2.init = () => Promise.reject(new Error('Basis-compressed KTX2 textures are not supported'));
         // Guard embedded/inline KTX2 buffers against exceeding the decoded budget.
         const origKtx2Parse = ktx2.parse.bind(ktx2);
-        const seenDecodedBuffers = new WeakSet<ArrayBuffer>();
+        const acceptedDecodedBuffers = new WeakSet<ArrayBuffer>();
+        const rejectedDecodedBuffers = new WeakSet<ArrayBuffer>();
         ktx2.parse = (buffer, onLoad, onError) => {
-          if (!seenDecodedBuffers.has(buffer)) {
-            seenDecodedBuffers.add(buffer);
+          if (rejectedDecodedBuffers.has(buffer)) {
+            onError?.(new Error('Decoded KTX2 texture memory exceeds budget'));
+            return Promise.resolve();
+          }
+          if (!acceptedDecodedBuffers.has(buffer)) {
             const decoded = parseKtx2DecodedBytes(buffer);
             if (decoded !== null) {
-              lateDecodedKtx2 += decoded;
-              if (!decodedApproved && shouldGateDecodedKtx2(lateDecodedKtx2)) {
+              const nextTotal = lateDecodedKtx2 + decoded;
+              if (!decodedApproved && shouldGateDecodedKtx2(nextTotal)) {
+                rejectedDecodedBuffers.add(buffer);
                 onError?.(new Error('Decoded KTX2 texture memory exceeds budget'));
                 return Promise.resolve();
               }
+              lateDecodedKtx2 = nextTotal;
             }
+            acceptedDecodedBuffers.add(buffer);
           }
           return origKtx2Parse(buffer, onLoad, onError);
         };
@@ -847,7 +859,7 @@ export function createModelViewer(options: {
           return fetchFile(absPath, signal, {
             checkSize: async bytes => {
               knownCompanionSizes.set(absPath, bytes);
-              return transferApproved || !shouldGateModelLoad(sumKnownTransfer());
+              return transferApproved || !exceedsTransferBudget(sumKnownTransfer());
             },
           });
         };
@@ -1027,11 +1039,11 @@ export function createModelViewer(options: {
         loadLabel: `Load (${label})`,
       }).then(accepted => {
         if (!isAlive()) return;
-        if (accepted) void loadAndRender(true);
+        if (accepted) void loadAndRender(sizeBytes);
         else showOverlay('<div class="model-overlay-msg">Model load cancelled.</div>', 'cancelled');
       });
     } else {
-      void loadAndRender(false);
+      void loadAndRender(0);
     }
 
     return {

@@ -985,7 +985,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       if (file.model) {
         const name = path.basename(root);
         const fallback = name.replace(/[^\x20-\x7e]|["\\;]/g, '_') || 'model.glb';
-        res.setHeader('Content-Disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+        const encoded = encodeURIComponent(name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+        res.setHeader('Content-Disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`);
       }
       return sendRangedFile(req, res, root, { mimeType: safeMime, size: file.size, mtimeMs: file.mtime, onError: notFound });
     }
