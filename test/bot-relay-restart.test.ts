@@ -19,6 +19,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import { record, records } from './test-types.js';
 import { sanitizeTestEnv } from './test-env.js';
+import { processIdentity } from '../lib/process-identity';
 import { relaySocketPath } from '../lib/relay-socket';
 
 const SERVER = path.join(__dirname, '..', 'server.js');
@@ -127,6 +128,9 @@ function relayLock(home: string, id: string): { pid: number; build?: string } | 
 }
 
 function alive(pid: number): boolean {
+  // On Linux, kill(pid, 0) still succeeds for a defunct zombie waiting on tmux
+  // waitpid (e.g. tmux 3.4 with exit-empty off); processIdentity excludes 'Z'.
+  if (process.platform === 'linux') return processIdentity(pid) !== null;
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 

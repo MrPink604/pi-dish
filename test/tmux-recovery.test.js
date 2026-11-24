@@ -64,6 +64,7 @@ const node_child_process_1 = require("node:child_process");
 const test_types_js_1 = require("./test-types.js");
 const test_env_js_1 = require("./test-env.js");
 const session_key_js_1 = require("../lib/session-key.js");
+const process_identity_js_1 = require("../lib/process-identity.js");
 const tmux = __importStar(require("../lib/tmux.js"));
 const crypto = require("node:crypto");
 const SERVER = path.join(__dirname, '..', 'server.js');
@@ -92,6 +93,8 @@ function relayLock(home, id) {
     }
 }
 function alive(pid) {
+    if (process.platform === 'linux')
+        return (0, process_identity_js_1.processIdentity)(pid) !== null;
     try {
         process.kill(pid, 0);
         return true;

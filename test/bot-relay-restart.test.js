@@ -21,6 +21,7 @@ const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
 const test_types_js_1 = require("./test-types.js");
 const test_env_js_1 = require("./test-env.js");
+const process_identity_1 = require("../lib/process-identity");
 const relay_socket_1 = require("../lib/relay-socket");
 const SERVER = path.join(__dirname, '..', 'server.js');
 const MODELS = path.join(__dirname, 'fixtures', 'bot-scripted-models.js');
@@ -127,6 +128,10 @@ function relayLock(home, id) {
     }
 }
 function alive(pid) {
+    // On Linux, kill(pid, 0) still succeeds for a defunct zombie waiting on tmux
+    // waitpid (e.g. tmux 3.4 with exit-empty off); processIdentity excludes 'Z'.
+    if (process.platform === 'linux')
+        return (0, process_identity_1.processIdentity)(pid) !== null;
     try {
         process.kill(pid, 0);
         return true;

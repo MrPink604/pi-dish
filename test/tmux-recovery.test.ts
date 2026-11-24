@@ -30,6 +30,7 @@ import type { AddressInfo } from 'node:net';
 import { present, record, records } from './test-types.js';
 import { sanitizeTestEnv } from './test-env.js';
 import { encodeSessionKey, validSessionId } from '../lib/session-key.js';
+import { processIdentity } from '../lib/process-identity.js';
 import * as tmux from '../lib/tmux.js';
 import crypto = require('node:crypto');
 
@@ -71,6 +72,7 @@ function relayLock(home: string, id: string): { pid: number; startTime?: string;
 }
 
 function alive(pid: number): boolean {
+  if (process.platform === 'linux') return processIdentity(pid) !== null;
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
