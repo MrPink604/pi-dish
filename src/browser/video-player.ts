@@ -221,6 +221,13 @@ export function createVideoControls(options: {
     for (const card of cards) strip.append(card);
   }
 
+  function contextForElement(el: Element): VideoEnhanceContext | undefined {
+    const scoped = el.closest<HTMLElement>('[data-video-session-id]');
+    const sessionId = scoped?.dataset.videoSessionId;
+    if (!sessionId) return undefined;
+    return { sessionId, host: scoped.dataset.videoHost || null };
+  }
+
   function enhanceToolPre(pre: HTMLElement, context?: VideoEnhanceContext): void {
     if (pre.dataset.videosEnhanced) return;
     const details = pre.closest<HTMLDetailsElement>('details.tool-result-details');
@@ -335,7 +342,7 @@ export function createVideoControls(options: {
     if (disposed || !(event.target instanceof HTMLDetailsElement)) return;
     if (!event.target.open || !event.target.classList.contains('tool-result-details')) return;
     const pre = event.target.querySelector<HTMLElement>('.tool-result-content > pre:not([data-videos-enhanced])');
-    if (pre) enhanceToolPre(pre);
+    if (pre) enhanceToolPre(pre, contextForElement(pre));
   }, { capture: true, signal });
 
   document.addEventListener('click', event => {

@@ -374,6 +374,55 @@ const webmBytes = Buffer.from('GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECG
         return { complete: image.complete, width: image.naturalWidth, height: image.naturalHeight };
     })).toEqual({ complete: true, width: 120, height: 60 });
 });
+(0, fixtures_js_1.test)('toggling a collapsed tool video in subagents peek resolves against the peeked subagent and its host', async ({ page, fleet }) => {
+    await page.route('**/api/sessions/*/file/content?*', route => route.fulfill({ contentType: 'video/webm', body: webmBytes }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/lineage`, route => route.fulfill({
+        json: {
+            session: { id: fixtures_js_1.ROOT, name: 'Parent', isActive: true, harnessId: 'pi' },
+            tree: {
+                session: { id: fixtures_js_1.ROOT, name: 'Parent', isActive: true, harnessId: 'pi' },
+                edge: null,
+                children: [
+                    {
+                        session: { id: fixtures_js_1.CHILD, name: 'Worker', isActive: true, harnessId: 'pi' },
+                        edge: { kind: 'child', source: 'pi-dish-launch' },
+                        children: [],
+                    },
+                ],
+            },
+            members: 2,
+        },
+    }));
+    await page.route(`**/api/sessions/${fixtures_js_1.CHILD}/messages?*`, route => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.has('after'))
+            return route.fulfill({ json: { messages: [], lastIndex: 0 } });
+        return route.fulfill({
+            json: {
+                messages: [{
+                        role: 'toolResult',
+                        index: 0,
+                        toolName: 'bash',
+                        content: [{ type: 'text', text: 'step 1\nstep 2\nstep 3\nstep 4\nstep 5\nSaved clip to clips/sub-demo.webm' }],
+                    }],
+                lastIndex: 0,
+            },
+        });
+    });
+    // Select ROOT on the peer host, then open Subagents view via the relation link and peek CHILD.
+    await fleet.select(fleet.peer, fixtures_js_1.ROOT);
+    await page.evaluate(() => fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection()));
+    await page.locator('#sessionRelations .session-relation-tree-link').click();
+    await page.locator('#subagentsTree .lineage-row', { hasText: 'Worker' }).click();
+    const details = page.locator('#subagentsTrace details.tool-result-details');
+    await (0, fixtures_js_1.expect)(details).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(details).toHaveJSProperty('open', false);
+    // Opening the collapsed tool result must lazily enhance the video against CHILD on fleet.peer (NOT ROOT).
+    await details.locator('summary').click();
+    const video = details.locator('.msg-video-player video');
+    await (0, fixtures_js_1.expect)(video).toHaveCount(1);
+    (0, fixtures_js_1.expect)(await video.getAttribute('src')).toBe(`${fleet.peer.base}/api/sessions/${fixtures_js_1.CHILD}/file/content?path=${encodeURIComponent('clips/sub-demo.webm')}`);
+});
 (0, fixtures_js_1.test)('file view disposal retires publish, copy and diff patch actions', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     await fileRoutes(page);

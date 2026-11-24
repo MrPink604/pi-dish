@@ -300,6 +300,9 @@ export function createSubagentsView(options: {
     element('subagentsAddWorkerBtn').style.display = 'none';
     element('subagentsAuxPanel').style.display = 'none';
     element('subagentsAuxPanel').replaceChildren();
+    const trace = element('subagentsTrace');
+    delete trace.dataset.videoSessionId;
+    delete trace.dataset.videoHost;
     mentionChoices = []; mentionIndex = 0;
     viewOwner = null; viewEndpoint = null; peekTarget = null; selection = null;
     pendingAgentId = null; pendingSwarmMember = null; showStartSwarmRow = false;
@@ -1782,7 +1785,13 @@ export function createSubagentsView(options: {
   async function loadPeek(reset: boolean) {
     if (!owns() || !peekTarget || !viewEndpoint) return;
     const target = peekTarget, endpoint = viewEndpoint, seq = ++peekSeq;
-    if (reset) { peekLastIndex = null; element('subagentsTrace').replaceChildren(); }
+    const trace = element('subagentsTrace');
+    // Tag the trace container so lazy video enhancement (e.g. toggling a tool result) resolves
+    // against the peeked subagent and its host instead of the parent session.
+    trace.dataset.videoSessionId = target.id;
+    if (viewOwner?.host) trace.dataset.videoHost = viewOwner.host;
+    else delete trace.dataset.videoHost;
+    if (reset) { peekLastIndex = null; trace.replaceChildren(); }
     const stale = () => seq !== peekSeq || !owns() || peekTarget !== target;
     const query = peekLastIndex == null ? '?limit=50' : `?after=${peekLastIndex}`;
     try {
@@ -1792,7 +1801,6 @@ export function createSubagentsView(options: {
       if (!res.ok) throw new Error(responseError(res, data));
       const payload = record(data) ? data : {};
       const messages = Array.isArray(payload.messages) ? payload.messages : [];
-      const trace = element('subagentsTrace');
       if (reset && !messages.length) {
         const empty = document.createElement('div');
         empty.className = 'subagents-state';
@@ -1814,7 +1822,6 @@ export function createSubagentsView(options: {
     } catch (error) {
       if (stale()) return;
       if (reset) {
-        const trace = element('subagentsTrace');
         trace.replaceChildren();
         const failure = document.createElement('div');
         failure.className = 'subagents-state';
