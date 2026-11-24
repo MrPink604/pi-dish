@@ -751,3 +751,177 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     (0, fixtures_js_1.expect)(result.filtered13Delta).toBeLessThanOrEqual(1);
     (0, fixtures_js_1.expect)(result.filtered16SlotDelta).toBeLessThanOrEqual(2);
 });
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    (0, fixtures_js_1.test)(`expanding a collapsed workspace header at the top of the viewport keeps it in place (${viewport.width}px)`, async ({ page, fleet }) => {
+        await page.setViewportSize(viewport);
+        const now = Date.now();
+        await page.evaluate(({ selfHost, peerHost, now }) => {
+            fixtureApp.features.sidebarLists.dispose();
+            fixtureApp.features.sidebarQuery.switchTab('active');
+            fixtureApp.features.sessionState.setSessionLists([
+                {
+                    hostId: selfHost,
+                    active: Array.from({ length: 4 }, (_, index) => ({
+                        id: `top-self-${index}`, host: selfHost, name: `Self ${index}`, isActive: true,
+                        cwd: `/work/self-${index}`, lastActivity: now - index * 1000,
+                    })),
+                },
+                {
+                    hostId: peerHost,
+                    active: Array.from({ length: 120 }, (_, index) => ({
+                        id: `top-peer-${String(index).padStart(3, '0')}`, host: peerHost, name: `Peer ${index}`, isActive: true,
+                        cwd: `/work/proj-${String(Math.floor(index / 8)).padStart(2, '0')}`, lastActivity: now - index * 1000,
+                    })),
+                },
+            ]);
+        }, { selfHost: fleet.self.hostId, peerHost: fleet.peer.hostId, now });
+        if (viewport.width <= 768) {
+            await page.locator('.header-menu-btn:visible, .empty-menu-btn:visible').first().click();
+            await (0, fixtures_js_1.expect)(page.locator('#sidebar')).toHaveClass(/\bopen\b/);
+            await fixtures_js_1.expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.x).toBe(0);
+        }
+        const key = `${fleet.peer.hostId} /work/proj-07`;
+        const header = page.locator(`.workspace-group-header[data-cwd="${key}"]`);
+        const measure = () => header.evaluate(element => {
+            const list = fixtureElement(element.closest('#sessionList'), '#sessionList');
+            const lr = list.getBoundingClientRect();
+            const firstRow = element.parentElement?.querySelector('.session-item');
+            return {
+                scrollTop: list.scrollTop,
+                clientHeight: list.clientHeight,
+                headerTop: element.getBoundingClientRect().top - lr.top,
+                firstRowTop: firstRow ? firstRow.getBoundingClientRect().top - lr.top : null,
+            };
+        });
+        // Place proj-07's header at the very top of the viewport (~2px), collapse it, then expand it.
+        await header.evaluate(element => {
+            const list = fixtureElement(element.closest('#sessionList'), '#sessionList');
+            list.scrollTop += element.getBoundingClientRect().top - list.getBoundingClientRect().top - 2;
+        });
+        const beforeCollapse = await measure();
+        (0, fixtures_js_1.expect)(beforeCollapse.scrollTop).toBeGreaterThan(1000);
+        (0, fixtures_js_1.expect)(Math.abs(beforeCollapse.headerTop - 2)).toBeLessThanOrEqual(1);
+        await header.click();
+        await (0, fixtures_js_1.expect)(page.locator('.session-segment.collapsed > .workspace-group-header')).toHaveAttribute('data-cwd', key);
+        const collapsed = await measure();
+        (0, fixtures_js_1.expect)(Math.abs(collapsed.headerTop - beforeCollapse.headerTop)).toBeLessThanOrEqual(1);
+        // Expanding while collapsed at the top of the viewport must keep the header at ~2px
+        // and reveal its opened sessions below instead of anchoring the following workspace.
+        await header.click();
+        await (0, fixtures_js_1.expect)(page.locator('.session-segment.collapsed')).toHaveCount(0);
+        const expanded = await measure();
+        (0, fixtures_js_1.expect)(Math.abs(expanded.headerTop - collapsed.headerTop)).toBeLessThanOrEqual(1);
+        (0, fixtures_js_1.expect)(Math.abs(expanded.scrollTop - collapsed.scrollTop)).toBeLessThanOrEqual(1);
+        (0, fixtures_js_1.expect)(expanded.firstRowTop).not.toBeNull();
+        (0, fixtures_js_1.expect)(expanded.firstRowTop).toBeGreaterThan(expanded.headerTop);
+        (0, fixtures_js_1.expect)(expanded.firstRowTop).toBeLessThan(expanded.clientHeight);
+    });
+}
+(0, fixtures_js_1.test)('collapsed-headers-only viewport, unchanged ranked mode toggle, and double-toggled memo fast path preserve scroll', async ({ page, fleet }) => {
+    await setup(page);
+    const result = await page.evaluate(() => {
+        const SELF = '11111111-1111-4111-8111-111111111111';
+        const PEER = '22222222-2222-4222-8222-222222222222';
+        const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+        const state = window.controlsState, controls = window.customSidebar;
+        const now = Date.now();
+        const hosts = [
+            { hostId: SELF, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+            { hostId: PEER, self: false, label: 'tycho', state: 'reachable', key: 'tycho', color: '#fa1', dot: '', hasCache: true },
+        ];
+        const selfActive = Array.from({ length: 10 }, (_, index) => ({
+            id: `s-${index}`, host: SELF, name: `Self ${index}`, cwd: `/self/p-${index}`, isActive: true, lastActivity: now - index * 1000,
+        }));
+        const peerActive = Array.from({ length: 40 }, (_, index) => ({
+            id: `p-${String(index).padStart(2, '0')}`, host: PEER, name: `Peer ${index}`,
+            cwd: `/peer/g-${String(index).padStart(2, '0')}`, isActive: true, lastActivity: now - (index + 1) * 1000,
+        }));
+        const render = (opts = {}) => {
+            state.setSessionLists([{ hostId: SELF, active: selfActive }, { hostId: PEER, active: peerActive }]);
+            const projection = PiDishBrowser.renderSidebar({
+                ...state.sessions, selected: null, tab: 'active', view: opts.view ?? 'workspace',
+                query: opts.query ?? '', queriedFor: opts.query ?? '', scope: '', indexing: false,
+                contextMetric: 'percent', pending: [], selectedSpawn: null,
+                expanded: controls.expanded, collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
+                closeConfirm: null, closeBusy: null, multiHost: true, hosts, bots: [], botRetireArmed: null,
+                selfHostId: SELF, unread: () => false, hostChip: () => '',
+            }, opts.memo);
+            controls.updateList(projection);
+            return projection;
+        };
+        // Collapse all peer workspace groups so scrolling into peer shows ONLY collapsed headers (no session cards visible),
+        // while self's surviving rows sit offscreen above.
+        for (let index = 0; index < 40; index++) {
+            controls.toggleGroup(`${PEER} /peer/g-${String(index).padStart(2, '0')}`);
+        }
+        render();
+        const targetCwd = `${PEER} /peer/g-15`;
+        const headerTop = () => {
+            const el = fixtureElement(Array.from(list.querySelectorAll('.workspace-group-header[data-cwd]')).find(node => node.dataset.cwd === targetCwd), targetCwd);
+            return el.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        };
+        const targetHeader = fixtureElement(Array.from(list.querySelectorAll('.workspace-group-header[data-cwd]')).find(node => node.dataset.cwd === targetCwd), targetCwd);
+        list.scrollTop += targetHeader.getBoundingClientRect().top - list.getBoundingClientRect().top - 100;
+        const headerBefore = headerTop();
+        const scrollBefore = list.scrollTop;
+        // Background spawn in peer adds a new expanded workspace above the collapsed peer headers (below self's offscreen rows).
+        peerActive.unshift({
+            id: 'p-bg-new', host: PEER, name: 'Peer Spawn', cwd: '/peer/new-top', isActive: true, lastActivity: now + 5000,
+        });
+        render();
+        const headerAfter = headerTop();
+        const scrollAfter = list.scrollTop;
+        // Ranked search: toggling view (workspace -> recent) produces identical markup; lastMode must still update
+        // so the following background spawn preserves scroll anchoring.
+        render({ view: 'workspace', query: 'Peer' });
+        const rowTop = (id) => {
+            const el = fixtureElement(list.querySelector(`.session-item[data-id="${id}"]`), id);
+            return el.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        };
+        const p20 = fixtureElement(list.querySelector('.session-item[data-id="p-20"]'), 'p-20');
+        list.scrollTop += p20.getBoundingClientRect().top - list.getBoundingClientRect().top - 200;
+        const rankedBeforeTop = rowTop('p-20');
+        const rankedBeforeScroll = list.scrollTop;
+        // Unchanged markup, different mode (workspace -> recent).
+        render({ view: 'recent', query: 'Peer' });
+        peerActive.unshift({
+            id: 'p-ranked-bg', host: PEER, name: 'Peer Ranked New', cwd: '/peer/ranked', isActive: true, lastActivity: now + 10_000,
+        });
+        render({ view: 'recent', query: 'Peer' });
+        const rankedAfterTop = rowTop('p-20');
+        const rankedAfterScroll = list.scrollTop;
+        // Two opposite clicks on an expanded header before one paint return the exact memoized projection
+        // (projection === lastProjection); that fast path must clear toggleAnchor so a later rename does not snap scrollTop back.
+        controls.mount();
+        const memo = {};
+        const firstMemoProj = render({ view: 'workspace', query: '', memo });
+        const toggleTargetCwd = `${PEER} /peer/new-top`;
+        const toggleHeader = fixtureElement(Array.from(list.querySelectorAll('.workspace-group-header[data-cwd]')).find(node => node.dataset.cwd === toggleTargetCwd), toggleTargetCwd);
+        list.scrollTop += toggleHeader.getBoundingClientRect().top - list.getBoundingClientRect().top - 100;
+        toggleHeader.click();
+        toggleHeader.click();
+        const secondMemoProj = render({ view: 'workspace', query: '', memo });
+        const beforeUserScroll = list.scrollTop;
+        list.scrollTop += 300;
+        const afterUserScroll = list.scrollTop;
+        selfActive[0].name = 'Self 0 Renamed';
+        render({ view: 'workspace', query: '', memo });
+        const afterRenameScroll = list.scrollTop;
+        return {
+            headerDelta: Math.abs(headerAfter - headerBefore),
+            headerScrollIncreased: scrollAfter > scrollBefore,
+            rankedDelta: Math.abs(rankedAfterTop - rankedBeforeTop),
+            rankedScrollIncreased: rankedAfterScroll > rankedBeforeScroll,
+            sameMemoProjection: secondMemoProj === firstMemoProj,
+            userScrollMoved: afterUserScroll - beforeUserScroll,
+            renameScrollDelta: Math.abs(afterRenameScroll - afterUserScroll),
+        };
+    });
+    (0, fixtures_js_1.expect)(result.headerDelta).toBeLessThanOrEqual(1);
+    (0, fixtures_js_1.expect)(result.headerScrollIncreased).toBe(true);
+    (0, fixtures_js_1.expect)(result.rankedDelta).toBeLessThanOrEqual(1);
+    (0, fixtures_js_1.expect)(result.rankedScrollIncreased).toBe(true);
+    (0, fixtures_js_1.expect)(result.sameMemoProjection).toBe(true);
+    (0, fixtures_js_1.expect)(result.userScrollMoved).toBeGreaterThanOrEqual(200);
+    (0, fixtures_js_1.expect)(result.renameScrollDelta).toBeLessThanOrEqual(1);
+});

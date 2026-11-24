@@ -30,6 +30,11 @@ export function createSidebarControls(options: {
   const rowKeys = new WeakMap<Element, string>();
   let lastProjection: SidebarProjection | null = null;
   let lastMode: string | undefined | null = null;
+  interface ToggleAnchor { top: number; find: () => HTMLElement | undefined }
+  let toggleAnchor: ToggleAnchor | null = null;
+  function pinToggle(control: HTMLElement, find: () => HTMLElement | undefined) {
+    toggleAnchor = { top: control.getBoundingClientRect().top - list.getBoundingClientRect().top, find };
+  }
   function syncAttributes(target: Element, source: Element) {
     for (const { name } of Array.from(target.attributes)) {
       if (!source.hasAttribute(name)) target.removeAttribute(name);
@@ -198,11 +203,17 @@ export function createSidebarControls(options: {
     if (disposed || drag) return false;
     // An unchanged poll hands back the very projection it rendered last time
     // (the renderer's memo), so there is nothing to compare row by row.
-    if (projection === lastProjection) return false;
+    if (projection === lastProjection) { toggleAnchor = null; return false; }
     lastProjection = projection;
     const structureChanged = layout !== projection.layout;
     const changed = projection.rows.filter(row => renderedRows.get(row.key)?.html !== row.html);
-    if (!structureChanged && !changed.length) return false;
+    if (!structureChanged && !changed.length) {
+      lastMode = projection.mode;
+      toggleAnchor = null;
+      return false;
+    }
+    const pinnedToggle = toggleAnchor;
+    toggleAnchor = null;
     closeMenu();
     const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : null;
     let focusKey: string | null = null;
@@ -237,7 +248,7 @@ export function createSidebarControls(options: {
         if (firstVisibleKey === null) firstVisibleKey = key;
         if (next.has(key)) anchorCandidates.push({ key, top: rect.top - listTop });
       }
-      if (aboveAnchor && (firstVisibleKey === null || !next.has(firstVisibleKey))) {
+      if (firstVisibleKey !== null && aboveAnchor && !next.has(firstVisibleKey)) {
         anchorCandidates = [aboveAnchor, ...anchorCandidates];
       }
       if (!anchorCandidates.length) {
@@ -249,6 +260,7 @@ export function createSidebarControls(options: {
           const value = el.getAttribute(attr);
           if (value) headerAnchors.push({ attr, value, top: rect.top - listTop });
         }
+        if (!headerAnchors.length && aboveAnchor) anchorCandidates = [aboveAnchor];
       }
     }
     if (structureChanged) {
@@ -268,15 +280,24 @@ export function createSidebarControls(options: {
       if (list.scrollTop !== savedScrollTop) list.scrollTop = savedScrollTop;
       const nextListTop = list.getBoundingClientRect().top;
       let bestDelta: number | null = null;
-      for (const candidate of anchorCandidates) {
-        const element = renderedRows.get(candidate.key)?.element;
-        if (!element?.isConnected) continue;
-        const rect = element.getBoundingClientRect();
-        if (!rect.height) continue;
-        const delta = (rect.top - nextListTop) - candidate.top;
-        if (bestDelta === null || Math.abs(delta) < Math.abs(bestDelta)) {
-          bestDelta = delta;
-          if (Math.abs(bestDelta) < 0.5) break;
+      if (pinnedToggle) {
+        const element = pinnedToggle.find();
+        if (element?.isConnected) {
+          const rect = element.getBoundingClientRect();
+          if (rect.height) bestDelta = (rect.top - nextListTop) - pinnedToggle.top;
+        }
+      }
+      if (bestDelta === null) {
+        for (const candidate of anchorCandidates) {
+          const element = renderedRows.get(candidate.key)?.element;
+          if (!element?.isConnected) continue;
+          const rect = element.getBoundingClientRect();
+          if (!rect.height) continue;
+          const delta = (rect.top - nextListTop) - candidate.top;
+          if (bestDelta === null || Math.abs(delta) < Math.abs(bestDelta)) {
+            bestDelta = delta;
+            if (Math.abs(bestDelta) < 0.5) break;
+          }
         }
       }
       if (bestDelta === null && headerAnchors.length) {
@@ -485,9 +506,34 @@ export function createSidebarControls(options: {
     list.addEventListener('click', event => {
       if (!(event.target instanceof Element) || !list.contains(event.target)) return;
       const target = event.target, item = target.closest<HTMLElement>('.session-item'), id = item?.dataset.id, host = item?.dataset.host || null;
-      const botToggle = target.closest<HTMLElement>('.bot-tree-toggle'); if (botToggle) { if (botToggle.dataset.botToggle) toggleGroup(botCollapseKey(botToggle.dataset.botToggle)); return; }
-      const botClosedToggle = target.closest<HTMLElement>('.bot-closed-toggle'); if (botClosedToggle) { if (botClosedToggle.dataset.botClosed) toggleBotClosed(botClosedToggle.dataset.botClosed); return; }
-      const familyToggle = target.closest<HTMLElement>('.session-family-toggle'); if (familyToggle) { if (familyToggle.dataset.familyId) toggleFamily(familyToggle.dataset.familyId, host); return; }
+      const botToggle = target.closest<HTMLElement>('.bot-tree-toggle');
+      if (botToggle) {
+        const value = botToggle.dataset.botToggle;
+        if (value) {
+          pinToggle(botToggle, () => Array.from(list.querySelectorAll<HTMLElement>('.bot-tree-toggle[data-bot-toggle]')).find(el => el.dataset.botToggle === value));
+          toggleGroup(botCollapseKey(value));
+        }
+        return;
+      }
+      const botClosedToggle = target.closest<HTMLElement>('.bot-closed-toggle');
+      if (botClosedToggle) {
+        const value = botClosedToggle.dataset.botClosed;
+        if (value) {
+          pinToggle(botClosedToggle, () => Array.from(list.querySelectorAll<HTMLElement>('.bot-closed-toggle[data-bot-closed]')).find(el => el.dataset.botClosed === value));
+          toggleBotClosed(value);
+        }
+        return;
+      }
+      const familyToggle = target.closest<HTMLElement>('.session-family-toggle');
+      if (familyToggle) {
+        const value = familyToggle.dataset.familyId;
+        if (value) {
+          pinToggle(familyToggle, () => Array.from(list.querySelectorAll<HTMLElement>('.session-family-toggle[data-family-id]')).find(el =>
+            el.dataset.familyId === value && (el.closest<HTMLElement>('.session-item')?.dataset.host || null) === host));
+          toggleFamily(value, host);
+        }
+        return;
+      }
       if (target.closest('.session-pin-btn')) {
         if (id && item && !item.closest('.bots-segment') && sessionState.findSession(id, host)?.harnessId !== 'bot') {
           const family = item.closest<HTMLElement>('.session-family-root');
@@ -503,8 +549,24 @@ export function createSidebarControls(options: {
       if (target.closest('.session-close-btn')) { event.stopPropagation(); if (id) closeClick(id, host); return; }
       if (target.closest('.session-drag-handle')) return;
       const newButton = target.closest<HTMLElement>('.workspace-new-btn'); if (newButton) { if (newButton.dataset.path) options.create(newButton.dataset.path, newButton.dataset.host || null); return; }
-      const hostHeader = target.closest<HTMLElement>('.host-section-header'); if (hostHeader) { if (hostHeader.dataset.hostSection) toggleGroup(hostHeader.dataset.hostSection); return; }
-      const header = target.closest<HTMLElement>('.workspace-group-header'); if (header) { if (header.dataset.cwd) toggleGroup(header.dataset.cwd); return; }
+      const hostHeader = target.closest<HTMLElement>('.host-section-header');
+      if (hostHeader) {
+        const value = hostHeader.dataset.hostSection;
+        if (value) {
+          pinToggle(hostHeader, () => Array.from(list.querySelectorAll<HTMLElement>('.host-section-header[data-host-section]')).find(el => el.dataset.hostSection === value));
+          toggleGroup(value);
+        }
+        return;
+      }
+      const header = target.closest<HTMLElement>('.workspace-group-header');
+      if (header) {
+        const value = header.dataset.cwd;
+        if (value) {
+          pinToggle(header, () => Array.from(list.querySelectorAll<HTMLElement>('.workspace-group-header[data-cwd]')).find(el => el.dataset.cwd === value));
+          toggleGroup(value);
+        }
+        return;
+      }
       if (!item) return;
       if (item.classList.contains('starting')) { if (item.dataset.spawnId) options.pending(item.dataset.spawnId); }
       else if (id) options.select(id, host);
@@ -516,7 +578,7 @@ export function createSidebarControls(options: {
       event.preventDefault(); openMenu(session, event.clientX, event.clientY);
     }, { signal });
   }
-  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); layout = ''; renderedRows.clear(); lastProjection = null; lastMode = null; rootMap.clear(); rootLists = null; }
+  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); layout = ''; renderedRows.clear(); lastProjection = null; lastMode = null; toggleAnchor = null; rootMap.clear(); rootLists = null; }
   return { mount, dispose, updateList, migrate, reloadPreferences, toggleGroup, toggleFamily, familyRoots, reveal, togglePin, closeClick, performClose, openMenu, closeMenu,
     get menuOpen() { return !!menuOwner; }, get dragging() { return !!drag; }, get closeConfirm() { return confirm?.key || null; }, get closeBusy() { return busy?.key || null; },
     get collapsed(): ReadonlySet<string> { return collapsed; }, get expanded(): ReadonlySet<string> { return expanded; }, get pinned(): readonly string[] { return pinned; } };
