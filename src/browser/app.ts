@@ -48,6 +48,7 @@ import { createMessageRenderer } from './message-render';
 import { createLiveTools } from './live-tools';
 import { createMessageStream } from './message-stream';
 import { createComposerDrafts } from './composer-drafts';
+import { atomicDeleteRange } from './composer-refs';
 import { createPromptHistory, type PromptHistoryController } from './prompt-history';
 import { createComposerNotes } from './composer-notes';
 import { createComposerSpeech } from './composer-speech';
@@ -311,7 +312,7 @@ const sessionState: ReturnType<typeof createSessionState> = createSessionState({
 try {
   for (let i = localStorage.length - 1; i >= 0; i--) {
     const key = localStorage.key(i);
-    if (key?.startsWith('pi-dish-draft-spawn:')) localStorage.removeItem(key);
+    if (key?.startsWith('pi-dish-draft-spawn:') || key?.startsWith('pi-dish-draft-refs-spawn:')) localStorage.removeItem(key);
   }
 } catch {}
 const responseDetailsController: ReturnType<typeof createResponseDetails> = createResponseDetails({ document, sessionState, mode: () => displayPreferences.responseMode });
@@ -377,6 +378,31 @@ async function startApp(): Promise<void> {
     if (e.ctrlKey && e.key === 'f' && sessionState.currentSession) {
       e.preventDefault();
       sessionSearch.open();
+    }
+  });
+
+  let deletingAttachmentToken = false;
+  promptInput?.addEventListener('beforeinput', (e) => {
+    if (deletingAttachmentToken || e.isComposing) return;
+    const direction = e.inputType === 'deleteContentBackward' ? 'backward'
+      : e.inputType === 'deleteContentForward' ? 'forward' : null;
+    if (!direction) return;
+    const tokens = composerDrafts.images.tokens();
+    if (!tokens.length) return;
+    const range = atomicDeleteRange(promptInput.value, promptInput.selectionStart, promptInput.selectionEnd, direction, tokens);
+    if (!range) return;
+    e.preventDefault();
+    const before = promptInput.value;
+    promptInput.setSelectionRange(range.start, range.end);
+    deletingAttachmentToken = true;
+    try {
+      if (typeof document.execCommand === 'function') document.execCommand('delete');
+      if (promptInput.value === before) {
+        promptInput.setRangeText('', range.start, range.end, 'start');
+        promptInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    } finally {
+      deletingAttachmentToken = false;
     }
   });
 
@@ -957,6 +983,7 @@ const composerDrafts: ReturnType<typeof createComposerDrafts> = createComposerDr
   },
   autosize: input => autosizePromptInput(input), status: setStatus,
   historyChanged: () => promptHistory.update(),
+  showNote: text => composerNotes.show(text),
 });
 
 const promptHistory: PromptHistoryController = createPromptHistory({

@@ -43,7 +43,7 @@ async function pendingImage(page) {
     await page.locator('#promptInput').fill('Latest startup draft');
     await pendingImage(page);
     await page.evaluate(async (owner) => { fixtureApp.features.composerDrafts.migrate('spawn:fixture-start', owner); fixtureApp.features.composerDrafts.restore(owner); void window.finishBitmap(); await window.imagePending; }, owner);
-    await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('Latest startup draft');
+    await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('Latest startup draft [Image #1] ');
     await (0, fixtures_js_1.expect)(page.locator('.attachment-thumb')).toHaveCount(1);
     (0, fixtures_js_1.expect)(await page.evaluate(() => localStorage.getItem(fixtureApp.features.composerDrafts.draftKey('spawn:fixture-start')))).toBeNull();
 });

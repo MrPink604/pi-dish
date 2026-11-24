@@ -101,7 +101,12 @@ export { createSessionControls } from './session-controls';
 export { createComposerNotes } from './composer-notes';
 export { createComposerSpeech } from './composer-speech';
 
-export { createComposerImages, decodeComposerImages } from './composer-images';
+export { createComposerImages, decodeComposerImages, attachmentRefToken } from './composer-images';
+export {
+  FILE_REF_NAME_MAX, sanitizeAttachmentRefName, formatAttachmentToken, formatAttachmentBadge,
+  insertTokensAtSelection, findTokenRanges, atomicDeleteRange, removeTokensFromText,
+  rewriteTokensInText, resolveAttachmentsForSend, appendFileManifest, formatPromptForHistory, decodeDraftRefs,
+} from './composer-refs';
 export { createComposerDrafts, mergeComposerText } from './composer-drafts';
 
 export { createSessionReferences } from './session-references';

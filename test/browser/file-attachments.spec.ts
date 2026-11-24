@@ -96,7 +96,7 @@ test('a peer session receives its files on its own host, with progress shown and
 
   await expect.poll(() => sentPrompts(fleet.peer).length).toBe(1);
   const [movie] = attachedPaths(fleet.peer);
-  expect(sentPrompts(fleet.peer)[0]!.message).toBe(`[Attached file: ${movie} (video/mp4, 2.0 KB)]`);
+  expect(sentPrompts(fleet.peer)[0]!.message).toBe(`[File #1: movie.mp4]\n\n[File #1] [Attached file: ${movie} (video/mp4, 2.0 KB)]`);
   expect(fs.statSync(movie!).size).toBe(2048);
   expect(sentPrompts(fleet.self)).toEqual([]);
   await expect(page.locator('#attachmentStrip')).toBeHidden();

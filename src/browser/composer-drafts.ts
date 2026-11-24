@@ -1,8 +1,10 @@
 import type { ComposerAttachment } from './composer-images';
-import { createComposerImages } from './composer-images';
+import { attachmentRefToken, createComposerImages } from './composer-images';
+import { decodeDraftRefs, insertTokensAtSelection, removeTokensFromText, rewriteTokensInText } from './composer-refs';
 import { pushPromptHistory } from './helper-format';
 export function mergeComposerText(existing: string, restored: string) { const current = existing.trim(); return !current || current === restored ? restored : `${existing}\n\n${restored}`; }
 const HISTORY_PREFIX = 'pi-dish-history-', HISTORY_LIMIT = 50;
+const DRAFT_REFS_PREFIX = 'pi-dish-draft-refs-';
 export function promptHistoryOwner(storageKey: string | null) { return storageKey && storageKey.length > HISTORY_PREFIX.length && storageKey.startsWith(HISTORY_PREFIX) ? storageKey.slice(HISTORY_PREFIX.length) : null; }
 export function decodePromptHistory(raw: string | null): string[] {
   try { const value: unknown = JSON.parse(raw || '[]'); return Array.isArray(value) ? value.filter((value: unknown): value is string => typeof value === 'string').slice(-HISTORY_LIMIT) : []; } catch { return []; }
@@ -21,25 +23,100 @@ export function storedPromptHistories(storage: Pick<Storage, 'length' | 'key' | 
 export function createComposerDrafts(options: {
   document: Document; storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>; keyForSession: (id: string) => string;
   currentSessionId: () => string | null; autosize: (input: HTMLTextAreaElement) => void; status: (text: string, type?: string) => void;
-  isBotTarget?: (owner: string) => boolean; historyChanged?: () => void;
+  isBotTarget?: (owner: string) => boolean; historyChanged?: () => void; showNote?: (text: string) => void;
 }) {
   const { document, storage } = options;
   let key: string | null = null, dirty = false, history: string[] = [], historyIndex = -1, historyStash = '', timer: ReturnType<typeof setTimeout> | null = null, generation = 0, disposed = false;
-  const images = createComposerImages({ document, owner: () => key, isBotTarget: options.isBotTarget, status: options.status });
   const input = () => document.getElementById('promptInput') as HTMLTextAreaElement;
   function ownerKey(id: string) { return id.startsWith('spawn:') || id.includes(' ') ? id : options.keyForSession(id); }
   function draftKey(id: string) { return 'pi-dish-draft-' + ownerKey(id); }
+  function draftRefsKey(id: string) { return DRAFT_REFS_PREFIX + ownerKey(id); }
   function historyKey(id: string) { return HISTORY_PREFIX + ownerKey(id); }
   function read(name: string) { try { return storage.getItem(name) || ''; } catch { return ''; } }
   function readHistory(id: string): string[] { return decodePromptHistory(read(historyKey(id))); }
+  function writeRefs(id: string | null | undefined, tokens: readonly string[]) {
+    if (disposed || !id) return;
+    const unique = [...new Set(tokens.filter(token => token.length > 0))];
+    try {
+      if (unique.length) storage.setItem(draftRefsKey(id), JSON.stringify(unique));
+      else storage.removeItem(draftRefsKey(id));
+    } catch {}
+  }
   function changed() { if (!disposed) options.historyChanged?.(); }
   function cancelTimer() { if (timer !== null) clearTimeout(timer); timer = null; }
-  function write(id: string | null | undefined, value: string) { if (disposed || !id) return; try { if (value.trim() && value.length < 50000) storage.setItem(draftKey(id), value); else storage.removeItem(draftKey(id)); } catch {} }
+  function write(id: string | null | undefined, value: string) {
+    if (disposed || !id) return;
+    try { if (value.trim() && value.length < 50000) storage.setItem(draftKey(id), value); else storage.removeItem(draftKey(id)); } catch {}
+    writeRefs(id, images.tokens(ownerKey(id)));
+  }
+  function insertTokensIntoInput(el: HTMLTextAreaElement, tokens: readonly string[]) {
+    const result = insertTokensAtSelection(el.value, el.selectionStart, el.selectionEnd, tokens);
+    if (document.activeElement === el && typeof document.execCommand === 'function') {
+      el.setSelectionRange(result.start, result.end);
+      try { document.execCommand('insertText', false, result.inserted); } catch {}
+    }
+    if (el.value !== result.value) {
+      el.value = result.value;
+      try { el.setSelectionRange(result.caret, result.caret); } catch {}
+    }
+    options.autosize(el);
+  }
+  const images = createComposerImages({
+    document, owner: () => key, isBotTarget: options.isBotTarget, status: options.status,
+    onAdded(owner, added) {
+      if (disposed) return;
+      const tokens = added.map(attachmentRefToken).filter((token): token is string => token !== null);
+      if (!tokens.length) return;
+      if (key === owner) {
+        const el = input();
+        if (el) {
+          insertTokensIntoInput(el, tokens);
+          historyIndex = -1; cancelTimer(); dirty = false;
+          write(owner, el.value);
+          return;
+        }
+      } else {
+        const saved = read(draftKey(owner));
+        const result = insertTokensAtSelection(saved, saved.length, saved.length, tokens);
+        write(owner, result.value);
+        return;
+      }
+      writeRefs(owner, images.tokens(owner));
+    },
+    onRemoved(owner, removed) {
+      if (disposed) return;
+      const token = attachmentRefToken(removed);
+      if (token && key === owner) {
+        const el = input();
+        if (el) {
+          const result = removeTokensFromText(el.value, [token], el.selectionStart ?? el.value.length);
+          if (result.removed > 0) {
+            el.value = result.value;
+            try { el.setSelectionRange(result.caret, result.caret); } catch {}
+            options.autosize(el);
+          }
+          cancelTimer(); dirty = false;
+          write(owner, el.value);
+          return;
+        }
+      } else if (token) {
+        const saved = read(draftKey(owner));
+        const result = removeTokensFromText(saved, [token]);
+        write(owner, result.value);
+        return;
+      }
+      writeRefs(owner, images.tokens(owner));
+    },
+  });
   function stash() {
     cancelTimer(); generation++; if (!key) return;
     if (dirty) write(key, input().value); key = null; dirty = false; images.render(); changed();
   }
-  function clear() { cancelTimer(); generation++; if (key) images.discard(key); key = null; dirty = false; input().value = ''; input().style.height = ''; images.render(); changed(); }
+  function clear() {
+    cancelTimer(); generation++;
+    if (key) { images.discard(key); try { storage.removeItem(draftRefsKey(key)); } catch {} }
+    key = null; dirty = false; input().value = ''; input().style.height = ''; images.render(); changed();
+  }
   function waiting(value: boolean) {
     input().placeholder = value ? 'Write your prompt while Pi starts…' : 'Send a message...'; const button = document.getElementById('btnSend') as HTMLButtonElement | null;
     if (button) { button.disabled = value; button.title = value ? 'Your draft will be preserved until Pi connects' : 'Send'; }
@@ -51,12 +128,19 @@ export function createComposerDrafts(options: {
   function clearDraft(id: string | null = key) {
     if (disposed || !id) return; const owner = ownerKey(id);
     if (key === owner) { cancelTimer(); dirty = false; }
-    try { storage.removeItem(draftKey(owner)); } catch {}
+    try { storage.removeItem(draftKey(owner)); storage.removeItem(draftRefsKey(owner)); } catch {}
   }
   function restore(id: string | null = options.currentSessionId()) {
     if (disposed || !id) return; const owner = ownerKey(id);
     if (key && dirty) write(key, input().value); cancelTimer(); key = owner; dirty = false; generation++;
-    input().value = read(draftKey(owner)); images.render(); options.autosize(input()); historyIndex = -1; historyStash = ''; history = readHistory(owner); changed();
+    let draft = read(draftKey(owner));
+    const savedRefs = decodeDraftRefs(read(draftRefsKey(owner)));
+    if (!images.stored(owner).length && savedRefs.length) {
+      draft = removeTokensFromText(draft, savedRefs).value;
+      write(owner, draft);
+      options.showNote?.('Attachments were cleared on reload; re-attach if needed.');
+    }
+    input().value = draft; images.render(); options.autosize(input()); historyIndex = -1; historyStash = ''; history = readHistory(owner); changed();
   }
   function record(message: string, id: string | null = key) {
     if (disposed || !id) return; const owner = ownerKey(id), next = pushPromptHistory(key === owner ? history : readHistory(owner), message, HISTORY_LIMIT);
@@ -75,17 +159,28 @@ export function createComposerDrafts(options: {
   function migrate(from: string, to: string) {
     if (disposed) return; from = ownerKey(from); to = ownerKey(to); if (from === to) return;
     if (key === from && dirty) { cancelTimer(); write(from, input().value); dirty = false; }
-    const source = read(draftKey(from)), destination = read(draftKey(to)); try { storage.removeItem(draftKey(from)); } catch {}
+    const rawSource = read(draftKey(from)), destination = read(draftKey(to));
+    const fromRefs = decodeDraftRefs(read(draftRefsKey(from))), toRefs = decodeDraftRefs(read(draftRefsKey(to)));
+    try { storage.removeItem(draftKey(from)); storage.removeItem(draftRefsKey(from)); } catch {}
+    const remapped = images.migrate(from, to);
+    const source = rawSource && remapped.size ? rewriteTokensInText(rawSource, remapped).value : rawSource;
     if (source) {
       const merged = mergeComposerText(key === to ? input().value : destination, source); write(to, merged);
       if (key === to) { input().value = merged; dirty = false; options.autosize(input()); }
     }
-    images.migrate(from, to);
+    const liveTokens = images.tokens(to);
+    writeRefs(to, liveTokens.length ? liveTokens : [...toRefs, ...fromRefs]);
   }
   function restorePayload(id: string, message: string, attachments: readonly ComposerAttachment[] | null) {
-    if (disposed || !id) return; const owner = ownerKey(id), saved = read(draftKey(owner)); write(owner, message ? mergeComposerText(saved, message) : saved);
-    if (attachments?.length) images.append(owner, attachments);
-    if (key === owner && message) { input().value = mergeComposerText(input().value, message); input().dispatchEvent(new Event('input', { bubbles: true })); input().focus(); }
+    if (disposed || !id) return; const owner = ownerKey(id);
+    let restored = message;
+    if (attachments?.length) {
+      const { remapped } = images.append(owner, attachments);
+      if (restored && remapped.size) restored = rewriteTokensInText(restored, remapped).value;
+    }
+    const saved = read(draftKey(owner));
+    write(owner, restored ? mergeComposerText(saved, restored) : saved);
+    if (key === owner && restored) { input().value = mergeComposerText(input().value, restored); input().dispatchEvent(new Event('input', { bubbles: true })); input().focus(); }
   }
   function navigate(direction: number, target: HTMLTextAreaElement = input()) {
     if (disposed || !key || !history.length || target !== input()) return false;
@@ -93,7 +188,7 @@ export function createComposerDrafts(options: {
     else { historyIndex++; if (historyIndex >= history.length) historyIndex = -1; }
     const value = historyIndex === -1 ? historyStash : history[historyIndex]!; target.value = value; target.setSelectionRange(value.length, value.length); options.autosize(target); return true;
   }
-  return { images, ownerKey, draftKey, historyKey, write, stash, clear, waiting, saveSoon, clearDraft, restore, record, prompts, clearHistory, migrate, restorePayload, navigate,
+  return { images, ownerKey, draftKey, draftRefsKey, historyKey, write, stash, clear, waiting, saveSoon, clearDraft, restore, record, prompts, clearHistory, migrate, restorePayload, navigate,
     exitHistory() { historyIndex = -1; }, get key() { return key; }, get historyIndex() { return historyIndex; },
     dispose() { stash(); disposed = true; images.dispose(); },
   };

@@ -3,7 +3,8 @@ import { sessionRefKey } from './helper-identity';
 import { record } from '../core/helper-values';
 import { formatByteSize } from '../core/attachment-text';
 import { errorMessage, jsonResponse, sendJson, type ApiRequest, type ApiUpload, type HostEndpoint } from './api-client';
-import { isComposerFile, type ComposerAttachment, type ComposerImage } from './composer-images';
+import { isComposerFile, type ComposerAttachment, type ComposerFile, type ComposerImage } from './composer-images';
+import { appendFileManifest, formatPromptForHistory, resolveAttachmentsForSend, type AttachmentRefDescriptor } from './composer-refs';
 import type { SessionState } from './session-state';
 import type { createComposerDrafts } from './composer-drafts';
 import type { createPromptDelivery } from './prompt-delivery';
@@ -30,13 +31,47 @@ export function createComposerSubmit(options: {
     const value = await sendJson(options.request, endpoint, path, body), data = record(value) ? value : {};
     return { info: typeof data.info === 'string' ? data.info : '', result: { queued: record(data.result) && data.result.queued === true } };
   }
+  function resolveSubmission(rawMessage: string, attachments: readonly ComposerAttachment[] | null) {
+    let imageSeq = 0, fileSeq = 0;
+    const descriptors: (AttachmentRefDescriptor & { readonly item: ComposerAttachment })[] = [];
+    for (const item of attachments || []) {
+      if (isComposerFile(item)) {
+        fileSeq++;
+        descriptors.push({ kind: 'file', refId: item.refId ?? fileSeq, name: item.name, item });
+      } else {
+        imageSeq++;
+        descriptors.push({ kind: 'image', refId: item.refId ?? imageSeq, item });
+      }
+    }
+    const resolved = resolveAttachmentsForSend(rawMessage, descriptors);
+    const images: ComposerImage[] = resolved.images
+      .filter((item): item is ComposerImage => !isComposerFile(item))
+      .map(({ data, mimeType }) => ({ data, mimeType }));
+    const files: ComposerFile[] = resolved.files.filter(isComposerFile);
+    return {
+      message: resolved.message,
+      images,
+      files,
+      hasFileTokens: resolved.hasFileTokens,
+      imageTokens: resolved.imageTokens,
+    };
+  }
   /**
    * Streams the non-image attachments to the owner's host and resolves to the
    * message naming them. Runs after the composer is cleared, so a failure
    * restores the whole payload, reports it and yields null.
    */
-  async function withUploads(endpoint: HostEndpoint, sessionId: string, ownerKey: string, owns: () => boolean, message: string, attachments: readonly ComposerAttachment[]) {
-    const files = attachments.filter(isComposerFile);
+  async function withUploads(
+    endpoint: HostEndpoint,
+    sessionId: string,
+    ownerKey: string,
+    owns: () => boolean,
+    rawMessage: string,
+    resolvedMessage: string,
+    hasFileTokens: boolean,
+    files: readonly ComposerFile[],
+    rawAttachments: readonly ComposerAttachment[] | null,
+  ) {
     const path = `/api/sessions/${encodeURIComponent(sessionId)}/uploads`;
     const references: string[] = [];
     // Shown (and blocking another send) from the limit check on.
@@ -54,11 +89,11 @@ export function createComposerSubmit(options: {
       }
     } catch (error) {
       if (disposed) return null;
-      composerDrafts.restorePayload(ownerKey, message, attachments);
+      composerDrafts.restorePayload(ownerKey, rawMessage, rawAttachments);
       if (owns()) options.status(`Upload failed: ${errorMessage(error)}`, 'error');
       return null;
     } finally { shown.done(); }
-    return disposed ? null : message ? `${message}\n\n${references.join('\n')}` : references.join('\n');
+    return disposed ? null : appendFileManifest(resolvedMessage, references, hasFileTokens);
   }
   /** `/btw <q>` starts a side chat; plain text continues an open one. */
   function sideChatQuestion(message: string): { question: string; fresh: boolean } | 'usage' | null {
@@ -176,15 +211,19 @@ async function sendPrompt() {
 
   input.value = '';
   input.style.height = '';
-  composerDrafts.record(message, ownerKey);
-  composerDrafts.clearDraft(ownerKey);
   const attachments = composerDrafts.images.take();
-  const images = (attachments || []).filter((item): item is ComposerImage => !isComposerFile(item));
-  const refs = options.refs(message);
+  composerDrafts.clearDraft(ownerKey);
+  const resolved = resolveSubmission(message, attachments);
+  const images = resolved.images;
+  const refs = options.refs(resolved.message);
   const hibernated = !sessionState.currentSession.isActive && !!sessionState.currentSession.hibernation;
   // Without files the send stays synchronous up to the request, as before.
-  const text = attachments?.some(isComposerFile) ? await withUploads(endpoint, sessionId, ownerKey, owns, message, attachments) : message;
+  const text = resolved.files.length
+    ? await withUploads(endpoint, sessionId, ownerKey, owns, message, resolved.message, resolved.hasFileTokens, resolved.files, attachments)
+    : resolved.message;
   if (text === null) return;
+  const historyText = formatPromptForHistory(text, resolved.imageTokens);
+  if (historyText) composerDrafts.record(historyText, ownerKey);
   // Uploads can outlast the selection; the prompt still goes to its owner, unseen.
   const visible = owns();
   if (visible) options.status(hibernated ? 'Resuming hibernated session...' : 'Sending...', 'working');
@@ -282,17 +321,21 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
 
   input.value = '';
   input.style.height = '';
-  composerDrafts.record(message, ownerKey);
-  composerDrafts.clearDraft(ownerKey);
   const attachments = composerDrafts.images.take();
-  const images = (attachments || []).filter((item): item is ComposerImage => !isComposerFile(item));
-  const text = attachments?.some(isComposerFile) ? await withUploads(endpoint, sessionId, ownerKey, owns, message, attachments) : message;
+  composerDrafts.clearDraft(ownerKey);
+  const resolved = resolveSubmission(message, attachments);
+  const images = resolved.images;
+  const text = resolved.files.length
+    ? await withUploads(endpoint, sessionId, ownerKey, owns, message, resolved.message, resolved.hasFileTokens, resolved.files, attachments)
+    : resolved.message;
   if (text === null) return;
+  const historyText = formatPromptForHistory(text, resolved.imageTokens);
+  if (historyText) composerDrafts.record(historyText, ownerKey);
   if (owns()) options.status(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
 
   const body: Record<string, unknown> = steer ? { message: text } : { message: text, deliverAs: 'followUp' };
   if (images.length) body.images = images;
-  const refs = options.refs(message);
+  const refs = options.refs(resolved.message);
   if (refs.length) body.refs = refs;
   try {
     const resp = await send(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);

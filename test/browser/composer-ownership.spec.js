@@ -18,7 +18,7 @@ async function attach(page) {
     await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip img')).toHaveCount(0);
     await page.locator('#promptInput').fill('peer draft');
     await fleet.select(fleet.self);
-    await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('self draft');
+    await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('self draft [Image #1] ');
     await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip img')).toHaveCount(1);
     await fleet.select(fleet.peer);
     await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('peer draft');
@@ -45,7 +45,7 @@ for (const kind of ['prompt', 'command', 'steer', 'followUp']) {
         await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('peer work');
         await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip img')).toHaveCount(0);
         await fleet.select(fleet.self);
-        await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue(message);
+        await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue(kind === 'command' ? message : `${message} [Image #1]`);
         await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip img')).toHaveCount(kind === 'command' ? 0 : 1);
     });
 }

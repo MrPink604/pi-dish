@@ -34,7 +34,7 @@ test('startup draft migration flushes pending text and carries unfinished image 
   if (owner === null) throw new Error('Missing startup composer owner');
   await page.evaluate(() => fixtureApp.features.composerDrafts.restore('spawn:fixture-start')); await page.locator('#promptInput').fill('Latest startup draft'); await pendingImage(page);
   await page.evaluate(async owner => { fixtureApp.features.composerDrafts.migrate('spawn:fixture-start', owner); fixtureApp.features.composerDrafts.restore(owner); void window.finishBitmap(); await window.imagePending; }, owner);
-  await expect(page.locator('#promptInput')).toHaveValue('Latest startup draft'); await expect(page.locator('.attachment-thumb')).toHaveCount(1);
+  await expect(page.locator('#promptInput')).toHaveValue('Latest startup draft [Image #1] '); await expect(page.locator('.attachment-thumb')).toHaveCount(1);
   expect(await page.evaluate(() => localStorage.getItem(fixtureApp.features.composerDrafts.draftKey('spawn:fixture-start')))).toBeNull();
 });
 

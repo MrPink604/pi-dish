@@ -490,9 +490,11 @@ async function main(): Promise<void> {
         case 'prompt':
         case 'steer': {
           const message = typeof cmd.message === 'string' ? cmd.message : '';
-          if (!message) return respond(sock, cmd, false, undefined, 'message required');
-          const images = Array.isArray(cmd.images) ? cmd.images : undefined;
-          const opts = images ? { images } : {};
+          const images = Array.isArray(cmd.images)
+            ? cmd.images.filter(image => isRecord(image) && typeof image.data === 'string' && image.data.length > 0)
+            : [];
+          if (!message && !images.length) return respond(sock, cmd, false, undefined, 'message required');
+          const opts = images.length ? { images } : {};
           await (cmd.command === 'steer' ? session.steer(message, opts) : session.prompt(message, opts));
           writeClaim();
           respond(sock, cmd, true, { queued: false });

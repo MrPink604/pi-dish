@@ -744,3 +744,45 @@ test('agy relay supports /btw Side Chat (ask, stream, follow-up, cancel, close) 
         await post(sessionPath(sessionId, '/close'), {});
     }
 });
+test('agy relay accepts image-only prompt and steer while still rejecting empty payloads', { timeout: 90000 }, async () => {
+    const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const created = await post('/api/sessions/new', { harness: 'agy', cwd: projDir });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const sessionId = String((0, test_types_js_1.present)(created.body.id));
+    try {
+        await until(() => fs.existsSync(claimFile(sessionId)));
+        // Empty message with no valid images is still rejected.
+        const empty = await post(sessionPath(sessionId, '/prompt'), { message: '', images: [] });
+        assert.equal(empty.status, 400, JSON.stringify(empty.body));
+        // Image-only prompt (empty message string + image block) succeeds through the relay.
+        const stream = (0, sse_reader_js_1.sseReader)(`${base}${sessionPath(sessionId, '/stream')}`);
+        try {
+            await stream.waitFor(event => event.event === 'init', 10000);
+            const prompted = await post(sessionPath(sessionId, '/prompt'), {
+                message: '',
+                images: [{ data: PNG, mimeType: 'image/png' }],
+            });
+            assert.equal(prompted.status, 200, JSON.stringify(prompted.body));
+            await stream.waitFor(event => event.event === 'message_end' && (0, test_types_js_1.record)((0, test_types_js_1.record)(event.data).message).role === 'assistant', 20000);
+            await stream.waitFor(event => event.event === 'turn_end', 20000);
+        }
+        finally {
+            stream.close();
+        }
+        const messages = await get(sessionPath(sessionId, '/messages'));
+        assert.equal(messages.status, 200, JSON.stringify(messages.body));
+        const userMsg = (0, test_types_js_1.records)(messages.body.messages).find(msg => msg.role === 'user');
+        const blocks = (0, test_types_js_1.records)((0, test_types_js_1.record)((0, test_types_js_1.present)(userMsg, 'image-only user message recorded in mirror')).content);
+        assert.equal(blocks.some(block => block.type === 'image' && block.mimeType === 'image/png'), true, `expected image block in mirror, got ${JSON.stringify(blocks)}`);
+        assert.equal(blocks.some(block => block.type === 'text' && block.text === ''), false, 'image-only prompt should not synthesize an empty text block');
+        // Image-only steer also passes the relay guard.
+        const steered = await post(sessionPath(sessionId, '/steer'), {
+            message: '',
+            images: [{ data: PNG, mimeType: 'image/png' }],
+        });
+        assert.equal(steered.status, 200, JSON.stringify(steered.body));
+    }
+    finally {
+        await post(sessionPath(sessionId, '/close'), {});
+    }
+});

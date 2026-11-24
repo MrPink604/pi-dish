@@ -18,7 +18,7 @@ test('drafts and attachments remain separate for matching ids on two hosts', asy
   await expect(page.locator('#attachmentStrip img')).toHaveCount(0);
   await page.locator('#promptInput').fill('peer draft');
   await fleet.select(fleet.self);
-  await expect(page.locator('#promptInput')).toHaveValue('self draft');
+  await expect(page.locator('#promptInput')).toHaveValue('self draft [Image #1] ');
   await expect(page.locator('#attachmentStrip img')).toHaveCount(1);
   await fleet.select(fleet.peer);
   await expect(page.locator('#promptInput')).toHaveValue('peer draft');
@@ -45,7 +45,7 @@ for (const kind of ['prompt', 'command', 'steer', 'followUp']) {
     await expect(page.locator('#promptInput')).toHaveValue('peer work');
     await expect(page.locator('#attachmentStrip img')).toHaveCount(0);
     await fleet.select(fleet.self);
-    await expect(page.locator('#promptInput')).toHaveValue(message);
+    await expect(page.locator('#promptInput')).toHaveValue(kind === 'command' ? message : `${message} [Image #1]`);
     await expect(page.locator('#attachmentStrip img')).toHaveCount(kind === 'command' ? 0 : 1);
   });
 }

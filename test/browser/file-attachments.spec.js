@@ -89,7 +89,7 @@ async function chips(page) {
     await held.continue();
     await fixtures_js_1.expect.poll(() => sentPrompts(fleet.peer).length).toBe(1);
     const [movie] = attachedPaths(fleet.peer);
-    (0, fixtures_js_1.expect)(sentPrompts(fleet.peer)[0].message).toBe(`[Attached file: ${movie} (video/mp4, 2.0 KB)]`);
+    (0, fixtures_js_1.expect)(sentPrompts(fleet.peer)[0].message).toBe(`[File #1: movie.mp4]\n\n[File #1] [Attached file: ${movie} (video/mp4, 2.0 KB)]`);
     (0, fixtures_js_1.expect)(fs.statSync(movie).size).toBe(2048);
     (0, fixtures_js_1.expect)(sentPrompts(fleet.self)).toEqual([]);
     await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip')).toBeHidden();
