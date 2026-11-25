@@ -54,7 +54,13 @@ fs.mkdirSync(TEST_CWD, { recursive: true });
 fs.mkdirSync(TEST_CLAIM_DIR, { recursive: true, mode: 0o700 });
 fs.mkdirSync(path.join(TEST_HOME, '.omp', 'agent'), { recursive: true });
 process.env.HOME = TEST_HOME;
+process.env.HOST = '127.0.0.1';
 process.env.PORT = '0';
+for (const key of ['PI_DISH_URL', 'PI_DISH_SHARE_PORT', 'PI_DISH_SHARE_HOST', 'PI_DISH_SHARE_BASE_URL', 'PI_DISH_TERMINAL']) {
+    delete process.env[key];
+}
+process.env.PRIME_AGENT_DAEMON_SOCKET = path.join(TEST_HOME, 'no-prime-daemon.sock');
+process.env.PI_DISH_AGY_COMMAND = path.join(TEST_HOME, 'no-agy');
 process.env.TMUX_TMPDIR = TEST_TMUX_DIR;
 process.env.PI_DISH_TMUX_SCOPE = '0';
 process.env.PI_DISH_CU_BROKER_SOCKET = TEST_BROKER_SOCK;
@@ -1891,13 +1897,13 @@ test('unit: P1-1 single capability probe on restart (broker flipping Slice 1 -> 
     const sock = path.join(TEST_TMUX_DIR, `p11-probe-${process.pid}-${Date.now()}`);
     t.after(() => {
         try {
-            (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, 'kill-server'], { stdio: 'ignore' });
+            (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, 'kill-server'], { stdio: 'ignore', timeout: 10_000 });
         }
         catch { }
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
     // Start a real tmux pane so real createSessionLaunch + tmux.respawnPane execute.
-    const paneId = (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, '-f', '/dev/null', 'new-session', '-d', '-s', 'probe', '-P', '-F', '#{pane_id}', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)'], { encoding: 'utf8' }).trim();
+    const paneId = (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, '-f', '/dev/null', 'new-session', '-d', '-s', 'probe', '-P', '-F', '#{pane_id}', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)'], { encoding: 'utf8', timeout: 10_000 }).trim();
     const paneProc = await waitFor(() => tmux.paneProcessIdentity(sock, paneId), 'initial pane process');
     let statusCalls = 0;
     let acquireCalls = 0;
@@ -2149,14 +2155,14 @@ test('unit: P1-9 quarantine retry never kills an unrelated pane after tmux serve
         }
         catch { }
         try {
-            (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, 'kill-server'], { stdio: 'ignore' });
+            (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, 'kill-server'], { stdio: 'ignore', timeout: 10_000 });
         }
         catch { }
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
     const writerProc = await waitFor(() => (writerChild.pid ? processIdentity(writerChild.pid) : null), 'writer child pid');
     // 1. Start original tmux server S1 on `sock` with pane `%0` (birth P1).
-    const origPaneId = (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, '-f', '/dev/null', 'new-session', '-d', '-s', 'work', '-P', '-F', '#{pane_id}', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)'], { encoding: 'utf8' }).trim();
+    const origPaneId = (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, '-f', '/dev/null', 'new-session', '-d', '-s', 'work', '-P', '-F', '#{pane_id}', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)'], { encoding: 'utf8', timeout: 10_000 }).trim();
     const server1 = (0, test_types_js_1.present)(await tmux.serverIdentity(sock));
     const pane1 = (0, test_types_js_1.present)(await tmux.paneProcessIdentity(sock, origPaneId));
     let launchCalls = 0;
@@ -2200,8 +2206,8 @@ test('unit: P1-9 quarantine retry never kills an unrelated pane after tmux serve
     await assert.rejects(() => ops.resumeSessionById(routeId, { target: { type: 'tmux', socket: sock, tmuxSession: 'work' } }), /tmux cleanup failed/);
     assert.equal(launchCalls, 1);
     // 2. Restart the tmux server at the EXACT SAME socket -> new server S2, unrelated shell U1 now occupies `%0`!
-    (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, 'kill-server']);
-    const reusedPaneId = (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, '-f', '/dev/null', 'new-session', '-d', '-s', 'work', '-P', '-F', '#{pane_id}', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)'], { encoding: 'utf8' }).trim();
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, 'kill-server'], { timeout: 10_000 });
+    const reusedPaneId = (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, '-f', '/dev/null', 'new-session', '-d', '-s', 'work', '-P', '-F', '#{pane_id}', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)'], { encoding: 'utf8', timeout: 10_000 }).trim();
     assert.equal(reusedPaneId, origPaneId, 'restarted server reused the same pane id (%0)');
     const server2 = (0, test_types_js_1.present)(await tmux.serverIdentity(sock));
     const unrelatedShell = (0, test_types_js_1.present)(await tmux.paneProcessIdentity(sock, reusedPaneId));
@@ -2313,7 +2319,7 @@ test('end-to-end: P1-4 Slice-1 legacy, P1-10 + Fleet addendum env hygiene, P1-1 
         }
         catch { }
         try {
-            (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'kill-server'], { stdio: 'ignore' });
+            (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'kill-server'], { stdio: 'ignore', timeout: 10_000 });
         }
         catch { }
         await new Promise(resolve => {
@@ -2321,9 +2327,9 @@ test('end-to-end: P1-4 Slice-1 legacy, P1-10 + Fleet addendum env hygiene, P1-1 
             server.close(() => resolve());
         });
         await broker.close();
-        fs.rmSync(TEST_HOME, { recursive: true, force: true });
-        fs.rmSync(TEST_TMUX_DIR, { recursive: true, force: true });
-        fs.rmSync(TEST_SOCK_DIR, { recursive: true, force: true });
+        fs.rmSync(TEST_HOME, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        fs.rmSync(TEST_TMUX_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        fs.rmSync(TEST_SOCK_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     });
     const apiGet = async (urlPath, headers = {}) => {
         const res = await fetch(base + urlPath, { headers });
@@ -2380,7 +2386,9 @@ test('end-to-end: P1-4 Slice-1 legacy, P1-10 + Fleet addendum env hygiene, P1-1 
     browserStreamReq = http.get(`${base}/api/cu/stream`, (res) => {
         res.setEncoding('utf8');
         res.on('data', (chunk) => browserStreamChunks.push(chunk));
+        res.on('error', () => { });
     });
+    browserStreamReq.on('error', () => { });
     await waitFor(() => browserStreamChunks.join('').includes('event: hello'), 'browser /api/cu/stream hello');
     // 0. P1-4: Responding Slice-1 broker (no capabilities array) gets exact main-branch legacy spawn (zero broker mutations)!
     broker.slice1Mode = true;
