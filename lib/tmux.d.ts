@@ -76,6 +76,10 @@ export interface PaneProcessOptions {
 }
 export interface PaneCleanupOptions extends PaneProcessOptions {
     timeout?: number;
+    /** When set, refuse to kill the pane unless the socket's live tmux server birth matches. */
+    expectedServer?: ProcessIdentity | null;
+    /** When set, refuse to kill the pane unless the pane's live root process birth matches. */
+    expectedPaneProcess?: ProcessIdentity | null;
 }
 export interface PaneCleanupError extends Error {
     remainingProcesses: ProcessIdentity[];
@@ -124,7 +128,7 @@ export declare function paneProcessIdentity(socket: string, paneId: string): Pro
  * Kill the pane, then wait for both tmux and its captured process tree to exit.
  * Hidden-session fallback cannot leave two processes writing the same JSONL.
  */
-export declare function killPaneAndWait(socket: string, paneId: string, { timeout, knownProcesses }?: PaneCleanupOptions): Promise<void>;
+export declare function killPaneAndWait(socket: string, paneId: string, { timeout, knownProcesses, expectedServer, expectedPaneProcess }?: PaneCleanupOptions): Promise<void>;
 /** Human-facing location, not process ownership. Window names can contain ':'. */
 export declare function paneLocation(socket: string, paneId: string): Promise<PaneLocation | null>;
 /**
@@ -174,6 +178,12 @@ export declare function paneAttachedClients(socket: string, paneId: string): Pro
  */
 export declare function attachPaneArgv(socket: string, paneId: string): Promise<string[] | null>;
 export declare function getPrefixKey(socket: string): Promise<string | null>;
+/**
+ * Lists environment variable names starting with `prefix` in the tmux server
+ * global environment (and optional target session environment). Uses `-N` so it
+ * never starts a server.
+ */
+export declare function environmentNamesWithPrefix(socket: string, prefix: string, tmuxSession?: string | null): Promise<string[]>;
 /** Persisted placements by route id. Evidence only: callers re-read live state before acting. */
 export declare function listSpawns(): Record<string, SpawnPlacement>;
 export declare function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bridgeInstanceId, paneProcess, wrapperPath, primeAgent }: PaneTarget & {

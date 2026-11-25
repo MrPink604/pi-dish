@@ -110,6 +110,10 @@ export interface PaneProcessOptions {
 
 export interface PaneCleanupOptions extends PaneProcessOptions {
   timeout?: number;
+  /** When set, refuse to kill the pane unless the socket's live tmux server birth matches. */
+  expectedServer?: ProcessIdentity | null;
+  /** When set, refuse to kill the pane unless the pane's live root process birth matches. */
+  expectedPaneProcess?: ProcessIdentity | null;
 }
 
 export interface PaneCleanupError extends Error {
@@ -550,10 +554,31 @@ export async function paneProcessIdentity(socket: string, paneId: string): Promi
  * Kill the pane, then wait for both tmux and its captured process tree to exit.
  * Hidden-session fallback cannot leave two processes writing the same JSONL.
  */
-export async function killPaneAndWait(socket: string, paneId: string, { timeout = 5000, knownProcesses = [] }: PaneCleanupOptions = {}): Promise<void> {
+export async function killPaneAndWait(
+  socket: string,
+  paneId: string,
+  { timeout = 5000, knownProcesses = [], expectedServer = null, expectedPaneProcess = null }: PaneCleanupOptions = {},
+): Promise<void> {
   const { pid, exists } = await paneAnchor(socket, paneId);
   if (!pid && exists) {
     throw cleanupError(new Error(`could not identify process for tmux pane ${paneId}`), knownProcesses.filter(processIdentityAlive));
+  }
+  if (pid) {
+    if (expectedServer && !sameServerIdentity(await serverIdentity(socket), expectedServer)) {
+      throw cleanupError(
+        new Error(`refusing to kill tmux pane ${paneId}: tmux server identity changed`),
+        knownProcesses.filter(processIdentityAlive),
+      );
+    }
+    if (expectedPaneProcess) {
+      const livePaneProc = processIdentity(pid);
+      if (!livePaneProc || livePaneProc.pid !== expectedPaneProcess.pid || livePaneProc.startTime !== expectedPaneProcess.startTime) {
+        throw cleanupError(
+          new Error(`refusing to kill tmux pane ${paneId}: pane process identity changed`),
+          knownProcesses.filter(processIdentityAlive),
+        );
+      }
+    }
   }
   // Capture descendants before tmux closes the pane and reparents them. A
   // wrapper may be the root while its child is the actual JSONL writer.
@@ -786,6 +811,40 @@ export async function getPrefixKey(socket: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Lists environment variable names starting with `prefix` in the tmux server
+ * global environment (and optional target session environment). Uses `-N` so it
+ * never starts a server.
+ */
+export async function environmentNamesWithPrefix(
+  socket: string,
+  prefix: string,
+  tmuxSession?: string | null,
+): Promise<string[]> {
+  const names = new Set<string>();
+  const queries: string[][] = [['show-environment', '-g']];
+  if (tmuxSession) queries.push(['show-environment', '-t', `=${tmuxSession}`]);
+  for (const args of queries) {
+    try {
+      const out = await runTmux(['-N', '-S', socket, ...args], { timeout: 2000 });
+      for (const rawLine of out.split('\n')) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('-')) continue;
+        const eq = line.indexOf('=');
+        const key = eq >= 0 ? line.slice(0, eq) : line;
+        if (key.startsWith(prefix) && ENV_VAR_NAME_RE.test(key)) {
+          names.add(key);
+        }
+      }
+    } catch {
+      // Server or session does not exist yet.
+    }
+  }
+  return [...names];
 }
 
 const SPAWNS_STORE = 'tmux-spawns.json';

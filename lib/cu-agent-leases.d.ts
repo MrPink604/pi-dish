@@ -107,6 +107,7 @@ export interface CuAgentLeases {
     reconcile(): Promise<void>;
     prepareSpawn(options: {
         knownSessionId?: string | null;
+        assumeSlice2?: boolean;
     }): Promise<CuAgentSpawnHandle | null>;
     bindSpawnedProcess(handle: CuAgentSpawnHandle, process: CuBindProcessInfo | null): Promise<void>;
     attachSpawnedSession(handle: CuAgentSpawnHandle, info: CuAttachSessionInfo): void;

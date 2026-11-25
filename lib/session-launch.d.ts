@@ -41,6 +41,8 @@ export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
     sessionId?: string | null;
     /** Bind headless tmux launch to one exact already-running server (-N, no server creation, no RPC fallback). */
     expectedTmuxServer?: ProcessIdentity | null;
+    /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
+    cuSlice2?: boolean;
 }
 export interface RpcResumeOptions extends PilotSelectionOptions {
     sessionFile: string;
@@ -63,10 +65,16 @@ export interface SpawnHarnessOptions {
     knownSessionId?: string | null;
     restartPane?: RestartPaneOptions | null;
     expectedTmuxServer?: ProcessIdentity | null;
+    /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
+    cuSlice2?: boolean;
 }
 export interface CleanupEvidence extends tmux.PaneTarget {
     knownProcesses: ProcessIdentity[];
     timeout: number;
+    /** Original tmux server birth captured at spawn; required before any retry may kill the pane. */
+    serverProcess?: ProcessIdentity | null;
+    /** Original pane root process birth captured at spawn; required before any retry may kill the pane. */
+    paneProcess?: ProcessIdentity | null;
 }
 export interface ResumeUncertainty extends tmux.PaneTarget {
     knownProcesses: ProcessIdentity[];

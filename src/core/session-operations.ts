@@ -612,16 +612,59 @@ export function createSessionOperations(observations: SessionOperationObservatio
       }
       const failedCleanup = failedResumeCleanups.get(sessionFile);
       if (failedCleanup) {
-        try {
-          await tmux.killPaneAndWait(failedCleanup.socket, failedCleanup.paneId, {
-            knownProcesses: failedCleanup.knownProcesses, timeout: failedCleanup.timeout,
-          });
-          if (failedResumeCleanups.get(sessionFile) === failedCleanup) failedResumeCleanups.delete(sessionFile);
-          invalidateRegistryCache();
-        } catch (cleanupError) {
-          const remaining = cleanupProcesses(cleanupError);
-          if (remaining) failedResumeCleanups.set(sessionFile, { ...failedCleanup, knownProcesses: remaining });
-          throw new SessionOperationError(500, `Previous hidden tmux cleanup is still incomplete; refusing to resume another process against this session file: ${errorMessage(cleanupError)}`);
+        const expectedServer = failedCleanup.serverProcess ?? null;
+        const expectedPane = failedCleanup.paneProcess ?? null;
+        const currentServer = expectedServer ? await tmux.serverIdentity(failedCleanup.socket) : null;
+        const sameServer = !!expectedServer && sameProcessIdentity(currentServer, expectedServer);
+        const currentPane = sameServer && expectedPane
+          ? await tmux.paneProcessIdentity(failedCleanup.socket, failedCleanup.paneId)
+          : null;
+        const samePane = sameServer && !!expectedPane && sameProcessIdentity(currentPane, expectedPane);
+
+        if (samePane) {
+          // Only kill the saved pane when both the original tmux server identity
+          // and original pane birth are proved.
+          try {
+            await tmux.killPaneAndWait(failedCleanup.socket, failedCleanup.paneId, {
+              knownProcesses: failedCleanup.knownProcesses,
+              timeout: failedCleanup.timeout,
+              expectedServer,
+              expectedPaneProcess: expectedPane,
+            });
+            if (failedResumeCleanups.get(sessionFile) === failedCleanup) failedResumeCleanups.delete(sessionFile);
+            invalidateRegistryCache();
+          } catch (cleanupError) {
+            const remaining = cleanupProcesses(cleanupError);
+            if (remaining) failedResumeCleanups.set(sessionFile, { ...failedCleanup, knownProcesses: remaining });
+            throw new SessionOperationError(500, `Previous hidden tmux cleanup is still incomplete; refusing to resume another process against this session file: ${errorMessage(cleanupError)}`);
+          }
+        } else {
+          // Never kill a pane whose original server + pane birth cannot both be proved.
+          // Observe/wait only on saved writer births and keep quarantine when in doubt.
+          const liveSaved = () => failedCleanup.knownProcesses.filter(processIdentityAlive);
+          const deadline = Date.now() + failedCleanup.timeout;
+          while (liveSaved().length && Date.now() < deadline) {
+            await delay(100);
+          }
+          const remaining = liveSaved();
+          if (remaining.length) {
+            failedResumeCleanups.set(sessionFile, { ...failedCleanup, knownProcesses: remaining });
+            const ids = remaining.map(proc => `${proc.pid}@${proc.startTime}`).join(', ');
+            throw new SessionOperationError(
+              500,
+              `Previous hidden tmux cleanup is still incomplete; refusing to resume another process against this session file (processes still alive: ${ids})`,
+            );
+          }
+          const paneStillExists = sameServer ? await tmux.paneExists(failedCleanup.socket, failedCleanup.paneId) : true;
+          if (sameServer && !paneStillExists && failedCleanup.knownProcesses.length > 0) {
+            if (failedResumeCleanups.get(sessionFile) === failedCleanup) failedResumeCleanups.delete(sessionFile);
+            invalidateRegistryCache();
+          } else {
+            throw new SessionOperationError(
+              500,
+              `Previous hidden tmux cleanup is still incomplete; refusing to kill unverified pane (${failedCleanup.paneId}) or launch another writer against this session file.`,
+            );
+          }
         }
       }
       let cwd = recovery ? recovery.cwd : observedCwd(observations.readSessionCwd({ ...sessionSource, file: sessionFile }));
@@ -819,6 +862,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
             name: windowName,
             target: launchTarget,
             model: resumeModel,
+            cuSlice2: true,
           });
           if (outcome.kind !== 'ready') {
             if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
@@ -852,6 +896,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
           cwd,
           name: windowName,
           hidden: path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket()),
+          cuSlice2: false,
           restartPane: {
             sessionId, paneId: spawn.paneId,
             paneProcess: pane ? { pid: Number(pane.pid), startTime: String(pane.startTime) } : null,

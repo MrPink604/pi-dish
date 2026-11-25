@@ -62,6 +62,8 @@ export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
   sessionId?: string | null;
   /** Bind headless tmux launch to one exact already-running server (-N, no server creation, no RPC fallback). */
   expectedTmuxServer?: ProcessIdentity | null;
+  /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
+  cuSlice2?: boolean;
 }
 
 export interface RpcResumeOptions extends PilotSelectionOptions {
@@ -87,11 +89,17 @@ export interface SpawnHarnessOptions {
   knownSessionId?: string | null;
   restartPane?: RestartPaneOptions | null;
   expectedTmuxServer?: ProcessIdentity | null;
+  /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
+  cuSlice2?: boolean;
 }
 
 export interface CleanupEvidence extends tmux.PaneTarget {
   knownProcesses: ProcessIdentity[];
   timeout: number;
+  /** Original tmux server birth captured at spawn; required before any retry may kill the pane. */
+  serverProcess?: ProcessIdentity | null;
+  /** Original pane root process birth captured at spawn; required before any retry may kill the pane. */
+  paneProcess?: ProcessIdentity | null;
 }
 
 export interface ResumeUncertainty extends tmux.PaneTarget {
@@ -149,9 +157,33 @@ const RESERVED_CU_BROKER_ENV_KEYS = [
   'CU_BROKER_SESSION_ID',
   'CU_BROKER_LABEL',
   'CU_BROKER_MCP_TOKEN',
+  'CU_BROKER_AGENT_SOCKET',
+  'CU_BROKER_CONTROL_SOCKET',
+  'CU_BROKER_SOCKET',
+  'CU_BROKER_AUTO_ACQUIRE',
+  'CU_BROKER_TTL_SEC',
+  'CU_BROKER_HEARTBEAT_SEC',
+  'CU_BROKER_CLAIM_WAIT_MS',
+  'CU_BROKER_HTTP_TIMEOUT_MS',
+  'CU_BROKER_MCP_ENTRYPOINT',
+  'CU_BROKER_EVENT_HISTORY_SIZE',
 ] as const;
 
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+
+async function collectInheritedCuBrokerEnvKeys(socket: string, tmuxSession?: string | null): Promise<string[]> {
+  const keys = new Set<string>(RESERVED_CU_BROKER_ENV_KEYS);
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('CU_BROKER_') && ENV_VAR_NAME_RE.test(key)) {
+      keys.add(key);
+    }
+  }
+  for (const key of await tmux.environmentNamesWithPrefix(socket, 'CU_BROKER_', tmuxSession)) {
+    keys.add(key);
+  }
+  return [...keys].sort();
+}
 
 /**
  * Strip reserved `CU_BROKER_*` assignments from both the tmux `-e` env map and
@@ -480,7 +512,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return withPrimeLaunch(() => runTmuxLaunch(options, { daemon, snapshot: new Set() }));
   }
 
-  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, knownSessionId = null, restartPane = null, expectedTmuxServer = null }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
+  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, knownSessionId = null, restartPane = null, expectedTmuxServer = null, cuSlice2 }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
     if (!tmux.isTmuxAvailable()) throw new LaunchError('tmux is not available on this host', 400);
     const socket = target.socket;
     if (!tmux.isSocketAllowed(socket)) throw new LaunchError('Invalid tmux socket', 400);
@@ -527,22 +559,29 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     }
     let cuLeaseHandle: CuAgentSpawnHandle | null = null;
     let cuLeaseAttached = false;
-    if (descriptor.id === 'omp' && observations.cuLeases?.configured()) {
+    // P1-1: Never probe/mint CU leases on a legacy `restartPane` path (guard has
+    // not run yet), and honor any pre-probed `cuSlice2` decision without re-probing.
+    if (descriptor.id === 'omp' && observations.cuLeases?.configured() && cuSlice2 !== false && !restartPane) {
       cuLeaseHandle = await observations.cuLeases.prepareSpawn({
-        knownSessionId: restartPane?.sessionId ?? knownSessionId ?? null,
+        knownSessionId: knownSessionId ?? null,
+        ...(cuSlice2 !== undefined ? { assumeSlice2: cuSlice2 } : {}),
       });
+    }
+    try {
       if (cuLeaseHandle) {
         // P1-10 (+ Fleet addendum):
         // 1. Strip reserved CU_BROKER_* assignments from `env` (so nothing enters
         //    `tmux -e` or leaks into sibling windows) and from the launch command.
-        // 2. Explicitly `env -u` inherited CU_BROKER_* variables FIRST to clear any
-        //    pre-populated tmux session/server environment.
+        // 2. Unset EVERY inherited CU_BROKER_* variable FIRST by prefix (from
+        //    process.env, tmux server/session env, and the full reserved baseline
+        //    including CU_BROKER_AGENT_SOCKET).
         // 3. THEN set the managed allowlist (CU_BROKER_SESSION_ID,
         //    CU_BROKER_CLAIM_FILE, CU_BROKER_LABEL) so omp keeps the fresh managed
         //    CU_BROKER_SESSION_ID (needed by Fleet's future reclaim).
         // `env` execs the target in place, preserving the pane's exact (pid, pidStartTime).
         const sanitizedCommand = stripReservedCuBrokerEnv(env, command);
-        const unsetArgs = RESERVED_CU_BROKER_ENV_KEYS.flatMap(key => ['-u', key]);
+        const unsetKeys = await collectInheritedCuBrokerEnvKeys(socket, target.tmuxSession);
+        const unsetArgs = unsetKeys.flatMap(key => ['-u', key]);
         const allowlistPairs = [
           `CU_BROKER_SESSION_ID=${cuLeaseHandle.env.CU_BROKER_SESSION_ID}`,
           `CU_BROKER_CLAIM_FILE=${cuLeaseHandle.env.CU_BROKER_CLAIM_FILE}`,
@@ -550,8 +589,6 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
         ];
         command = ['env', ...unsetArgs, ...allowlistPairs, ...sanitizedCommand];
       }
-    }
-    try {
       let paneId: string;
       let restartedPaneProcess: ProcessIdentity | null = null;
       try {
@@ -583,18 +620,25 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
         throw new LaunchError(`Failed to ${action}: ${errorMessage(error)}`, 500);
       }
 
+      const spawnedServerProcess = await tmux.serverIdentity(socket);
+      const spawnedPaneProcess = await tmux.paneProcessIdentity(socket, paneId);
+
       // Bind the CU agent lease promptly to the omp pane's (pid, pidStartTime)
       // right after spawnInTmux (never waiting for bridge registration)
       // so cua-driver-mcp's claim handoff resolves immediately.
       if (cuLeaseHandle && observations.cuLeases) {
-        const spawnedPaneProcess = await tmux.paneProcessIdentity(socket, paneId);
         try {
           await observations.cuLeases.bindSpawnedProcess(cuLeaseHandle, spawnedPaneProcess);
         } catch (bindError) {
           const cleanupTimeoutMs = 3000;
           const knownProcesses = spawnedPaneProcess ? [spawnedPaneProcess] : [];
           try {
-            await tmux.killPaneAndWait(socket, paneId, { timeout: cleanupTimeoutMs, knownProcesses });
+            await tmux.killPaneAndWait(socket, paneId, {
+              timeout: cleanupTimeoutMs,
+              knownProcesses,
+              expectedServer: spawnedServerProcess,
+              expectedPaneProcess: spawnedPaneProcess,
+            });
           } catch (cleanupError) {
             const error = new LaunchError(
               `${errorMessage(bindError)}, and tmux cleanup failed: ${errorMessage(cleanupError)}`,
@@ -609,6 +653,8 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
                 paneId,
                 knownProcesses: cleanupProcesses(cleanupError) ?? knownProcesses,
                 timeout: cleanupTimeoutMs,
+                serverProcess: spawnedServerProcess,
+                paneProcess: spawnedPaneProcess,
               },
             };
           }
@@ -756,15 +802,33 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       const shouldCleanup = hidden || !descriptor.rpcFallback || !!registrationError;
       if (shouldCleanup) {
         const cleanupTimeoutMs = Math.min(5000, Math.max(1000, timeoutMs));
-        try { await tmux.killPaneAndWait(socket, paneId, { timeout: cleanupTimeoutMs }); } catch (cleanupError) {
+        const initialKnown = spawnedPaneProcess ? [spawnedPaneProcess] : [];
+        try {
+          await tmux.killPaneAndWait(socket, paneId, {
+            timeout: cleanupTimeoutMs,
+            knownProcesses: initialKnown,
+            expectedServer: spawnedServerProcess,
+          });
+        } catch (cleanupError) {
           const message = registrationError
             ? `${registrationError.message}, and tmux cleanup failed: ${errorMessage(cleanupError)}`
             : descriptor.rpcFallback
               ? `${timeoutReason}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${errorMessage(cleanupError)}`
               : `${timeoutReason}, and tmux cleanup failed: ${errorMessage(cleanupError)}`;
           const error = new LaunchError(message, 500);
-          return { kind: 'cleanup-incomplete', error, status: error.status,
-            cleanup: { socket, paneId, knownProcesses: cleanupProcesses(cleanupError) ?? [], timeout: cleanupTimeoutMs } };
+          return {
+            kind: 'cleanup-incomplete',
+            error,
+            status: error.status,
+            cleanup: {
+              socket,
+              paneId,
+              knownProcesses: cleanupProcesses(cleanupError) ?? initialKnown,
+              timeout: cleanupTimeoutMs,
+              serverProcess: spawnedServerProcess,
+              paneProcess: spawnedPaneProcess,
+            },
+          };
         }
       }
       if (registrationError) return forbidden(registrationError);
@@ -927,11 +991,11 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     } catch (error) { return forbidden(error); }
   }
 
-  async function launchResumedSession({ descriptor, sessionFile, sessionId, cwd, name, target, model, thinking, expectedTmuxServer }: ResumeSessionLaunchOptions): Promise<LaunchOutcome> {
+  async function launchResumedSession({ descriptor, sessionFile, sessionId, cwd, name, target, model, thinking, expectedTmuxServer, cuSlice2 }: ResumeSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
       const args = descriptor.argv.resume({ file: sessionFile, model: model ?? undefined });
       if (thinking && (descriptor.id === 'pi' || descriptor.id === 'omp')) args.push('--thinking', thinking);
-      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name, knownSessionId: sessionId ?? null, expectedTmuxServer }, 'resume',
+      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name, knownSessionId: sessionId ?? null, expectedTmuxServer, cuSlice2 }, 'resume',
         () => resumeRpcSession({ sessionFile, cwd, model, thinking }));
     } catch (error) { return forbidden(error); }
   }

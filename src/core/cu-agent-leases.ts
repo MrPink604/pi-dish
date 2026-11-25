@@ -178,7 +178,7 @@ export interface CuAgentLeases {
   /** Probes §9.1 capabilities before mutation. Returns false on non-CU or Slice-1 broker; throws 503 if configured broker is unreachable. */
   supportsSlice2(): Promise<boolean>;
   reconcile(): Promise<void>;
-  prepareSpawn(options: { knownSessionId?: string | null }): Promise<CuAgentSpawnHandle | null>;
+  prepareSpawn(options: { knownSessionId?: string | null; assumeSlice2?: boolean }): Promise<CuAgentSpawnHandle | null>;
   bindSpawnedProcess(handle: CuAgentSpawnHandle, process: CuBindProcessInfo | null): Promise<void>;
   attachSpawnedSession(handle: CuAgentSpawnHandle, info: CuAttachSessionInfo): void;
   abortSpawn(handle: CuAgentSpawnHandle): Promise<void>;
@@ -1133,12 +1133,17 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       const brokerCursor = pickNonNegInt(reply.body, 'cursor');
       const pos: BrokerPosition = { generation: brokerGeneration, cursor: brokerCursor, epoch: brokerEpoch };
       const order = comparePosition(pos, { allowNewGeneration: true });
+      // P1-6: Never apply a stale startup status snapshot (older than global known
+      // state observed from SSE/HTTP while /v1/status was in flight). Leave pending
+      // records untouched with zero state changes and zero commands.
+      if (order === 'stale') {
+        reconciled = false;
+        return;
+      }
       if (order === 'new_generation') {
         resetAllWatermarksForNewGeneration(brokerGeneration);
       }
-      if (order !== 'stale') {
-        advanceGlobalPosition(pos, order === 'new_generation');
-      }
+      advanceGlobalPosition(pos, order === 'new_generation');
 
       const activeLease = isRecord(reply.body.lease) ? reply.body.lease : null;
       const activeLeaseRef = extractRef(activeLease);
@@ -1151,8 +1156,15 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       // P1-2 & P1-5: Never mutate broker with force:true on secretless startup records.
       // Re-adopt ONLY when BOTH the omp birth is alive AND the broker lease has a live claimed MCP peer.
       // Otherwise: dead omp -> drop locally; live omp without live claimed peer -> mark access_lost honestly.
+      let skippedStaleRecord = false;
       for (const rec of pendingRecords) {
         if (recordsByBrokerId.get(rec.brokerSessionId) !== rec) continue;
+        // P1-6: If this snapshot is stale against the record's own known position,
+        // skip the record entirely (no state change and no command).
+        if (isRecordObservationStale(rec, pos)) {
+          skippedStaleRecord = true;
+          continue;
+        }
         rec.pendingStartupReconcile = false;
 
         const isActive = activeIsAgent && refMatchesRecord(activeLeaseRef, rec);
@@ -1194,7 +1206,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         }
       }
 
-      reconciled = true;
+      reconciled = !skippedStaleRecord;
       persistStore();
     })();
     reconcileFlight = flight;
@@ -1233,11 +1245,21 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   }
 
   async function prepareSpawn(
-    options: { knownSessionId?: string | null },
+    options: { knownSessionId?: string | null; assumeSlice2?: boolean },
   ): Promise<CuAgentSpawnHandle | null> {
-    // P1-4: Check §9.1 capabilities BEFORE any mutation. Slice-1 broker -> return null (legacy path).
-    // Configured but unreachable broker -> throws 503 CuBrokerUnavailableError (fail-closed).
-    if (!(await supportsSlice2())) return null;
+    // P1-1 & P1-4: When caller already probed capabilities once (e.g. restartSession),
+    // honor that decision without re-probing. Otherwise probe §9.1 capabilities before
+    // any mutation: Slice-1 broker -> return null (legacy path); unreachable configured
+    // broker -> throws 503 CuBrokerUnavailableError (fail-closed).
+    if (options.assumeSlice2 === false) return null;
+    if (options.assumeSlice2 === true) {
+      if (stopped || !ports.broker.configured()) return null;
+      if (!ports.broker.available()) {
+        throw new CuBrokerUnavailableError('Computer-use broker is unavailable');
+      }
+    } else if (!(await supportsSlice2())) {
+      return null;
+    }
 
     const knownSessionId = typeof options.knownSessionId === 'string' && options.knownSessionId.trim()
       ? options.knownSessionId.trim()
