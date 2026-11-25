@@ -38,6 +38,7 @@ import { createRecovery } from './recovery';
 import { createHostSettings, hostSettingsHtml } from './host-settings';
 import { createFleetView } from './fleet-view';
 import { createCuViewer } from './cu-viewer';
+import { supportsComputerUseTransport } from './cu-viewer-data';
 import { createSearchView } from './search-view';
 import { createSkills } from './skills';
 import { createUsageView } from './usage-view';
@@ -867,7 +868,7 @@ function renderHostsSection() {
 const fleetController: ReturnType<typeof createFleetView> = createFleetView({
   root: document.querySelector<HTMLElement>('.main')!, request: readHostApi, hosts: effectiveHosts,
   connection: host => hostConnections.stateOf(host), supports: host => hostSupportsCapability(host, 'hostHealth', appConfig),
-  supportsComputerUse: host => hostSupportsCapability(host, 'computerUse', appConfig),
+  supportsComputerUse: host => hostSupportsCapability(host, 'computerUse', appConfig) && supportsComputerUseTransport(host),
   openComputerUse: host => cuViewerController.open(host),
   selfIdentityFailure: () => reachabilityFailures.identity,
   clientSessions: hostId => {
@@ -895,7 +896,7 @@ const cuViewerController: ReturnType<typeof createCuViewer> = createCuViewer({
   hosts: effectiveHosts,
   host: hostEntryFor,
   currentSession: () => sessionState.currentSession,
-  supports: host => hostSupportsCapability(host, 'computerUse', appConfig),
+  supports: host => hostSupportsCapability(host, 'computerUse', appConfig) && supportsComputerUseTransport(host),
   dot: hostId => hostPresentation.dotHtml(hostId, 'fleet-host-dot'),
   ticket: host => mintHostTicket(host, 'stream'),
   closeOtherViews: () => mainPane.beforeTakeover('cuViewer'),

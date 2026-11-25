@@ -179,10 +179,10 @@ export function startServer(rootDirectory: string): Server {
 
   app.get('/api/cu/status', cuHandlers.status);
   app.get('/api/cu/stream', cuHandlers.stream);
-  app.post('/api/cu/takeover', cuHandlers.takeover);
-  app.post('/api/cu/heartbeat', cuHandlers.heartbeat);
-  app.post('/api/cu/release', cuHandlers.release);
-  app.post('/api/cu/viewer/ticket', cuHandlers.viewerTicket);
+  app.post('/api/cu/takeover', accessHandlers.cuMutationGuard, cuHandlers.takeover);
+  app.post('/api/cu/heartbeat', accessHandlers.cuMutationGuard, cuHandlers.heartbeat);
+  app.post('/api/cu/release', accessHandlers.cuMutationGuard, cuHandlers.release);
+  app.post('/api/cu/viewer/ticket', accessHandlers.cuMutationGuard, cuHandlers.viewerTicket);
   app.get('/api/cu/audit', cuHandlers.audit);
 
   const relayHandlers = createRelayHandlers({
@@ -191,6 +191,7 @@ export function startServer(rootDirectory: string): Server {
     publicBaseUrl: () => process.env.PI_DISH_SHARE_BASE_URL,
     hostDescriptor: accessHandlers.hostDescriptor,
     upgradeAuthorized: accessHandlers.upgradeAuthorized,
+    checkCuMutationIngress: accessHandlers.checkCuMutationIngress,
   });
   app.use('/hosts', accessHandlers.hostsGate);
   app.use('/hosts/:name/api', relayHandlers.rawApi);

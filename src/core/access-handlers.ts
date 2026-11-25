@@ -12,6 +12,7 @@ import * as tmux from './tmux';
 import { PRIVATE_UNLOCK_HEADER } from './private-access';
 import { FORM_CLIENT_HEADER, PAGE_FORMS_CAPABILITY } from './page-forms';
 import { REVIEW_CLIENT_HEADER, REVIEWS_CAPABILITY } from './reviews';
+import { record as isRecord } from './helper-values';
 
 export type TransportRequest = express.Request<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 export type TransportResponse = express.Response<unknown, Record<string, unknown>>;
@@ -43,6 +44,8 @@ export interface AccessHandlers {
   cors: TransportHandler;
   pageCommentTransport: TransportHandler;
   sameOriginOnly: TransportHandler;
+  checkCuMutationIngress(req: TransportRequest, res: TransportResponse): boolean;
+  cuMutationGuard: TransportHandler;
   requireBearer: TransportHandler;
   apiGate: TransportHandler;
   hostsGate: TransportHandler;
@@ -80,6 +83,67 @@ export function parsePublicOrigins(value: string, warn: (message: string) => voi
     }
   }
   return origins;
+}
+
+/**
+ * Validates browser Origin + Fetch Metadata headers on computer-use mutations
+ * at ingress (before any hub relay strips Origin) and on direct routes.
+ * Permits same-origin http/https matching Host, PI_DISH_PUBLIC_ORIGINS, and
+ * non-browser callers (absent Origin + Sec-Fetch-Site); rejects cross-origin,
+ * opaque (`Origin: null`), and browser writes stripped of Origin.
+ */
+export function checkCuMutationOrigin(
+  req: IncomingMessage,
+  publicOrigins: ReadonlySet<string> = new Set(),
+): string | null {
+  const origin = req.headers.origin;
+  const site = req.headers['sec-fetch-site'];
+  if (origin === 'null') return 'Cross-origin computer-use mutations are forbidden';
+  if (site !== undefined && site !== 'same-origin' && site !== 'none') {
+    return 'Cross-origin computer-use mutations are forbidden';
+  }
+  if (site !== undefined && origin === undefined) {
+    return 'Origin header is required for browser computer-use mutations';
+  }
+  if (origin !== undefined) {
+    if (publicOrigins.has(origin)) return null;
+    const host = req.headers.host || '';
+    if (!host) return 'Origin not allowed for computer-use mutations';
+    try {
+      const httpOrigin = new URL(`http://${host}`).origin;
+      const httpsOrigin = new URL(`https://${host}`).origin;
+      if (origin === httpOrigin || origin === httpsOrigin) return null;
+    } catch {
+      return 'Origin not allowed for computer-use mutations';
+    }
+    const hint = site === 'same-origin'
+      ? ` (if pi-dish is served at ${origin}, add that origin to PI_DISH_PUBLIC_ORIGINS)`
+      : '';
+    return `Origin not allowed for computer-use mutations${hint}`;
+  }
+  return null;
+}
+
+export function checkCuMutationIngressRequest(
+  req: TransportRequest,
+  res: TransportResponse,
+  publicOrigins: ReadonlySet<string> = new Set(),
+): boolean {
+  res.setHeader('Cache-Control', 'private, no-store');
+  const originError = checkCuMutationOrigin(req, publicOrigins);
+  if (originError) {
+    res.status(403).json({ error: originError });
+    return false;
+  }
+  if (!req.is('application/json')) {
+    res.status(415).json({ error: 'Expected Content-Type: application/json' });
+    return false;
+  }
+  if (req.headers['content-length'] === '0') {
+    res.status(400).json({ error: 'Expected a JSON object body' });
+    return false;
+  }
+  return true;
 }
 
 function readAuthToken(): string | null {
@@ -139,6 +203,8 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
   function upgradeOriginAllowed(req: IncomingMessage): boolean {
     const origin = req.headers.origin;
     if (!origin) return true;
+    if (origin === 'null') return false;
+    if (publicOrigins.has(origin)) return true;
     const host = req.headers.host || '';
     if (origin === `http://${host}` || origin === `https://${host}`) return true;
     return allowedOrigins().includes(origin);
@@ -205,8 +271,8 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
   const cors: TransportHandler = (req, res, next) => {
     // Never expose unauthenticated agent controls to another browser origin.
     if (!authToken) return next();
-    // Page forms answer pi-dish's own pages only, never an allowed other origin.
-    if (/^\/api\/page-forms(?:\/|$)/i.test(req.path)) return next();
+    // Page forms and computer-use routes answer pi-dish's own pages only, never another origin.
+    if (/^\/api\/(?:page-forms|cu)(?:\/|$)/i.test(req.path) || /^\/hosts\/[^/]+\/api\/cu(?:\/|$)/i.test(req.path)) return next();
     const origin = req.headers.origin;
     if (origin && allowedOrigins().includes(origin)) {
       res.header('Access-Control-Allow-Origin', origin);
@@ -274,6 +340,16 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     const scheme = 'encrypted' in req.socket && req.socket.encrypted ? 'https' : 'http';
     try { return new URL(`${scheme}://${req.headers.host}`).origin === origin; } catch { return false; }
   }
+  const checkCuMutationIngress = (req: TransportRequest, res: TransportResponse): boolean =>
+    checkCuMutationIngressRequest(req, res, publicOrigins);
+  const cuMutationGuard: TransportHandler = (req, res, next) => {
+    if (!checkCuMutationIngress(req, res)) return;
+    if (!isRecord(req.body)) {
+      res.status(400).json({ error: 'Expected a JSON object body' });
+      return;
+    }
+    next();
+  };
 
   function tokenGate(exempt: (req: TransportRequest) => boolean): TransportHandler {
     return (req, res, next) => {
@@ -299,5 +375,5 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (!authToken) { res.json({ ticket: null }); return; }
     res.json(mintTicket(purpose));
   };
-  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, requireBearer, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized, bearerUpgradeAuthorized };
+  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, checkCuMutationIngress, cuMutationGuard, requireBearer, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized, bearerUpgradeAuthorized };
 }

@@ -680,3 +680,6 @@ test/vault-approvals.test.d.ts linguist-generated=true
 test/vault-approvals.test.js linguist-generated=true
 test/vault-cli.test.d.ts linguist-generated=true
 test/vault-cli.test.js linguist-generated=true
+vendor/cua-viewer/audioWorklet.js linguist-generated=true
+vendor/cua-viewer/captureWorklet.js linguist-generated=true
+vendor/cua-viewer/viewer.js linguist-generated=true

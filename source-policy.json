@@ -386,6 +386,18 @@
           {"source": "node_modules/@xterm/xterm/lib/xterm.js", "output": "public/vendor/xterm.js"},
           {"source": "node_modules/@xterm/addon-fit/lib/addon-fit.js", "output": "public/vendor/xterm-addon-fit.js"}
         ]
+      },
+      {
+        "name": "cua-viewer",
+        "strategy": "external",
+        "builder": "vendor/cua-viewer/UPSTREAM.txt",
+        "checkCommand": "sha256sum -c vendor/cua-viewer/UPSTREAM.txt",
+        "consumer": "hub and direct CU viewer routes serve pinned cua-spacesd v0.17.7 HTML5 viewer assets locally instead of relaying guest JS",
+        "entries": [
+          {"source": "trycua/cua@cua-spacesd-v0.17.7:libs/cua/crates/cua-spacesd-html5/assets/audioWorklet.js", "output": "vendor/cua-viewer/audioWorklet.js"},
+          {"source": "trycua/cua@cua-spacesd-v0.17.7:libs/cua/crates/cua-spacesd-html5/assets/captureWorklet.js", "output": "vendor/cua-viewer/captureWorklet.js"},
+          {"source": "trycua/cua@cua-spacesd-v0.17.7:libs/cua/crates/cua-spacesd-html5/assets/viewer.js", "output": "vendor/cua-viewer/viewer.js"}
+        ]
       }
     ],
     "compilerSupportDeclarations": [

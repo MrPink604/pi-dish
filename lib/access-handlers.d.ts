@@ -29,6 +29,8 @@ export interface AccessHandlers {
     cors: TransportHandler;
     pageCommentTransport: TransportHandler;
     sameOriginOnly: TransportHandler;
+    checkCuMutationIngress(req: TransportRequest, res: TransportResponse): boolean;
+    cuMutationGuard: TransportHandler;
     requireBearer: TransportHandler;
     apiGate: TransportHandler;
     hostsGate: TransportHandler;
@@ -44,5 +46,14 @@ export interface AccessHandlers {
  * skipped with a warning rather than widened into something it does not name.
  */
 export declare function parsePublicOrigins(value: string, warn: (message: string) => void): Set<string>;
+/**
+ * Validates browser Origin + Fetch Metadata headers on computer-use mutations
+ * at ingress (before any hub relay strips Origin) and on direct routes.
+ * Permits same-origin http/https matching Host, PI_DISH_PUBLIC_ORIGINS, and
+ * non-browser callers (absent Origin + Sec-Fetch-Site); rejects cross-origin,
+ * opaque (`Origin: null`), and browser writes stripped of Origin.
+ */
+export declare function checkCuMutationOrigin(req: IncomingMessage, publicOrigins?: ReadonlySet<string>): string | null;
+export declare function checkCuMutationIngressRequest(req: TransportRequest, res: TransportResponse, publicOrigins?: ReadonlySet<string>): boolean;
 /** One startup-scoped auth owner; public listeners deliberately do not mount it. */
 export declare function createAccessHandlers(ports: AccessPorts): AccessHandlers;

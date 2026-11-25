@@ -6,8 +6,10 @@ import fs = require('node:fs');
 import http = require('node:http');
 import { httpError } from './http-boundary';
 
-export const DEFAULT_BROKER_TIMEOUT_MS = 10_000;
-export const TAKEOVER_BROKER_TIMEOUT_MS = 20_000;
+// Innermost deadline in the CU call chain:
+// broker (8s) < guest spaces proxy (10s) < hub relay (15s) < browser (25s).
+export const DEFAULT_BROKER_TIMEOUT_MS = 8_000;
+export const TAKEOVER_BROKER_TIMEOUT_MS = 8_000;
 const MAX_BROKER_BODY_BYTES = 2 * 1024 * 1024;
 
 export interface CuBrokerResponse {

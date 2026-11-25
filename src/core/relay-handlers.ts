@@ -5,9 +5,18 @@ import hostIdentity = require('./host-identity');
 import * as remoteHosts from './remote-hosts';
 import type { Remote, ProbeResult } from './remote-hosts';
 import type { ArtifactKind, FleetArtifactRecord, FleetArtifactStore } from './fleet-artifacts';
-import type { HostDescriptor, TransportRequest, TransportResponse, TransportHandler } from './access-handlers';
+import { checkCuMutationIngressRequest, type HostDescriptor, type TransportRequest, type TransportResponse, type TransportHandler } from './access-handlers';
 import { isolateArtifact } from './artifact-isolation';
-import { sanitizeSpacesPath } from './cu-handlers';
+import {
+  ALLOWED_SPACES_REQUEST_HEADERS,
+  classifySpacesHttpRoute,
+  connectionNominatedHeaders,
+  isAllowedSpacesWsPath,
+  sanitizeSpacesPath,
+  serveVendoredCuViewer,
+  validateWebSocketHandshake,
+} from './cu-handlers';
+import { record as isRecord } from './helper-values';
 import { asRecord } from './wire-protocol';
 import { FORM_CLIENT_HEADER, PAGE_FORMS_CAPABILITY, PAGE_FORMS_RELAY_LIMIT, SUBMISSION_ID_RE } from './page-forms';
 
@@ -26,6 +35,75 @@ export function namesPageForms(path: string): boolean {
     decoded = next;
   }
   return /(?:^|\/)page-forms(?:\/|$)/.test(decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase());
+}
+
+/**
+ * Matches any `/hosts/:name/api` suffix that a downstream hop could interpret
+ * as a `/api/cu` route (including percent-encoded, mixed-case, or duplicate-slash
+ * variants) so CU requests never bypass the hub's header allowlist, CSRF guard,
+ * or Spaces route allowlist.
+ */
+export function namesCuRoute(reqPath: string): boolean {
+  let decoded = reqPath;
+  for (let round = 0; round < 3; round++) {
+    let next: string;
+    try { next = decodeURIComponent(decoded); } catch { return true; }
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return /^\/cu(?:\/|$)/.test(decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase());
+}
+
+const HUB_CU_READ_HEADERS: readonly string[] = [
+  'accept',
+  'accept-language',
+  'cache-control',
+  'last-event-id',
+  'user-agent',
+];
+
+const HUB_CU_WS_HEADERS: readonly string[] = [
+  'upgrade',
+  'sec-websocket-key',
+  'sec-websocket-version',
+  'sec-websocket-protocol',
+];
+
+function allowlistHeaders(
+  incoming: IncomingMessage['headers'],
+  allowed: readonly string[],
+  options: { keepUpgradeToken?: boolean } = {},
+): OutgoingHttpHeaders {
+  const nominated = connectionNominatedHeaders(incoming.connection);
+  if (options.keepUpgradeToken) nominated.delete('upgrade');
+  const out: OutgoingHttpHeaders = {};
+  for (const name of allowed) {
+    if (nominated.has(name)) continue;
+    const value = incoming[name];
+    if (value !== undefined) out[name] = value;
+  }
+  return out;
+}
+
+/** Strict hub->guest header allowlist for CU control-plane GET/SSE requests. */
+export function buildHubCuReadHeaders(incoming: IncomingMessage['headers']): OutgoingHttpHeaders {
+  return {
+    ...allowlistHeaders(incoming, HUB_CU_READ_HEADERS),
+    'accept-encoding': 'identity',
+  };
+}
+
+/** Strict hub->guest header allowlist for CU Spaces gRPC-Web POST requests. */
+export function buildHubCuSpacesHttpHeaders(incoming: IncomingMessage['headers']): OutgoingHttpHeaders {
+  return {
+    ...allowlistHeaders(incoming, ALLOWED_SPACES_REQUEST_HEADERS),
+    'accept-encoding': 'identity',
+  };
+}
+
+/** Strict hub->guest header allowlist for CU `/media` WebSocket upgrades. */
+export function buildHubCuWsHeaders(incoming: IncomingMessage['headers']): OutgoingHttpHeaders {
+  return allowlistHeaders(incoming, HUB_CU_WS_HEADERS, { keepUpgradeToken: true });
 }
 
 /**
@@ -69,7 +147,9 @@ export interface RelayPorts {
   publicBaseUrl(): string | undefined;
   hostDescriptor(): HostDescriptor;
   upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+  checkCuMutationIngress?(req: TransportRequest, res: TransportResponse): boolean;
   proxyResponseTimeoutMs?: number;
+  cuProxyResponseTimeoutMs?: number;
 }
 export interface RelayHandlers {
   rawApi: TransportHandler;
@@ -103,6 +183,11 @@ interface BodyLimit { max: number; count(chunk: string): number }
 const PROXY_TERMINAL_PATH_RE = /^\/hosts\/([^/]+)\/api\/sessions\/[^/]+\/terminal$/;
 const PROXY_CU_SPACES_PATH_RE = /^\/hosts\/([^/]+)\/api\/cu\/spaces(\/.*)$/;
 const PROXY_RESPONSE_TIMEOUT_MS = 10_000;
+// Hub CU relay headroom over guest spaces proxy (10s) and broker (8s).
+export const CU_PROXY_RESPONSE_TIMEOUT_MS = 15_000;
+const MAX_CU_MUTATION_BODY_BYTES = 64 * 1024;
+const CU_READ_PATHS = new Set(['/cu/status', '/cu/stream', '/cu/audit']);
+const CU_MUTATION_PATHS = new Set(['/cu/takeover', '/cu/heartbeat', '/cu/release', '/cu/viewer/ticket']);
 const HOSTS_PROBE_DEADLINE_MS = 3000;
 const HOP_BY_HOP_HEADERS: Record<string, true> = {
   connection: true, 'keep-alive': true, 'transfer-encoding': true, te: true,
@@ -236,6 +321,10 @@ function boundedProbe(remote: Remote): Promise<BoundedProbe> {
 export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   const { fleetArtifacts } = ports;
   const proxyResponseTimeoutMs = ports.proxyResponseTimeoutMs ?? PROXY_RESPONSE_TIMEOUT_MS;
+  const cuProxyResponseTimeoutMs = ports.cuProxyResponseTimeoutMs ?? CU_PROXY_RESPONSE_TIMEOUT_MS;
+  const checkCuMutationIngress = ports.checkCuMutationIngress
+    ?? ((req: TransportRequest, res: TransportResponse) => checkCuMutationIngressRequest(req, res));
+
   const rawApi: TransportHandler = (req, res) => {
     const remote = remoteHosts.getRemote(req.params.name);
     // Bare 404: the fleet map is not a discovery surface.
@@ -247,10 +336,147 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     if (namesPageForms(req.path)) {
       return res.status(403).json({ error: 'page forms are answered through /api/page-forms on this host, not the /hosts proxy' });
     }
+    // Computer-use routes use strict header allowlists, ingress CSRF checks,
+    // vendored local viewer assets, and allowlisted Spaces RPC routes.
+    if (namesCuRoute(req.url.split('?')[0]) || namesCuRoute(req.path)) {
+      return handleCuRelay(remote, req, res);
+    }
     proxyToRemote(remote, req, res, fleetArtifactHook(remote, req));
   };
 
-  function proxyToRemote(remote: Remote, req: TransportRequest, res: TransportResponse, hook: ArtifactHook | null = null) {
+  function handleCuRelay(remote: Remote, req: TransportRequest, res: TransportResponse): void {
+    const rawUrl = req.url || '/';
+    const queryAt = rawUrl.indexOf('?');
+    const rawPath = queryAt >= 0 ? rawUrl.slice(0, queryAt) : rawUrl;
+    const search = queryAt >= 0 ? rawUrl.slice(queryAt) : '';
+
+    if (rawPath === '/cu/spaces' || rawPath.startsWith('/cu/spaces/')) {
+      const suffix = rawPath.slice('/cu/spaces'.length) + search;
+      if (!suffix.startsWith('/')) {
+        res.status(404).type('text/plain').send('Not found');
+        return;
+      }
+      const safe = sanitizeSpacesPath(suffix);
+      if (!safe) {
+        res.status(400).type('text/plain').send('Bad request');
+        return;
+      }
+      // Serve pinned vendored cua-spacesd v0.17.7 viewer assets from the hub
+      // directly so guest-supplied HTML/JS never enters the dish origin.
+      if (serveVendoredCuViewer(req, res, safe)) return;
+
+      const routeKind = classifySpacesHttpRoute(safe.pathname);
+      if (!routeKind) {
+        res.status(404).type('text/plain').send('Not found');
+        return;
+      }
+      if (req.method !== 'POST') {
+        res.status(405).type('text/plain').send('Method not allowed');
+        return;
+      }
+      const headers = buildHubCuSpacesHttpHeaders(req.headers);
+      proxyToRemote(remote, req, res, null, {
+        path: `/api/cu/spaces${safe.pathname}${safe.search}`,
+        headers,
+        timeoutMs: cuProxyResponseTimeoutMs,
+      });
+      return;
+    }
+
+    if (CU_READ_PATHS.has(rawPath)) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.status(405).type('text/plain').send('Method not allowed');
+        return;
+      }
+      const headers = buildHubCuReadHeaders(req.headers);
+      proxyToRemote(remote, req, res, null, {
+        path: `/api${rawPath}${search}`,
+        headers,
+        timeoutMs: cuProxyResponseTimeoutMs,
+      });
+      return;
+    }
+
+    if (CU_MUTATION_PATHS.has(rawPath)) {
+      if (req.method !== 'POST') {
+        res.status(405).type('text/plain').send('Method not allowed');
+        return;
+      }
+      // Enforce browser Origin / Fetch Metadata and JSON Content-Type at hub
+      // ingress BEFORE remoteHosts.request strips Origin.
+      if (!checkCuMutationIngress(req, res)) return;
+
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      let done = false;
+      req.on('data', (chunk: Buffer) => {
+        if (done) return;
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_CU_MUTATION_BODY_BYTES) {
+          done = true;
+          res.status(413).json({ error: 'Computer-use request body too large' });
+          req.resume();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on('aborted', () => { done = true; });
+      req.on('error', () => {
+        if (done) return;
+        done = true;
+        if (!res.headersSent) res.status(400).json({ error: 'Invalid request body' });
+      });
+      req.on('end', () => {
+        if (done) return;
+        done = true;
+        const text = Buffer.concat(chunks).toString('utf8').trim();
+        let parsed: unknown;
+        try {
+          parsed = text ? JSON.parse(text) : null;
+        } catch {
+          res.status(400).json({ error: 'Expected a valid JSON object body' });
+          return;
+        }
+        if (!isRecord(parsed)) {
+          res.status(400).json({ error: 'Expected a JSON object body' });
+          return;
+        }
+        const payload = JSON.stringify(parsed);
+        const nominated = connectionNominatedHeaders(req.headers.connection);
+        const headers: OutgoingHttpHeaders = {
+          accept: 'application/json',
+          'accept-encoding': 'identity',
+          'content-type': 'application/json',
+          'content-length': String(Buffer.byteLength(payload)),
+        };
+        if (!nominated.has('user-agent') && req.headers['user-agent'] !== undefined) {
+          headers['user-agent'] = req.headers['user-agent'];
+        }
+        proxyToRemote(remote, req, res, null, {
+          path: `/api${rawPath}${search}`,
+          headers,
+          timeoutMs: cuProxyResponseTimeoutMs,
+          bodyPayload: payload,
+        });
+      });
+      return;
+    }
+
+    res.status(404).type('text/plain').send('Not found');
+  }
+
+  function proxyToRemote(
+    remote: Remote,
+    req: TransportRequest,
+    res: TransportResponse,
+    hook: ArtifactHook | null = null,
+    override: {
+      path?: string;
+      headers?: OutgoingHttpHeaders;
+      timeoutMs?: number;
+      bodyPayload?: string;
+    } = {},
+  ) {
     const unreachable = (reason: unknown) => {
       res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
     };
@@ -260,13 +486,20 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     if (known && !known.reachable) return unreachable(known.error || 'unreachable');
 
     // A hooked response is parsed, not relayed byte for byte, so it must be uncompressed.
-    const headers = hook ? { ...req.headers, 'accept-encoding': 'identity' } : req.headers;
+    const baseHeaders = override.headers ?? req.headers;
+    const headers = hook ? { ...baseHeaders, 'accept-encoding': 'identity' } : baseHeaders;
+    const targetPath = override.path ?? `/api${req.url}`;
+    const timeoutMs = override.timeoutMs ?? proxyResponseTimeoutMs;
     relayFirstResponse(
-      remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers }),
-      proxyResponseTimeoutMs,
+      remoteHosts.request(remote, { method: req.method, path: targetPath, headers }),
+      timeoutMs,
       (upstream) => {
-        req.on('aborted', () => { try { upstream.destroy(); } catch {} });
-        req.pipe(upstream);
+        if (override.bodyPayload !== undefined) {
+          upstream.end(override.bodyPayload);
+        } else {
+          req.on('aborted', () => { try { upstream.destroy(); } catch {} });
+          req.pipe(upstream);
+        }
       },
       (peerRes) => {
           res.status(peerRes.statusCode!);
@@ -771,14 +1004,32 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       socket.destroy();
       return true;
     }
+    let cuUpgradeOverride: { headers: OutgoingHttpHeaders; peerPath: string } | undefined;
     if (cuSpacesMatch) {
       const rawPrefix = `/hosts/${hostName}/api/cu/spaces`;
       const rawUrl = req.url || '';
-      if (!rawUrl.startsWith(`${rawPrefix}/`) || !sanitizeSpacesPath(rawUrl.slice(rawPrefix.length))) {
+      const safe = rawUrl.startsWith(`${rawPrefix}/`) ? sanitizeSpacesPath(rawUrl.slice(rawPrefix.length)) : null;
+      if (!safe) {
         socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
         socket.destroy();
         return true;
       }
+      if (!isAllowedSpacesWsPath(safe.pathname)) {
+        socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+        socket.destroy();
+        return true;
+      }
+      if (!validateWebSocketHandshake(req)) {
+        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+        socket.destroy();
+        return true;
+      }
+      // Allowlist CU WS headers at the hub so browser cookies and Cf-Access-*
+      // identity headers never reach the sandbox; remoteHosts attaches peer bearer.
+      cuUpgradeOverride = {
+        headers: buildHubCuWsHeaders(req.headers),
+        peerPath: `/api/cu/spaces${safe.pathname}${safe.search}`,
+      };
     }
     // This host's gate, applied by hand; the peer's own credential is attached
     // downstream, never the caller's.
@@ -787,15 +1038,23 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       socket.destroy();
       return true;
     }
-    proxyUpgrade(remote, req, socket, head, url);
+    proxyUpgrade(remote, req, socket, head, url, cuUpgradeOverride);
     return true;
   };
 
-  function proxyUpgrade(remote: Remote, req: IncomingMessage, socket: Duplex, head: Buffer, url: URL) {
+  function proxyUpgrade(
+    remote: Remote,
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    url: URL,
+    override?: { headers: OutgoingHttpHeaders; peerPath: string },
+  ) {
     const teardown = () => { try { socket.destroy(); } catch {} };
-    const peerPath = url.pathname.slice(`/hosts/${remote.name}`.length) + url.search;
+    const peerPath = override?.peerPath ?? (url.pathname.slice(`/hosts/${remote.name}`.length) + url.search);
+    const headers = override?.headers ?? req.headers;
 
-    remoteHosts.request(remote, { method: 'GET', path: peerPath, headers: req.headers, upgrade: true })
+    remoteHosts.request(remote, { method: 'GET', path: peerPath, headers, upgrade: true })
       .then((upstream) => {
         upstream.on('error', teardown);
         socket.on('error', teardown);

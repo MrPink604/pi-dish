@@ -1,0 +1,13 @@
+Upstream: https://github.com/trycua/cua
+Tag: cua-spacesd-v0.17.7
+Commit: 2a6170c19d5d019a6b1df2b642e0b2ac8a6c6337
+Source path: libs/cua/crates/cua-spacesd-html5
+License: FSL-1.1-MIT (see LICENSE in this directory)
+
+SHA-256 checksums:
+394023b2176ae770796fee3b43f0eda61c23d0effbe4f6a0cfcae050a72cb70c  LICENSE
+6373b22307c629bbb6811e3baaf046bcdcd0074fb87245a6ef79f5d3f0913228  index.html
+e4753e6ac86c2142a1912b79823c5edb2149dde8a69272d899df2b7713da921b  index.css
+160f5247885089f9ab45a46982394b7ea4385add316a374633d8bbd8f0d9f46b  viewer.js
+427569b615fe24104fcd5ca8a8f71269d24faa9155a0767ef1f0234a23c6befc  audioWorklet.js
+9cdafdbe7bb59622a9d0cdd63bfd4d9e87644c65210a9b7050e80aef2c4062b0  captureWorklet.js

@@ -39,7 +39,7 @@ export { createCuViewer } from './cu-viewer';
 export {
   decodeCuLease, decodeCuStatus, decodeCuTicket, decodeCuTakeover, decodeCuRelease, decodeCuBusyError,
   formatRemainingMs, formatLeaseHolder, formatExpiryRemaining, isOwnHumanLease, cuSeatPresentation,
-  formatBusyMessage, cuSpacesViewerUrl,
+  formatBusyMessage, cuSpacesViewerUrl, supportsComputerUseTransport,
 } from './cu-viewer-data';
 export { decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } from './bounce-data';
 

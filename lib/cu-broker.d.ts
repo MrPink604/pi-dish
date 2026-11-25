@@ -1,7 +1,7 @@
 // Generated from src/core/cu-broker.ts; edit that source and run npm run build:core.
 import http = require('node:http');
-export declare const DEFAULT_BROKER_TIMEOUT_MS = 10000;
-export declare const TAKEOVER_BROKER_TIMEOUT_MS = 20000;
+export declare const DEFAULT_BROKER_TIMEOUT_MS = 8000;
+export declare const TAKEOVER_BROKER_TIMEOUT_MS = 8000;
 export interface CuBrokerResponse {
     status: number;
     body: unknown;

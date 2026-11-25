@@ -55,7 +55,6 @@ export interface CuTakeoverResult {
   readonly leaseId: string;
   readonly leaseToken: string;
   readonly preempted: CuPreemptedInfo | null;
-  readonly driverDetached: boolean;
   readonly heartbeatIntervalSec: number;
   readonly viewer: CuTicketResult | null;
 }
@@ -98,6 +97,21 @@ function str(value: unknown): string | null {
 
 function parseSeatState(value: unknown): CuSeatState {
   return typeof value === 'string' && VALID_STATES.has(value as CuSeatState) ? (value as CuSeatState) : 'idle';
+}
+
+/**
+ * Viewer iframes navigate with the page's own same-origin transport (Cloudflare
+ * Access cookie or trusted LAN) and cannot attach a dish bearer header or
+ * satisfy `frame-ancestors 'self'` across origins. Offer Desktop only for
+ * same-origin hosts (self `""` or `/hosts/<name>` hub relay) without a
+ * client-held bearer token. Never place a bearer token in a URL.
+ */
+export function supportsComputerUseTransport(
+  host: { readonly base?: string | null; readonly token?: string | null } | null | undefined,
+): boolean {
+  if (!host || typeof host.base !== 'string') return false;
+  if (host.token) return false;
+  return host.base === '' || host.base.startsWith('/');
 }
 
 export function decodeCuLease(value: unknown): CuLeaseInfo | null {
@@ -186,7 +200,6 @@ export function decodeCuTakeover(value: unknown): CuTakeoverResult | null {
     leaseId,
     leaseToken,
     preempted: decodePreempted(value.preempted),
-    driverDetached: value.driverDetached === true,
     heartbeatIntervalSec,
     viewer: decodeCuTicket(value.viewer),
   };

@@ -35,7 +35,7 @@ const fixtureGlobals = Object.fromEntries([
 /** @type {import('eslint').Linter.Config[]} */
 module.exports = [
   { linterOptions: { reportUnusedDisableDirectives: 'off' } },
-  { ignores: ['.claude/**', '.agents/**', '.codex/**', 'node_modules/**', 'public/vendor/**', 'dist/**', 'test-results/**', 'playwright-report/**', 'docs/**', 'pd-scratch/**'] },
+  { ignores: ['.claude/**', '.agents/**', '.codex/**', 'node_modules/**', 'public/vendor/**', 'vendor/**', 'dist/**', 'test-results/**', 'playwright-report/**', 'docs/**', 'pd-scratch/**'] },
   {
     files: ['**/*.js', '**/*.cjs', '**/*.mjs'],
     languageOptions: { ecmaVersion: 'latest', sourceType: 'commonjs', globals: globals.node },

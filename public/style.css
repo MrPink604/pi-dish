@@ -7651,16 +7651,6 @@ body.standalone-file-page {
   gap: 8px;
   min-width: 0;
 }
-.cu-detach-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
-}
-.cu-detach-toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
 .cu-viewer-notice {
   display: flex;
   align-items: center;
