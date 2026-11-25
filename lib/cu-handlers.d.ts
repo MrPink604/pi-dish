@@ -58,6 +58,20 @@ export declare function extractCuaBearerTicket(headerValue: string | string[] | 
  * `rcdp.v2.ticket.<ticket>` WebSocket subprotocols (MEDIA.md §2).
  */
 export declare function extractMediaWsTickets(url: URL, protocols: readonly string[]): string[];
+export type ValidatedOpenMediaRequest = {
+    readonly ok: true;
+    readonly displayId: string;
+} | {
+    readonly ok: false;
+    readonly error: string;
+};
+/**
+ * Validates a `StreamService.OpenMedia` gRPC-Web request (`grpc-web+proto` or
+ * `grpc-web-text+proto`) before forwarding to `127.0.0.1:3211`. Fails closed
+ * unless the target is a display target (`MediaTarget.display_id`, never a
+ * window) and `geometry_control` is absent or observe-only (`0` or `1`).
+ */
+export declare function validateOpenMediaRequest(contentType: string | string[] | undefined, contentEncoding: string | string[] | undefined, grpcEncoding: string | string[] | undefined, body: Buffer): ValidatedOpenMediaRequest;
 export type ParsedOpenMediaResponse = {
     readonly kind: 'ok';
     readonly ticket: string;

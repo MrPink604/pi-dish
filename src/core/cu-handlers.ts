@@ -26,6 +26,7 @@ const WATCH_SYNC_WAIT_MS = 1_500;
 const DEFAULT_HUMAN_TTL_SEC = 600;
 const MAX_SSE_ERROR_BYTES = 64 * 1024;
 const MAX_SSE_EVENT_BYTES = 256 * 1024;
+const MAX_OPEN_MEDIA_REQUEST_BYTES = 64 * 1024;
 const MAX_OPEN_MEDIA_RESPONSE_BYTES = 256 * 1024;
 const MAX_TRACKED_TICKETS = 512;
 const DEFAULT_VIEWER_TICKET_TTL_MS = 60 * 60_000;
@@ -485,6 +486,140 @@ function parseOpenMediaProto(buf: Buffer): { ticket: string; expiresAtMs: number
   const resolved = ticket || wsTicket;
   if (!resolved) return null;
   return { ticket: resolved, expiresAtMs };
+}
+
+export type ValidatedOpenMediaRequest =
+  | { readonly ok: true; readonly displayId: string }
+  | { readonly ok: false; readonly error: string };
+
+function parseMediaTargetDisplayOnly(
+  buf: Buffer,
+  state: { hasDisplayId: boolean; displayId: string },
+): boolean {
+  let pos = 0;
+  while (pos < buf.length) {
+    const tag = readProtobufVarint(buf, pos);
+    if (!tag || tag.value === 0n || tag.value > 0xffff_ffffn) return false;
+    pos = tag.next;
+    const field = Number(tag.value >> 3n);
+    const wire = Number(tag.value & 7n);
+    // MediaTarget.target oneof: only field 1 (string display_id, wire 2) is permitted.
+    // Field 2 (WindowRef window) and any other field or wire type fail closed.
+    if (field !== 1 || wire !== 2) return false;
+    const len = readProtobufVarint(buf, pos);
+    if (!len || len.value > BigInt(buf.length - len.next)) return false;
+    const slice = buf.subarray(len.next, len.next + Number(len.value));
+    pos = len.next + Number(len.value);
+    state.hasDisplayId = true;
+    state.displayId = slice.toString('utf8');
+  }
+  return true;
+}
+
+function validateOpenMediaRequestProto(buf: Buffer): ValidatedOpenMediaRequest {
+  let pos = 0;
+  const targetState = { hasDisplayId: false, displayId: '' };
+  while (pos < buf.length) {
+    const tag = readProtobufVarint(buf, pos);
+    if (!tag || tag.value === 0n || tag.value > 0xffff_ffffn) {
+      return { ok: false, error: 'Malformed OpenMediaRequest protobuf' };
+    }
+    pos = tag.next;
+    const field = Number(tag.value >> 3n);
+    const wire = Number(tag.value & 7n);
+    if (field <= 0) return { ok: false, error: 'Malformed OpenMediaRequest protobuf' };
+
+    if (field === 1) {
+      if (wire !== 2) return { ok: false, error: 'Invalid OpenMediaRequest target' };
+      const len = readProtobufVarint(buf, pos);
+      if (!len || len.value > BigInt(buf.length - len.next)) {
+        return { ok: false, error: 'Malformed OpenMediaRequest target' };
+      }
+      const slice = buf.subarray(len.next, len.next + Number(len.value));
+      pos = len.next + Number(len.value);
+      if (!parseMediaTargetDisplayOnly(slice, targetState)) {
+        return { ok: false, error: 'Only display media targets are allowed' };
+      }
+    } else if (field === 7) {
+      // GeometryControl: 0 = UNSPECIFIED (observe-only), 1 = OBSERVE_ONLY.
+      // 2 = BIDIRECTIONAL or any other value fails closed.
+      if (wire !== 0) return { ok: false, error: 'Invalid OpenMediaRequest geometry_control' };
+      const val = readProtobufVarint(buf, pos);
+      if (!val) return { ok: false, error: 'Malformed OpenMediaRequest geometry_control' };
+      pos = val.next;
+      if (val.value !== 0n && val.value !== 1n) {
+        return { ok: false, error: 'Geometry control must be observe-only' };
+      }
+    } else if (wire === 0) {
+      const val = readProtobufVarint(buf, pos);
+      if (!val) return { ok: false, error: 'Malformed OpenMediaRequest protobuf' };
+      pos = val.next;
+    } else if (wire === 1) {
+      if (pos + 8 > buf.length) return { ok: false, error: 'Malformed OpenMediaRequest protobuf' };
+      pos += 8;
+    } else if (wire === 2) {
+      const len = readProtobufVarint(buf, pos);
+      if (!len || len.value > BigInt(buf.length - len.next)) {
+        return { ok: false, error: 'Malformed OpenMediaRequest protobuf' };
+      }
+      pos = len.next + Number(len.value);
+    } else if (wire === 5) {
+      if (pos + 4 > buf.length) return { ok: false, error: 'Malformed OpenMediaRequest protobuf' };
+      pos += 4;
+    } else {
+      return { ok: false, error: 'Unsupported OpenMediaRequest wire type' };
+    }
+  }
+  const displayId = targetState.displayId.trim();
+  if (!targetState.hasDisplayId || !displayId || /[\u0000-\u001f\u007f]/.test(displayId)) {
+    return { ok: false, error: 'OpenMediaRequest requires a display target' };
+  }
+  return { ok: true, displayId };
+}
+
+/**
+ * Validates a `StreamService.OpenMedia` gRPC-Web request (`grpc-web+proto` or
+ * `grpc-web-text+proto`) before forwarding to `127.0.0.1:3211`. Fails closed
+ * unless the target is a display target (`MediaTarget.display_id`, never a
+ * window) and `geometry_control` is absent or observe-only (`0` or `1`).
+ */
+export function validateOpenMediaRequest(
+  contentType: string | string[] | undefined,
+  contentEncoding: string | string[] | undefined,
+  grpcEncoding: string | string[] | undefined,
+  body: Buffer,
+): ValidatedOpenMediaRequest {
+  const rawCe = Array.isArray(contentEncoding) ? contentEncoding.join(',') : contentEncoding;
+  if (typeof rawCe === 'string' && rawCe.trim() !== '' && rawCe.trim().toLowerCase() !== 'identity') {
+    return { ok: false, error: 'Unsupported OpenMedia content encoding' };
+  }
+  const rawGe = Array.isArray(grpcEncoding) ? grpcEncoding.join(',') : grpcEncoding;
+  if (typeof rawGe === 'string' && rawGe.trim() !== '' && rawGe.trim().toLowerCase() !== 'identity') {
+    return { ok: false, error: 'Unsupported OpenMedia gRPC encoding' };
+  }
+  const rawCt = Array.isArray(contentType) ? contentType[0] : contentType;
+  const mime = typeof rawCt === 'string' ? rawCt.split(';')[0].trim().toLowerCase() : '';
+  let frames: Buffer;
+  if (mime === 'application/grpc-web' || mime === 'application/grpc-web+proto') {
+    frames = body;
+  } else if (mime === 'application/grpc-web-text' || mime === 'application/grpc-web-text+proto') {
+    const cleaned = body.toString('latin1').replace(/\s+/g, '');
+    if (!cleaned || cleaned.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleaned)) {
+      return { ok: false, error: 'Malformed grpc-web-text OpenMedia request' };
+    }
+    frames = Buffer.from(cleaned, 'base64');
+  } else {
+    return { ok: false, error: 'Unsupported OpenMedia content type' };
+  }
+
+  if (frames.length < 5) return { ok: false, error: 'Malformed OpenMedia gRPC-Web frame' };
+  const flags = frames[0];
+  if (flags !== 0x00) {
+    return { ok: false, error: 'Compressed or non-data OpenMedia request frame is not allowed' };
+  }
+  const len = frames.readUInt32BE(1);
+  if (5 + len !== frames.length) return { ok: false, error: 'Invalid OpenMedia gRPC-Web frame length' };
+  return validateOpenMediaRequestProto(frames.subarray(5, 5 + len));
 }
 
 export type ParsedOpenMediaResponse =
@@ -1307,6 +1442,152 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     const isOpenMedia = safe.pathname === OPEN_MEDIA_PATH;
     let openMediaBearer: string | null = null;
     let openMediaViewerEntry: TrackedTicket | null = null;
+
+    const forwardToSpaces = (bufferedRequestBody: Buffer | null) => {
+      const upstreamHeaders = buildSpacesRequestHeaders(req.headers, spacesPort);
+      if (bufferedRequestBody !== null) {
+        upstreamHeaders['content-length'] = String(bufferedRequestBody.length);
+      }
+      let activeRes: IncomingMessage | null = null;
+      let finished = false;
+      const cleanupRequest = () => {
+        if (finished) return;
+        finished = true;
+        activeSpacesRequests.delete(abortOnRevoke);
+      };
+      const abortOnRevoke = (reason: string) => {
+        cleanupRequest();
+        try { upstream.destroy(); } catch {}
+        if (activeRes) {
+          try { activeRes.destroy(); } catch {}
+        }
+        if (!res.headersSent) {
+          res.status(403).json({ error: reason, code: 'human_lease_ended' });
+        } else {
+          try { res.destroy(); } catch {}
+        }
+      };
+
+      const upstream = http.request({
+        host: SPACES_HOST,
+        port: spacesPort,
+        method: 'POST',
+        path: `${safe.pathname}${safe.search}`,
+        headers: upstreamHeaders,
+        timeout: SPACES_HTTP_TIMEOUT_MS,
+      }, (upstreamRes) => {
+        if (finished) { upstreamRes.destroy(); return; }
+        activeRes = upstreamRes;
+        if (isOpenMedia && openMediaViewerEntry) {
+          const openMediaEntry = openMediaViewerEntry;
+          const statusCode = upstreamRes.statusCode ?? 502;
+          if (statusCode !== 200) {
+            res.status(statusCode);
+            copySpacesResponseHeaders(upstreamRes, res);
+            upstreamRes.pipe(res);
+            upstreamRes.on('end', cleanupRequest);
+            upstreamRes.on('close', cleanupRequest);
+            upstreamRes.on('error', () => { cleanupRequest(); try { res.end(); } catch {} });
+            res.on('close', () => { cleanupRequest(); try { upstreamRes.destroy(); } catch {} });
+            return;
+          }
+          const chunks: Buffer[] = [];
+          let totalBytes = 0;
+          let overflowed = false;
+          upstreamRes.on('data', (chunk: Buffer) => {
+            if (finished || overflowed) return;
+            totalBytes += chunk.length;
+            if (totalBytes > MAX_OPEN_MEDIA_RESPONSE_BYTES) {
+              overflowed = true;
+              cleanupRequest();
+              if (!res.headersSent) res.status(502).json({ error: 'OpenMedia response exceeded size limit' });
+              try { upstreamRes.destroy(); } catch {}
+              return;
+            }
+            chunks.push(chunk);
+          });
+          upstreamRes.on('error', () => {
+            cleanupRequest();
+            if (!res.headersSent) res.status(502).json({ error: 'OpenMedia upstream error' });
+          });
+          upstreamRes.on('end', () => {
+            if (finished || overflowed) return;
+            cleanupRequest();
+            const body = Buffer.concat(chunks);
+            const parsed = parseOpenMediaResponse(
+              upstreamRes.headers['content-type'],
+              upstreamRes.headers['grpc-status'],
+              body,
+            );
+            if (parsed.kind === 'invalid') {
+              if (!res.headersSent) res.status(502).json({ error: 'Invalid OpenMedia response from spacesd' });
+              return;
+            }
+            if (parsed.kind === 'ok') {
+              const recheck = authorizeTrackedCredential(viewerTickets, openMediaBearer, {
+                requireInteractive: openMediaEntry.mode === 'interactive',
+              });
+              if (!recheck.ok || recheck.entry.epoch !== openMediaEntry.epoch) {
+                if (!res.headersSent) {
+                  const status = !recheck.ok ? recheck.status : 403;
+                  const code = !recheck.ok ? recheck.code : 'human_lease_ended';
+                  const error = !recheck.ok ? recheck.error : 'Interactive viewer lease has ended';
+                  res.status(status).json({ error, code });
+                }
+                return;
+              }
+              recordTicket(mediaTickets, parsed.ticket, {
+                mode: openMediaEntry.mode,
+                epoch: openMediaEntry.epoch,
+                expiresAtMs: computeMediaExpiryMs(parsed.expiresAtMs),
+              });
+            }
+            if (res.headersSent) return;
+            res.status(200);
+            copySpacesResponseHeaders(upstreamRes, res);
+            res.setHeader('Content-Length', String(body.length));
+            res.end(body);
+          });
+          res.on('close', () => { cleanupRequest(); try { upstreamRes.destroy(); } catch {} });
+          return;
+        }
+
+        res.status(upstreamRes.statusCode ?? 502);
+        copySpacesResponseHeaders(upstreamRes, res);
+        upstreamRes.pipe(res);
+        upstreamRes.on('end', cleanupRequest);
+        upstreamRes.on('close', cleanupRequest);
+        upstreamRes.on('error', () => {
+          cleanupRequest();
+          try { res.end(); } catch {}
+        });
+        res.on('close', () => {
+          cleanupRequest();
+          try { upstreamRes.destroy(); } catch {}
+        });
+      });
+
+      activeSpacesRequests.add(abortOnRevoke);
+
+      upstream.on('timeout', () => {
+        cleanupRequest();
+        try { upstream.destroy(); } catch {}
+        if (!res.headersSent) res.status(504).json({ error: 'Upstream timeout' });
+      });
+      upstream.on('error', () => {
+        cleanupRequest();
+        if (!res.headersSent) res.status(502).json({ error: 'Computer-use viewer upstream unavailable' });
+      });
+      req.on('aborted', () => {
+        cleanupRequest();
+        try { upstream.destroy(); } catch {}
+      });
+      res.on('close', cleanupRequest);
+
+      if (bufferedRequestBody !== null) upstream.end(bufferedRequestBody);
+      else req.pipe(upstream);
+    };
+
     if (isOpenMedia) {
       openMediaBearer = extractCuaBearerTicket(req.headers['x-cua-env-authorization']);
       const authz = authorizeTrackedCredential(viewerTickets, openMediaBearer);
@@ -1315,145 +1596,77 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         return;
       }
       openMediaViewerEntry = authz.entry;
-    }
 
-    const upstreamHeaders = buildSpacesRequestHeaders(req.headers, spacesPort);
-    let activeRes: IncomingMessage | null = null;
-    let finished = false;
-    const cleanupRequest = () => {
-      if (finished) return;
-      finished = true;
-      activeSpacesRequests.delete(abortOnRevoke);
-    };
-    const abortOnRevoke = (reason: string) => {
-      cleanupRequest();
-      try { upstream.destroy(); } catch {}
-      if (activeRes) {
-        try { activeRes.destroy(); } catch {}
-      }
-      if (!res.headersSent) {
-        res.status(403).json({ error: reason, code: 'human_lease_ended' });
-      } else {
-        try { res.destroy(); } catch {}
-      }
-    };
+      const reqChunks: Buffer[] = [];
+      let reqBytes = 0;
+      let reqDone = false;
+      const cleanupRead = () => {
+        if (reqDone) return;
+        reqDone = true;
+        activeSpacesRequests.delete(abortRead);
+      };
+      const abortRead = (reason: string) => {
+        cleanupRead();
+        if (!res.headersSent) res.status(403).json({ error: reason, code: 'human_lease_ended' });
+        req.resume();
+      };
+      activeSpacesRequests.add(abortRead);
 
-    const upstream = http.request({
-      host: SPACES_HOST,
-      port: spacesPort,
-      method: 'POST',
-      path: `${safe.pathname}${safe.search}`,
-      headers: upstreamHeaders,
-      timeout: SPACES_HTTP_TIMEOUT_MS,
-    }, (upstreamRes) => {
-      if (finished) { upstreamRes.destroy(); return; }
-      activeRes = upstreamRes;
-      if (isOpenMedia && openMediaViewerEntry) {
-        const statusCode = upstreamRes.statusCode ?? 502;
-        if (statusCode !== 200) {
-          res.status(statusCode);
-          copySpacesResponseHeaders(upstreamRes, res);
-          upstreamRes.pipe(res);
-          upstreamRes.on('end', cleanupRequest);
-          upstreamRes.on('close', cleanupRequest);
-          upstreamRes.on('error', () => { cleanupRequest(); try { res.end(); } catch {} });
-          res.on('close', () => { cleanupRequest(); try { upstreamRes.destroy(); } catch {} });
+      req.on('data', (chunk: Buffer) => {
+        if (reqDone) return;
+        reqBytes += chunk.length;
+        if (reqBytes > MAX_OPEN_MEDIA_REQUEST_BYTES) {
+          cleanupRead();
+          if (!res.headersSent) {
+            res.status(403).json({ error: 'OpenMedia request exceeded size limit', code: 'open_media_forbidden' });
+          }
+          req.resume();
           return;
         }
-        const chunks: Buffer[] = [];
-        let totalBytes = 0;
-        let overflowed = false;
-        upstreamRes.on('data', (chunk: Buffer) => {
-          if (finished || overflowed) return;
-          totalBytes += chunk.length;
-          if (totalBytes > MAX_OPEN_MEDIA_RESPONSE_BYTES) {
-            overflowed = true;
-            cleanupRequest();
-            if (!res.headersSent) res.status(502).json({ error: 'OpenMedia response exceeded size limit' });
-            try { upstreamRes.destroy(); } catch {}
-            return;
-          }
-          chunks.push(chunk);
-        });
-        upstreamRes.on('error', () => {
-          cleanupRequest();
-          if (!res.headersSent) res.status(502).json({ error: 'OpenMedia upstream error' });
-        });
-        upstreamRes.on('end', () => {
-          if (finished || overflowed) return;
-          cleanupRequest();
-          const body = Buffer.concat(chunks);
-          const parsed = parseOpenMediaResponse(
-            upstreamRes.headers['content-type'],
-            upstreamRes.headers['grpc-status'],
-            body,
-          );
-          if (parsed.kind === 'invalid') {
-            if (!res.headersSent) res.status(502).json({ error: 'Invalid OpenMedia response from spacesd' });
-            return;
-          }
-          if (parsed.kind === 'ok') {
-            const recheck = authorizeTrackedCredential(viewerTickets, openMediaBearer, {
-              requireInteractive: openMediaViewerEntry.mode === 'interactive',
-            });
-            if (!recheck.ok || recheck.entry.epoch !== openMediaViewerEntry.epoch) {
-              if (!res.headersSent) {
-                const status = !recheck.ok ? recheck.status : 403;
-                const code = !recheck.ok ? recheck.code : 'human_lease_ended';
-                const error = !recheck.ok ? recheck.error : 'Interactive viewer lease has ended';
-                res.status(status).json({ error, code });
-              }
-              return;
-            }
-            recordTicket(mediaTickets, parsed.ticket, {
-              mode: openMediaViewerEntry.mode,
-              epoch: openMediaViewerEntry.epoch,
-              expiresAtMs: computeMediaExpiryMs(parsed.expiresAtMs),
-            });
-          }
-          if (res.headersSent) return;
-          res.status(200);
-          copySpacesResponseHeaders(upstreamRes, res);
-          res.setHeader('Content-Length', String(body.length));
-          res.end(body);
-        });
-        res.on('close', () => { cleanupRequest(); try { upstreamRes.destroy(); } catch {} });
-        return;
-      }
-
-      res.status(upstreamRes.statusCode ?? 502);
-      copySpacesResponseHeaders(upstreamRes, res);
-      upstreamRes.pipe(res);
-      upstreamRes.on('end', cleanupRequest);
-      upstreamRes.on('close', cleanupRequest);
-      upstreamRes.on('error', () => {
-        cleanupRequest();
-        try { res.end(); } catch {}
+        reqChunks.push(chunk);
       });
-      res.on('close', () => {
-        cleanupRequest();
-        try { upstreamRes.destroy(); } catch {}
+      req.on('aborted', cleanupRead);
+      req.on('error', () => {
+        if (reqDone) return;
+        cleanupRead();
+        if (!res.headersSent) {
+          res.status(403).json({ error: 'Invalid OpenMedia request stream', code: 'open_media_forbidden' });
+        }
       });
-    });
+      req.on('end', () => {
+        if (reqDone) return;
+        cleanupRead();
+        const recheck = authorizeTrackedCredential(viewerTickets, openMediaBearer, {
+          requireInteractive: openMediaViewerEntry!.mode === 'interactive',
+        });
+        if (!recheck.ok || recheck.entry.epoch !== openMediaViewerEntry!.epoch) {
+          if (!res.headersSent) {
+            const status = !recheck.ok ? recheck.status : 403;
+            const code = !recheck.ok ? recheck.code : 'human_lease_ended';
+            const error = !recheck.ok ? recheck.error : 'Interactive viewer lease has ended';
+            res.status(status).json({ error, code });
+          }
+          return;
+        }
+        const reqBody = Buffer.concat(reqChunks);
+        const validated = validateOpenMediaRequest(
+          req.headers['content-type'],
+          req.headers['content-encoding'],
+          req.headers['grpc-encoding'],
+          reqBody,
+        );
+        if (!validated.ok) {
+          if (!res.headersSent) {
+            res.status(403).json({ error: validated.error, code: 'open_media_forbidden' });
+          }
+          return;
+        }
+        forwardToSpaces(reqBody);
+      });
+      return;
+    }
 
-    activeSpacesRequests.add(abortOnRevoke);
-
-    upstream.on('timeout', () => {
-      cleanupRequest();
-      try { upstream.destroy(); } catch {}
-      if (!res.headersSent) res.status(504).json({ error: 'Upstream timeout' });
-    });
-    upstream.on('error', () => {
-      cleanupRequest();
-      if (!res.headersSent) res.status(502).json({ error: 'Computer-use viewer upstream unavailable' });
-    });
-    req.on('aborted', () => {
-      cleanupRequest();
-      try { upstream.destroy(); } catch {}
-    });
-    res.on('close', cleanupRequest);
-
-    req.pipe(upstream);
+    forwardToSpaces(null);
   };
 
   /**

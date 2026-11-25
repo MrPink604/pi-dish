@@ -1,6 +1,9 @@
 // Generated test/tool from test/browser/cu-viewer.spec.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const fs = require("node:fs");
+const path = require("node:path");
+const cu_handlers_1 = require("../../lib/cu-handlers");
 const fixtures_js_1 = require("./fixtures.js");
 const PHONE_VIEWPORT = { width: 390, height: 844 };
 const FAKE_VIEWER_HTML = `<!doctype html><html><body style="margin:0;background:#00212b;color:#dbe5e6;font-family:monospace;padding:12px">
@@ -540,6 +543,61 @@ fixtures_js_1.test.describe('computer-use desktop viewer at phone width (390x844
         await (0, fixtures_js_1.expect)(page.locator('#cuHandBackBtn')).toBeVisible();
         await (0, fixtures_js_1.expect)(page.locator('#cuTakeoverBtn')).toBeHidden();
         await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveAttribute('src', '/api/cu/spaces/viewer/#ticket=interactive-epoch-5');
+    });
+    (0, fixtures_js_1.test)('vendored viewer.js emits a real OpenMediaRequest accepted by display-only observe-only validation', async ({ page, fleet }) => {
+        await page.setViewportSize(PHONE_VIEWPORT);
+        const vendorDir = path.resolve(__dirname, '..', '..', 'vendor', 'cua-viewer');
+        const indexHtml = (0, cu_handlers_1.injectFetchCredsScript)(fs.readFileSync(path.join(vendorDir, 'index.html'), 'utf8'));
+        const viewerJs = fs.readFileSync(path.join(vendorDir, 'viewer.js'), 'utf8');
+        const indexCss = fs.readFileSync(path.join(vendorDir, 'index.css'), 'utf8');
+        const grpcFrame = (payload) => {
+            const hdr = Buffer.alloc(5);
+            hdr[0] = 0x00;
+            hdr.writeUInt32BE(payload.length, 1);
+            const trailer = Buffer.from('grpc-status: 0\r\n', 'ascii');
+            const tHdr = Buffer.alloc(5);
+            tHdr[0] = 0x80;
+            tHdr.writeUInt32BE(trailer.length, 1);
+            return Buffer.concat([hdr, payload, tHdr, trailer]);
+        };
+        // ListTargetsResponse { targets: [ StreamTarget { display: Display { id: "xvfb-0", primary: true }, available: true } ] }
+        const displayMsg = Buffer.concat([Buffer.from([0x0a, 6]), Buffer.from('xvfb-0', 'utf8'), Buffer.from([0x18, 0x01])]);
+        const streamTargetMsg = Buffer.concat([Buffer.from([0x0a, displayMsg.length]), displayMsg, Buffer.from([0x18, 0x01])]);
+        const listTargetsBody = grpcFrame(Buffer.concat([Buffer.from([0x0a, streamTargetMsg.length]), streamTargetMsg]));
+        let capturedOpenMedia = null;
+        let resolveOpenMedia;
+        const openMediaSeen = new Promise(resolve => { resolveOpenMedia = resolve; });
+        const base = `${fleet.self.base}/hosts/cu-sandbox/api/cu/spaces`;
+        await page.route(`${base}/viewer/`, route => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: indexHtml }));
+        await page.route(`${base}/viewer/index.css`, route => route.fulfill({ status: 200, contentType: 'text/css; charset=utf-8', body: indexCss }));
+        await page.route(`${base}/viewer/viewer.js`, route => route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: viewerJs }));
+        await page.route(`${base}/viewer/cu-fetch-creds.js`, route => route.fulfill({ status: 200, contentType: 'application/javascript; charset=utf-8', body: '' }));
+        await page.route(`${base}/cua.env.v1.SystemService/GetCapabilities`, route => route.fulfill({
+            status: 200,
+            contentType: 'application/grpc-web+proto',
+            body: grpcFrame(Buffer.alloc(0)),
+        }));
+        await page.route(`${base}/cua.env.v1.StreamService/ListTargets`, route => route.fulfill({
+            status: 200,
+            contentType: 'application/grpc-web+proto',
+            body: listTargetsBody,
+        }));
+        await page.route(`${base}/cua.env.v1.StreamService/OpenMedia`, async (route) => {
+            const headers = route.request().headers();
+            capturedOpenMedia = {
+                contentType: headers['content-type'],
+                contentEncoding: headers['content-encoding'],
+                grpcEncoding: headers['grpc-encoding'],
+                body: route.request().postDataBuffer() ?? Buffer.alloc(0),
+            };
+            resolveOpenMedia();
+            await route.fulfill({ status: 200, contentType: 'application/grpc-web+proto', headers: { 'grpc-status': '1' }, body: Buffer.alloc(0) });
+        });
+        await page.goto(`${base}/viewer/#ticket=real-viewer-check`);
+        await openMediaSeen;
+        (0, fixtures_js_1.expect)(capturedOpenMedia).not.toBeNull();
+        const verdict = (0, cu_handlers_1.validateOpenMediaRequest)(capturedOpenMedia.contentType, capturedOpenMedia.contentEncoding, capturedOpenMedia.grpcEncoding, capturedOpenMedia.body);
+        (0, fixtures_js_1.expect)(verdict).toEqual({ ok: true, displayId: 'xvfb-0' });
     });
 });
 fixtures_js_1.test.describe('HTML/JS version skew safety', () => {

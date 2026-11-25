@@ -386,6 +386,56 @@ function encodeOpenMediaResponse(opts) {
     const combined = Buffer.concat(frames);
     return opts.textBase64 ? Buffer.from(combined.toString('base64'), 'ascii') : combined;
 }
+function encodeProtoFieldVarint(field, value) {
+    return Buffer.concat([encodeProtoVarint((field << 3) | 0), encodeProtoVarint(value)]);
+}
+function encodeOpenMediaRequest(opts) {
+    const parts = [];
+    if (opts.displayId !== undefined || opts.windowId !== undefined) {
+        const targetParts = [];
+        if (opts.displayId !== undefined)
+            targetParts.push(encodeProtoFieldString(1, opts.displayId));
+        if (opts.windowId !== undefined) {
+            const windowRef = encodeProtoFieldString(1, `win-${opts.windowId}`);
+            targetParts.push(encodeProtoFieldBytes(2, windowRef));
+        }
+        parts.push(encodeProtoFieldBytes(1, Buffer.concat(targetParts)));
+    }
+    if (opts.secondTargetWindowId !== undefined) {
+        const windowRef = encodeProtoFieldString(1, `win-${opts.secondTargetWindowId}`);
+        parts.push(encodeProtoFieldBytes(1, encodeProtoFieldBytes(2, windowRef)));
+    }
+    if (opts.codecs && opts.codecs.length > 0) {
+        parts.push(encodeProtoFieldBytes(2, Buffer.concat(opts.codecs.map(c => encodeProtoVarint(c)))));
+    }
+    if (opts.maxFps !== undefined)
+        parts.push(encodeProtoFieldVarint(3, opts.maxFps));
+    if (opts.maxDimension !== undefined)
+        parts.push(encodeProtoFieldVarint(4, opts.maxDimension));
+    if (opts.policy !== undefined)
+        parts.push(encodeProtoFieldVarint(6, opts.policy));
+    if (opts.geometryControl !== undefined)
+        parts.push(encodeProtoFieldVarint(7, opts.geometryControl));
+    if (opts.ticketTtlSec !== undefined) {
+        parts.push(encodeProtoFieldBytes(8, encodeProtoFieldVarint(1, opts.ticketTtlSec)));
+    }
+    if (opts.audioEnabled) {
+        const enc = Buffer.concat([encodeProtoFieldBytes(1, encodeProtoVarint(1)), encodeProtoFieldVarint(7, 20)]);
+        const audio = Buffer.concat([encodeProtoFieldVarint(1, 1), encodeProtoFieldBytes(3, enc)]);
+        parts.push(encodeProtoFieldBytes(10, audio));
+    }
+    const frame = encodeGrpcWebFrame(opts.compressed ? 0x01 : 0x00, Buffer.concat(parts));
+    return opts.textBase64 ? Buffer.from(frame.toString('base64'), 'ascii') : frame;
+}
+const VALID_DISPLAY_OPEN_MEDIA_BODY = encodeOpenMediaRequest({
+    displayId: 'primary',
+    codecs: [1, 3],
+    maxFps: 60,
+    maxDimension: 1280,
+    policy: 1,
+    ticketTtlSec: 600,
+    audioEnabled: true,
+});
 async function mintMediaViaOpenMedia(base, viewerTicket, extraHeaders = {}) {
     const res = await fetch(`${base}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
         method: 'POST',
@@ -394,7 +444,7 @@ async function mintMediaViaOpenMedia(base, viewerTicket, extraHeaders = {}) {
             'x-cua-env-authorization': `Bearer ${viewerTicket}`,
             ...extraHeaders,
         },
-        body: Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]),
+        body: VALID_DISPLAY_OPEN_MEDIA_BODY,
     });
     assert.equal(res.status, 200, `OpenMedia should succeed (got ${res.status})`);
     const body = Buffer.from(await res.arrayBuffer());
@@ -1886,4 +1936,109 @@ test('delayed stale release reply from an older epoch does not revoke a newer hu
         body: Buffer.from([1, 2]),
     });
     assert.equal(clip2.status, 200, 'newer epoch interactive clipboard must remain allowed after stale release reply');
+});
+test('OpenMedia request gate enforces display-only targets and observe-only geometry before dialing spacesd', async (t) => {
+    // Confirm vendored viewer.js constructs display-only OpenMedia requests with no geometryControl.
+    const viewerSrc = fs.readFileSync(path.resolve(__dirname, '..', 'vendor', 'cua-viewer', 'viewer.js'), 'utf8');
+    const reqIdx = viewerSrc.indexOf('request(e){const n=this.api.endpoint.params');
+    assert.ok(reqIdx > 0, 'vendored viewer.js request() method must exist');
+    const reqSnippet = viewerSrc.slice(reqIdx, reqIdx + 600);
+    assert.match(reqSnippet, /target:\{target:\{case:"displayId",value:this\.displayId\}\}/);
+    assert.doesNotMatch(reqSnippet, /geometryControl|window/i);
+    // Unit checks for validateOpenMediaRequest (binary + grpc-web-text).
+    assert.deepEqual((0, cu_handlers_1.validateOpenMediaRequest)('application/grpc-web+proto', undefined, undefined, VALID_DISPLAY_OPEN_MEDIA_BODY), { ok: true, displayId: 'primary' });
+    assert.deepEqual((0, cu_handlers_1.validateOpenMediaRequest)('application/grpc-web-text+proto', undefined, undefined, encodeOpenMediaRequest({ displayId: 'display-1', geometryControl: 1, textBase64: true })), { ok: true, displayId: 'display-1' });
+    assert.deepEqual((0, cu_handlers_1.validateOpenMediaRequest)('application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ displayId: 'primary', geometryControl: 0 })), { ok: true, displayId: 'primary' });
+    // Refused cases: window target, submessage merge to window, bidirectional/unknown geometry, malformed/compressed/wrong encodings.
+    const invalidCases = [
+        ['window target (binary)', 'application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ windowId: 42 })],
+        ['window target (grpc-web-text)', 'application/grpc-web-text+proto', undefined, undefined, encodeOpenMediaRequest({ windowId: 42, textBase64: true })],
+        ['window target with bidirectional geometry', 'application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ windowId: 42, geometryControl: 2 })],
+        ['merged target adding window after display', 'application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ displayId: 'primary', secondTargetWindowId: 42 })],
+        ['display target with bidirectional geometry (binary)', 'application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ displayId: 'primary', geometryControl: 2 })],
+        ['display target with bidirectional geometry (text)', 'application/grpc-web-text+proto', undefined, undefined, encodeOpenMediaRequest({ displayId: 'primary', geometryControl: 2, textBase64: true })],
+        ['display target with unknown geometry enum', 'application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ displayId: 'primary', geometryControl: 99 })],
+        ['missing target', 'application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ maxFps: 30 })],
+        ['empty display_id', 'application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ displayId: '   ' })],
+        ['compressed frame flag 0x01', 'application/grpc-web+proto', undefined, undefined, encodeOpenMediaRequest({ displayId: 'primary', compressed: true })],
+        ['truncated gRPC-Web frame', 'application/grpc-web+proto', undefined, undefined, Buffer.from([0x00, 0x00, 0x00, 0x00, 0x08, 0x01, 0x02])],
+        ['trailing bytes after frame', 'application/grpc-web+proto', undefined, undefined, Buffer.concat([VALID_DISPLAY_OPEN_MEDIA_BODY, Buffer.from([0x00])])],
+        ['truncated protobuf varint', 'application/grpc-web+proto', undefined, undefined, encodeGrpcWebFrame(0x00, Buffer.from([0x0a, 0x80]))],
+        ['bad grpc-web-text base64', 'application/grpc-web-text+proto', undefined, undefined, Buffer.from('not!base64', 'utf8')],
+        ['non-ASCII high-bit bytes in grpc-web-text', 'application/grpc-web-text+proto', undefined, undefined, Buffer.from([0xc1, 0xc1, 0xc1, 0xc1])],
+        ['unsupported content-type', 'application/json', undefined, undefined, Buffer.from('{}')],
+        ['unsupported content-encoding', 'application/grpc-web+proto', 'gzip', undefined, VALID_DISPLAY_OPEN_MEDIA_BODY],
+        ['unsupported grpc-encoding', 'application/grpc-web+proto', undefined, 'gzip', VALID_DISPLAY_OPEN_MEDIA_BODY],
+    ];
+    for (const [label, ct, ce, ge, body] of invalidCases) {
+        assert.equal((0, cu_handlers_1.validateOpenMediaRequest)(ct, ce, ge, body).ok, false, `must reject: ${label}`);
+    }
+    // End-to-end guest proxy check: rejected OpenMedia requests return 403 and NEVER dial spacesd,
+    // for BOTH view-only and interactive viewer tickets.
+    const { socketPath } = await startFakeBroker(t);
+    const spaces = await startFakeSpaces(t);
+    const access = (0, access_handlers_1.createAccessHandlers)({
+        version: '1.0.0',
+        readDishSettings: () => ({}),
+        sttAvailable: () => false,
+        usageLimitsAvailable: () => false,
+        botsAvailable: () => false,
+        knowledgeAvailable: () => false,
+    });
+    const cu = (0, cu_handlers_1.createCuHandlers)({
+        upgradeAuthorized: () => true,
+        socketPath: () => socketPath,
+        spacesPort: spaces.port,
+        wsPingIntervalMs: 0,
+    });
+    t.after(() => cu.stop());
+    const app = express();
+    app.use('/api/cu/spaces', cu.spacesProxy);
+    app.use(access.jsonBody);
+    app.post('/api/cu/takeover', access.cuMutationGuard, cu.takeover);
+    app.post('/api/cu/viewer/ticket', access.cuMutationGuard, cu.viewerTicket);
+    const port = await listenTcp(t, http.createServer(app));
+    const base = `http://127.0.0.1:${port}`;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const viewTicket = (0, test_types_js_1.record)(await (await fetch(`${base}/api/cu/viewer/ticket`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'view-only' }),
+    })).json()).ticket;
+    const interactiveTicket = (0, test_types_js_1.record)((0, test_types_js_1.record)(await (await fetch(`${base}/api/cu/takeover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'display-only-test' }),
+    })).json()).viewer).ticket;
+    const spacesRequestsBefore = spaces.requests.length;
+    for (const [modeLabel, ticket] of [['view-only', viewTicket], ['interactive', interactiveTicket]]) {
+        for (const [caseLabel, ct, body] of [
+            ['window target', 'application/grpc-web+proto', encodeOpenMediaRequest({ windowId: 7, geometryControl: 2 })],
+            ['window target (text)', 'application/grpc-web-text+proto', encodeOpenMediaRequest({ windowId: 7, textBase64: true })],
+            ['non-observe geometry', 'application/grpc-web+proto', encodeOpenMediaRequest({ displayId: 'primary', geometryControl: 2 })],
+            ['malformed protobuf', 'application/grpc-web+proto', Buffer.from([0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xff])],
+        ]) {
+            const res = await fetch(`${base}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
+                method: 'POST',
+                headers: { 'content-type': ct, 'x-cua-env-authorization': `Bearer ${ticket}` },
+                body,
+            });
+            assert.equal(res.status, 403, `${modeLabel} ${caseLabel} must return 403`);
+        }
+    }
+    assert.equal(spaces.requests.length, spacesRequestsBefore, 'refused OpenMedia requests must NEVER reach spacesd');
+    // Valid display-only + observe-only/absent-geometry requests succeed for both ticket modes (binary & text).
+    const okBin = await fetch(`${base}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/grpc-web+proto', 'x-cua-env-authorization': `Bearer ${viewTicket}` },
+        body: VALID_DISPLAY_OPEN_MEDIA_BODY,
+    });
+    assert.equal(okBin.status, 200);
+    const okText = await fetch(`${base}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/grpc-web-text+proto', 'x-cua-env-authorization': `Bearer ${interactiveTicket}` },
+        body: encodeOpenMediaRequest({ displayId: 'primary', geometryControl: 1, policy: 3, textBase64: true }),
+    });
+    assert.equal(okText.status, 200);
+    assert.equal(spaces.requests.length, spacesRequestsBefore + 2);
 });
