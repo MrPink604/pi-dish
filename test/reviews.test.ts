@@ -7,7 +7,7 @@
 import test = require('node:test');
 import assert = require('node:assert/strict');
 import type { ChildProcess } from 'node:child_process';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import crypto = require('node:crypto');
 import { EventEmitter } from 'node:events';
 import fs = require('node:fs');
@@ -223,6 +223,25 @@ test('reject reason validation, reviewResult and fallback messages for rejected 
   assert.equal(dismissedClient.resolution?.outcome, 'dismissed');
 });
 
+// Pinned verbatim copy of the f87452d store reader (`isRecordShape` + `readFile` in src/core/reviews.ts)
+// so rollback compatibility is verified without git history (CI runs depth-1 checkouts).
+function readReviewsF87452d(file: string): { sessionId: string; reviews: Record<string, unknown>[] } {
+  const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+  const data: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!isObj(data) || typeof data.sessionId !== 'string' || !Array.isArray(data.reviews)) {
+    throw new Error(`${file} is malformed`);
+  }
+  const sessionId = data.sessionId;
+  const isLegacyRecordShape = (value: unknown): value is Record<string, unknown> =>
+    isObj(value) && typeof value.id === 'string' && reviews.REVIEW_ID_RE.test(value.id) && value.sessionId === sessionId
+      && typeof value.createdAt === 'number' && isObj(value.spec) && Array.isArray(value.media) && Array.isArray(value.assets)
+      && (value.status === 'open' || value.status === 'submitted' || value.status === 'cancelled')
+      && (value.submission === null || (isObj(value.submission) && typeof value.submission.id === 'string' && isObj(value.submission.delivery)))
+      && (value.status === 'submitted') === (value.submission !== null);
+  if (!data.reviews.every(isLegacyRecordShape)) throw new Error(`${file} holds a malformed review`);
+  return { sessionId, reviews: data.reviews as Record<string, unknown>[] };
+}
+
 test('on-disk store remains readable by the f87452d rollback reader alongside open siblings', () => {
   const prevHome = process.env.HOME;
   const rollbackHome = createTestTempDir('pi-dish-reviews-rollback-');
@@ -255,19 +274,8 @@ test('on-disk store remains readable by the f87452d rollback reader alongside op
     assert.equal(rawList[2].status, 'cancelled');
     assert.equal(record(rawList[2].resolution).outcome, 'rejected');
 
-    // Load the actual f87452d reader from git history and verify every record in the file loads cleanly.
-    const oldSource = execFileSync('git', ['show', 'f87452d:lib/reviews.js'], {
-      cwd: path.join(__dirname, '..'), encoding: 'utf8',
-    });
-    const oldModule: { exports: Record<string, unknown> } = { exports: {} };
-    const libDir = path.join(__dirname, '..', 'lib');
-    const oldRequire = (id: string) => id.startsWith('.') ? require(path.resolve(libDir, id)) : require(id);
-    const loader = new Function('exports', 'require', 'module', '__filename', '__dirname', oldSource) as (
-      exports: Record<string, unknown>, req: (id: string) => unknown, mod: { exports: Record<string, unknown> }, filename: string, dirname: string,
-    ) => void;
-    loader(oldModule.exports, oldRequire, oldModule, path.join(libDir, 'reviews.js'), libDir);
-    const oldReadReviews = oldModule.exports.readReviews as (sid: string) => Record<string, unknown>[];
-    const oldLoaded = oldReadReviews(SESSION_ID);
+    // Verify the pinned f87452d reader loads all records (open + dismissed + rejected siblings).
+    const oldLoaded = readReviewsF87452d(storeFile).reviews;
     assert.equal(oldLoaded.length, 3);
     assert.equal(oldLoaded[0].id, openRec.id);
     assert.equal(oldLoaded[0].status, 'open');
@@ -284,6 +292,10 @@ test('on-disk store remains readable by the f87452d rollback reader alongside op
       [rejectedRec.id, 'rejected'],
     ]);
     assert.equal(newLoaded[2].resolution?.reason, 'Rollback check');
+
+    // Forward compatibility: a store written in pure f87452d shape (no `resolution` key) loads cleanly.
+    fs.writeFileSync(storeFile, JSON.stringify({ sessionId: SESSION_ID, reviews: [openRec] }) + '\n');
+    assert.deepEqual(reviews.readReviews(SESSION_ID).map(item => [item.id, item.status]), [[openRec.id, 'open']]);
   } finally {
     process.env.HOME = prevHome;
   }
@@ -1397,19 +1409,57 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
     hungWait6.finishWrite();
     assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id6)?.resolution?.delivery.via, 'message');
 
-    // 7. Non-object bodies (null, array, primitives) return 400 before changing state.
-    const c7 = mockRes();
-    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Bad body unit', wait: false } }), c7.res, () => {});
-    const id7 = String(record(JSON.parse(c7.body()).review).id);
+    // 7. Two waiters: independent write deadlines — one finishing never leaves another hung, and staggered deadlines act independently.
+    const deliveredBefore7 = delivered.length;
+    const c7a = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Two waiters fast+hung', wait: true } }), c7a.res, () => {});
+    const id7a = String(record(JSON.parse(c7a.body()).review).id);
+    const fastWait = mockRes({ delayWrite: true });
+    const hungSecondWait = mockRes({ delayWrite: true });
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id7a }, query: { timeout: '10', outcomes: '1' } }), fastWait.res, () => {});
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id7a }, query: { timeout: '10', outcomes: '1' } }), hungSecondWait.res, () => {});
+    await handlers.reject(mockReq({ params: { id: SESSION_ID, reviewId: id7a }, body: { resolutionId: 'res-two-01', reason: 'Two waiters' } }), mockRes().res, () => {});
+    // First waiter finishes right away, marking delivered and clearing the shared fallback timer.
+    fastWait.finishWrite();
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id7a)?.resolution?.delivery.via, 'waiter');
+    assert.equal(hungSecondWait.raw.destroyed, false);
+    // Second waiter's independent write deadline still terminates its hung socket.
+    t.mock.timers.tick(30_000);
+    assert.equal(hungSecondWait.raw.destroyed, true, 'second hung waiter is terminated on its own deadline after first waiter finished');
+    assert.equal(delivered.length, deliveredBefore7, 'no duplicate fallback message');
+
+    // Staggered deadlines: early hung waiter times out without prematurely aborting or triggering fallback against a later live waiter.
+    const c7b = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Two waiters staggered', wait: true } }), c7b.res, () => {});
+    const id7b = String(record(JSON.parse(c7b.body()).review).id);
+    const earlyHung = mockRes({ delayWrite: true });
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id7b }, query: { timeout: '10', outcomes: '1' } }), earlyHung.res, () => {});
+    await handlers.dismiss(mockReq({ params: { id: SESSION_ID, reviewId: id7b }, body: { resolutionId: 'res-two-02' } }), mockRes().res, () => {});
+    t.mock.timers.tick(10_000);
+    const lateSlow = mockRes({ delayWrite: true });
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id7b }, query: { outcomes: '1' } }), lateSlow.res, () => {});
+    t.mock.timers.tick(20_000); // t=30_000: earlyHung expires; lateSlow still has 10_000ms left.
+    assert.equal(earlyHung.raw.destroyed, true, 'early hung waiter expires at its own deadline');
+    assert.equal(lateSlow.raw.destroyed, false, 'later waiter keeps its own independent deadline');
+    assert.equal(delivered.length, deliveredBefore7, 'fallback holds while the second waiter is still live');
+    lateSlow.finishWrite();
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id7b)?.resolution?.delivery.via, 'waiter');
+    t.mock.timers.tick(30_000);
+    assert.equal(delivered.length, deliveredBefore7);
+
+    // 8. Non-object bodies (null, array, primitives) return 400 before changing state.
+    const c8 = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Bad body unit', wait: false } }), c8.res, () => {});
+    const id8 = String(record(JSON.parse(c8.body()).review).id);
     for (const badBody of [null, [], 'text', 123, true]) {
       const rejRes = mockRes();
-      await handlers.reject(mockReq({ params: { id: SESSION_ID, reviewId: id7 }, body: badBody }), rejRes.res, () => {});
+      await handlers.reject(mockReq({ params: { id: SESSION_ID, reviewId: id8 }, body: badBody }), rejRes.res, () => {});
       assert.equal(rejRes.status(), 400);
       const disRes = mockRes();
-      await handlers.dismiss(mockReq({ params: { id: SESSION_ID, reviewId: id7 }, body: badBody }), disRes.res, () => {});
+      await handlers.dismiss(mockReq({ params: { id: SESSION_ID, reviewId: id8 }, body: badBody }), disRes.res, () => {});
       assert.equal(disRes.status(), 400);
     }
-    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id7)?.status, 'open');
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id8)?.status, 'open');
   } finally {
     handlers.stop();
     t.mock.timers.reset();
@@ -1429,25 +1479,34 @@ test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idemp
   const badReason = await post(viaHub(`/${rejectId}/reject`), { resolutionId: 'res-too-long1', reason: 'x'.repeat(501) });
   assert.equal(badReason.status, 400);
 
-  // Malformed bodies (JSON array or non-JSON content-type payload) return 400 without resolving the deck.
+  // Malformed JSON bodies return 400; unsupported non-empty media types (including +json) return 415 without resolving the deck.
   const arrayReject = await post(api(owner, `/${rejectId}/reject`), ['not', 'an', 'object']);
   assert.equal(arrayReject.status, 400);
   const arrayDismiss = await post(api(owner, `/${rejectId}/dismiss`), []);
   assert.equal(arrayDismiss.status, 400);
+  const problemJsonReject = await fetch(api(owner, `/${rejectId}/reject`), {
+    method: 'POST', headers: { 'Content-Type': 'application/problem+json', ...CLIENT_HEADER }, body: JSON.stringify({ reason: 'must not be dropped' }),
+  });
+  assert.equal(problemJsonReject.status, 415);
+  const problemJsonDismiss = await fetch(api(owner, `/${rejectId}/dismiss`), {
+    method: 'POST', headers: { 'Content-Type': 'application/problem+json', ...CLIENT_HEADER }, body: JSON.stringify({ resolutionId: 'res-prob-01' }),
+  });
+  assert.equal(problemJsonDismiss.status, 415);
   const textReject = await fetch(api(owner, `/${rejectId}/reject`), {
     method: 'POST', headers: { 'Content-Type': 'text/plain', ...CLIENT_HEADER }, body: 'plain text',
   });
-  assert.equal(textReject.status, 400);
+  assert.equal(textReject.status, 415);
   const textDismiss = await fetch(api(owner, `/${rejectId}/dismiss`), {
     method: 'POST', headers: { 'Content-Type': 'text/plain', ...CLIENT_HEADER }, body: 'plain text',
   });
-  assert.equal(textDismiss.status, 400);
+  assert.equal(textDismiss.status, 415);
   assert.equal(record((await json(await fetch(api(owner, `/${rejectId}`)))).review).status, 'open');
 
   const rawReason = 'Wrong direction\x1b[2K\rFAKE\u202eDROP';
   const sseEvents = sseReader(`${owner}/api/sessions/${SESSION_ID}/stream`);
   let rejectedWire: Record<string, unknown>;
   try {
+    await sseEvents.waitFor(event => event.event === 'init');
     const rejected = await post(viaHub(`/${rejectId}/reject`), { resolutionId: 'res-reject-01', reason: rawReason });
     assert.equal(rejected.status, 202);
     rejectedWire = record((await json(rejected)).review);

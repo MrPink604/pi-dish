@@ -76,23 +76,23 @@ interface Waiter {
 
 interface InFlightWrite {
   readonly sessionId: string;
-  readonly startedAt: number;
   readonly res: ApplicationResponse;
   abort(): void;
 }
 
-const JSON_CONTENT_TYPE_RE = /^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|$)/i;
+const JSON_CONTENT_TYPE_RE = /^application\/json(?:\s*;|$)/i;
 
-function parseOptionalObjectBody(req: ApplicationRequest): { body: Record<string, unknown> } | { error: string } {
+function parseOptionalObjectBody(req: ApplicationRequest): { body: Record<string, unknown> } | { status: number; error: string } {
   const contentLength = Number(req.headers['content-length']);
   const hasTransfer = typeof req.headers['transfer-encoding'] === 'string' && req.headers['transfer-encoding'].trim() !== '';
-  const hasPayload = (Number.isFinite(contentLength) && contentLength > 0) || hasTransfer;
+  const hasBuffered = typeof req.readableLength === 'number' && req.readableLength > 0;
+  const hasPayload = (Number.isFinite(contentLength) && contentLength > 0) || hasTransfer || hasBuffered;
   const contentType = typeof req.headers['content-type'] === 'string' ? req.headers['content-type'].trim() : '';
   if (hasPayload && !JSON_CONTENT_TYPE_RE.test(contentType)) {
-    return { error: 'request body must be a JSON object' };
+    return { status: 415, error: 'Content-Type must be application/json' };
   }
   if (req.body === undefined) return { body: {} };
-  if (!record(req.body)) return { error: 'request body must be a JSON object' };
+  if (!record(req.body)) return { status: 400, error: 'request body must be a JSON object' };
   return { body: req.body };
 }
 
@@ -300,7 +300,12 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     let failed = false;
     let aborted = false;
     let entry: InFlightWrite | null = null;
+    let writeTimer: NodeJS.Timeout | null = null;
     const release = () => {
+      if (writeTimer) {
+        clearTimeout(writeTimer);
+        writeTimer = null;
+      }
       if (!entry) return;
       const bucket = inFlightWrites.get(review.id);
       if (bucket) {
@@ -309,14 +314,18 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
       }
       entry = null;
     };
-    const scheduleAfterFailure = () => {
-      if (!onWritten || stopped || aborted || inFlightWrites.get(review.id)?.size) return;
-      schedule(review.sessionId, review.id, Math.max(0, fallbackHoldUntil(review) - Date.now()));
+    const triggerFallbackIfLast = (allowAfterAbort = false) => {
+      if (!onWritten || stopped || (!allowAfterAbort && aborted) || inFlightWrites.get(review.id)?.size) return;
+      const delay = Math.max(0, fallbackHoldUntil(review) - Date.now());
+      if (delay === 0) {
+        void settle(review.sessionId, review.id).catch(error => ports.log(`[reviews] delivering ${review.id}: ${errorMessage(error)}`));
+      } else {
+        schedule(review.sessionId, review.id, delay);
+      }
     };
     if (onWritten) {
       entry = {
         sessionId: review.sessionId,
-        startedAt: Date.now(),
         res,
         abort: () => {
           aborted = true;
@@ -324,12 +333,21 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
           try { res.destroy(); } catch {}
         },
       };
+      // Each waiter write owns its own independent deadline so one waiter
+      // finishing (or clearing the shared fallback timer) can never leave
+      // another hung write alive.
+      writeTimer = setTimeout(() => {
+        writeTimer = null;
+        entry?.abort();
+        triggerFallbackIfLast(true);
+      }, maxWriteMs);
+      writeTimer.unref();
       const bucket = inFlightWrites.get(review.id) ?? new Set<InFlightWrite>();
       bucket.add(entry);
       inFlightWrites.set(review.id, bucket);
     }
-    const onError = () => { failed = true; release(); scheduleAfterFailure(); };
-    const onClose = () => { if (!res.writableFinished) { failed = true; release(); scheduleAfterFailure(); } };
+    const onError = () => { failed = true; release(); triggerFallbackIfLast(); };
+    const onClose = () => { if (!res.writableFinished) { failed = true; release(); triggerFallbackIfLast(); } };
     res.once('error', onError);
     res.once('close', onClose);
     const body = JSON.stringify({ review: reviews.clientReview(review), result: reviews.reviewResult(review) });
@@ -341,14 +359,14 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
         if (!aborted && !failed && !res.destroyed && !res.socket?.destroyed && res.writableFinished) {
           onWritten?.();
         } else {
-          scheduleAfterFailure();
+          triggerFallbackIfLast();
         }
       });
     } catch {
       res.off('error', onError);
       res.off('close', onClose);
       release();
-      scheduleAfterFailure();
+      triggerFallbackIfLast();
     }
   }
 
@@ -386,23 +404,11 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     if (!review || reviews.reviewDelivery(review)?.state !== 'pending') return;
     const flights = inFlightWrites.get(reviewId);
     if (flights?.size) {
-      const now = Date.now();
-      let nextCheck = Infinity;
       for (const flight of [...flights]) {
-        if (flight.res.destroyed || flight.res.socket?.destroyed) {
-          flights.delete(flight);
-          continue;
-        }
-        const deadline = flight.startedAt + maxWriteMs;
-        if (now < deadline) {
-          nextCheck = Math.min(nextCheck, deadline - now);
-        } else {
-          // A wedged write past the budget is terminated before fallback so both cannot deliver.
-          flight.abort();
-        }
+        if (flight.res.destroyed || flight.res.socket?.destroyed) flight.abort();
       }
-      if (!flights.size) inFlightWrites.delete(reviewId);
-      if (Number.isFinite(nextCheck)) return schedule(sessionId, reviewId, nextCheck);
+      // Still-live writes own their own independent deadlines; hold fallback until they succeed, fail or expire.
+      if (inFlightWrites.get(reviewId)?.size) return;
     }
     const isOutcome = review.status === 'rejected' || review.status === 'dismissed';
     const attached = liveWaiters(reviewId);
@@ -604,7 +610,7 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
         return res.status(413).json({ error: `request exceeds ${reviews.MAX_SUBMIT_BYTES / 1024} KiB` });
       }
       const parsedBody = parseOptionalObjectBody(req);
-      if ('error' in parsedBody) return res.status(400).json({ error: parsedBody.error });
+      if ('error' in parsedBody) return res.status(parsedBody.status).json({ error: parsedBody.error });
       const body = parsedBody.body;
       let givenId: string | null = null;
       if (body.resolutionId !== undefined && body.resolutionId !== null) {
@@ -735,6 +741,9 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     stopped = true;
     for (const { timer } of timers.values()) clearTimeout(timer);
     timers.clear();
+    for (const flights of [...inFlightWrites.values()]) {
+      for (const flight of [...flights]) flight.abort();
+    }
     inFlightWrites.clear();
   }
 
