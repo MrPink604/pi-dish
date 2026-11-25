@@ -150,6 +150,11 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
   let handleEl: HTMLDivElement | null = null;
   let pillEl: HTMLButtonElement | null = null;
   let bodyObserver: MutationObserver | null = null;
+  let refreshSettingsControls: (() => void) | null = null;
+
+  function clearClickSuppression(): void {
+    clickSuppressedUntil = 0;
+  }
 
   function isDrawerLayout(): boolean {
     if (!win) return false;
@@ -177,6 +182,9 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
       pill.className = 'edge-handle-pill';
       pill.setAttribute('aria-label', 'Open sidebar');
       pill.addEventListener('click', onPillClick, { signal: lifetime.signal });
+      pill.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') clearClickSuppression();
+      }, { signal: lifetime.signal });
       container.append(pill);
       handleEl = container;
       pillEl = pill;
@@ -189,7 +197,9 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
 
   function onPillClick(event: MouseEvent): void {
     if (disposed || previewing || !settings.visible || !isDrawerLayout()) return;
-    if (now() < clickSuppressedUntil) {
+    // Never suppress keyboard activation (Enter/Space on <button> dispatches detail === 0).
+    if (event.detail !== 0 && now() < clickSuppressedUntil) {
+      clickSuppressedUntil = 0;
       event.preventDefault();
       return;
     }
@@ -206,6 +216,7 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
     const drawerLayout = isDrawerLayout();
     if (!drawerLayout) {
       handleEl.hidden = true;
+      handleEl.inert = true;
       handleEl.style.display = 'none';
       handleEl.style.visibility = 'hidden';
       handleEl.style.pointerEvents = 'none';
@@ -227,9 +238,11 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
     const showPreview = previewing;
     const showPill = settings.visible && (showPreview || !drawerOpen);
     const showContainer = showPreview || showPill;
+    const interactivePill = showPill && !showPreview;
 
     // Inline structural styles guarantee safe version skew even with old cached CSS.
     handleEl.hidden = false;
+    handleEl.inert = !interactivePill;
     handleEl.style.display = 'block';
     handleEl.style.position = 'fixed';
     handleEl.style.left = 'env(safe-area-inset-left, 0px)';
@@ -247,7 +260,7 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
       : '';
     handleEl.classList.toggle('edge-handle-preview', showPreview);
     handleEl.classList.toggle('edge-handle-visible', showPill);
-    handleEl.setAttribute('aria-hidden', showPill && !showPreview ? 'false' : 'true');
+    handleEl.setAttribute('aria-hidden', interactivePill ? 'false' : 'true');
 
     pillEl.hidden = !showPill;
     pillEl.style.display = showPill ? 'block' : 'none';
@@ -262,7 +275,7 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
     pillEl.style.borderRadius = 'var(--edge-handle-radius, 0 5px 5px 0)';
     pillEl.style.background = 'var(--edge-handle-bg, var(--accent))';
     pillEl.style.opacity = String(settings.opacity);
-    pillEl.style.pointerEvents = showPill && !showPreview ? 'auto' : 'none';
+    pillEl.style.pointerEvents = interactivePill ? 'auto' : 'none';
   }
 
   function zone(): EdgeHandleZone | null {
@@ -271,9 +284,10 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
     if (handleEl && handleEl.isConnected) {
       const rect = handleEl.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
+        const left = Math.max(0, rect.left);
         return {
-          left: Math.max(0, rect.left),
-          right: rect.right,
+          left,
+          right: left + rect.width,
           top: rect.top,
           bottom: rect.bottom,
         };
@@ -321,6 +335,7 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
     if (event.key !== null && event.key !== EDGE_HANDLE_STORAGE_KEY) return;
     settings = readEdgeHandleSettings(storage);
     sync();
+    refreshSettingsControls?.();
   }
 
   function mount(): void {
@@ -330,6 +345,9 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
     const { signal } = lifetime;
     ensureElements();
     sync();
+    // Clear trailing-click suppression on any fresh press so a deliberate next tap is never eaten.
+    document.addEventListener('pointerdown', clearClickSuppression, { capture: true, passive: true, signal });
+    document.addEventListener('touchstart', clearClickSuppression, { capture: true, passive: true, signal });
     win.addEventListener('resize', sync, { passive: true, signal });
     win.visualViewport?.addEventListener('resize', sync, { passive: true, signal });
     win.addEventListener('storage', onStorage, { signal });
@@ -474,7 +492,14 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
       syncControls();
     }, listener);
 
+    const syncOpenControls = (): void => {
+      if (disposed || signal.aborted || !visibleInput.isConnected) return;
+      syncControls();
+    };
+    refreshSettingsControls = syncOpenControls;
+
     signal.addEventListener('abort', () => {
+      if (refreshSettingsControls === syncOpenControls) refreshSettingsControls = null;
       setPreview(false);
     }, { once: true });
 
@@ -484,6 +509,7 @@ export function createEdgeHandle(options: EdgeHandleOptions): EdgeHandleControll
   function dispose(): void {
     if (disposed) return;
     previewing = false;
+    refreshSettingsControls = null;
     disposed = true;
     lifetime.abort();
     bodyObserver?.disconnect();

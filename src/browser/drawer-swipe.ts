@@ -390,7 +390,7 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
     if (!isOpen) {
       const configuredZone = options.edgeHandle?.zone();
       if (configuredZone) {
-        if (touch.clientX < 0 || touch.clientX > configuredZone.right) return;
+        if (touch.clientX < configuredZone.left || touch.clientX > configuredZone.right) return;
         if (touch.clientY < configuredZone.top || touch.clientY > configuredZone.bottom) return;
       } else {
         const appRect = document.querySelector('.app')?.getBoundingClientRect();

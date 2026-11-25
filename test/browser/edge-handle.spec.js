@@ -31,12 +31,34 @@ async function dispatchTouchSwipe(page, points, options = {}) {
         await cdp.detach().catch(() => { });
     }
 }
+async function dispatchTouchTap(page, x, y) {
+    const cdp = await page.context().newCDPSession(page);
+    try {
+        await cdp.send('Input.dispatchTouchEvent', {
+            type: 'touchStart',
+            touchPoints: [{ x, y, id: 1 }],
+        });
+        await page.waitForTimeout(16);
+        await cdp.send('Input.dispatchTouchEvent', {
+            type: 'touchEnd',
+            touchPoints: [],
+        });
+    }
+    finally {
+        await cdp.detach().catch(() => { });
+    }
+}
+async function waitForSidebarOffscreen(page) {
+    await page.waitForFunction(() => {
+        const sidebar = document.getElementById('sidebar');
+        return !sidebar || sidebar.getBoundingClientRect().right <= 0;
+    });
+}
 async function setMobileViewport(page) {
     await page.setViewportSize({ width: 390, height: 844 });
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => {
-        const sidebar = document.getElementById('sidebar');
-        return sidebar ? sidebar.getBoundingClientRect().right : 0;
-    })).toBeLessThanOrEqual(0);
+    // Resizing from desktop triggers .sidebar's 250ms slide-out transition; wait
+    // for it to settle off-screen so touches hit content/handle rather than the drawer.
+    await waitForSidebarOffscreen(page);
 }
 async function isDrawerOpen(page) {
     return page.evaluate(() => !!document.getElementById('sidebar')?.classList.contains('open'));
@@ -180,15 +202,94 @@ async function setRangeValue(page, selector, value) {
     (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(true);
     await page.evaluate(() => fixtureApp.features.sidebarQuery.close());
     (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
-    // Short cancelled swipe nudge starting on the pill must NOT open via synthetic click.
+    // Short cancelled swipe nudge starting on the pill must NOT open via trailing click,
+    // while a deliberate tap right after a locked swipe DOES open the drawer.
     const pillBox = await pill.boundingBox();
     (0, fixtures_js_1.expect)(pillBox).not.toBeNull();
     const pillMidY = Math.round(pillBox.y + pillBox.height / 2);
+    // Under reduced motion the drawer snaps off-screen in 0ms so the immediate follow-up
+    // trusted tap lands well inside the 400ms suppression window rather than hitting the
+    // sliding-out drawer.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.evaluate(() => {
+        const pillEl = fixtureElement(document.getElementById('edgeHandlePill'), '#edgeHandlePill');
+        const times = [];
+        Reflect.set(window, '__edgePillClickTimes', times);
+        pillEl.addEventListener('click', () => { times.push(performance.now()); }, { capture: true });
+    });
     await dispatchTouchSwipe(page, [
         { x: 3, y: pillMidY },
         { x: 18, y: pillMidY },
         { x: 28, y: pillMidY },
     ], { stepDelayMs: 40, pauseBeforeEndMs: 160 });
+    (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+    // A trailing click from that same locked swipe (no fresh pointerdown/touchstart) is suppressed.
+    await page.evaluate(() => {
+        const el = fixtureElement(document.getElementById('edgeHandlePill'), '#edgeHandlePill');
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    });
+    (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+    // Deliberate trusted-touch tap right after a locked nudge clears suppression inside the 400ms window.
+    await dispatchTouchSwipe(page, [
+        { x: 3, y: pillMidY },
+        { x: 18, y: pillMidY },
+        { x: 28, y: pillMidY },
+    ], { stepDelayMs: 40, pauseBeforeEndMs: 160 });
+    const afterNudgeT = await page.evaluate(() => performance.now());
+    (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+    await dispatchTouchTap(page, 3, pillMidY);
+    await fixtures_js_1.expect.poll(() => isDrawerOpen(page)).toBe(true);
+    const nudgeTapDelta = await page.evaluate(t0 => {
+        const times = Reflect.get(window, '__edgePillClickTimes');
+        return (times.at(-1) ?? Infinity) - t0;
+    }, afterNudgeT);
+    (0, fixtures_js_1.expect)(nudgeTapDelta).toBeLessThan(400);
+    // Tap -> swipe left to close -> immediate trusted-touch tap inside the 400ms window reopens drawer.
+    await dispatchTouchSwipe(page, [
+        { x: 220, y: pillMidY },
+        { x: 140, y: pillMidY },
+        { x: 60, y: pillMidY },
+    ]);
+    const afterCloseT = await page.evaluate(() => performance.now());
+    (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+    await dispatchTouchTap(page, 3, pillMidY);
+    await fixtures_js_1.expect.poll(() => isDrawerOpen(page)).toBe(true);
+    const closeTapDelta = await page.evaluate(t0 => {
+        const times = Reflect.get(window, '__edgePillClickTimes');
+        return (times.at(-1) ?? Infinity) - t0;
+    }, afterCloseT);
+    (0, fixtures_js_1.expect)(closeTapDelta).toBeLessThan(400);
+    // Keyboard activation (Enter / Space) is never suppressed even right after a locked swipe.
+    await dispatchTouchSwipe(page, [
+        { x: 220, y: pillMidY },
+        { x: 140, y: pillMidY },
+        { x: 60, y: pillMidY },
+    ]);
+    (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+    await pill.focus();
+    await page.keyboard.press('Enter');
+    (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(true);
+    await dispatchTouchSwipe(page, [
+        { x: 220, y: pillMidY },
+        { x: 140, y: pillMidY },
+        { x: 60, y: pillMidY },
+    ]);
+    (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+    await pill.focus();
+    await page.keyboard.press('Space');
+    (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(true);
+    // Restore default motion and confirm tap -> swipe close -> wait for drawer offscreen -> tap reopens too.
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await dispatchTouchSwipe(page, [
+        { x: 220, y: pillMidY },
+        { x: 140, y: pillMidY },
+        { x: 60, y: pillMidY },
+    ]);
+    await waitForSidebarOffscreen(page);
+    await dispatchTouchTap(page, 3, pillMidY);
+    await fixtures_js_1.expect.poll(() => isDrawerOpen(page)).toBe(true);
+    await page.evaluate(() => fixtureApp.features.sidebarQuery.close());
+    await waitForSidebarOffscreen(page);
     (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
     // Content outside the handle's vertical range and inside the 48px touch strip (outside the 6px pill) remains tappable.
     await page.evaluate(midY => {
@@ -323,27 +424,46 @@ async function setRangeValue(page, selector, value) {
     await (0, fixtures_js_1.expect)(page.locator('#edgeHandleOpacityRow')).toBeVisible();
     await setRangeValue(page, '#edgeHandleOpacity', 70);
     const previewVisible = await page.evaluate(() => {
+        const handle = fixtureElement(document.getElementById('edgeHandle'), '#edgeHandle');
         const pill = fixtureElement(document.getElementById('edgeHandlePill'), '#edgeHandlePill');
-        return { hidden: pill.hidden, opacity: parseFloat(getComputedStyle(pill).opacity), pointerEvents: getComputedStyle(pill).pointerEvents };
+        pill.focus();
+        return {
+            hidden: pill.hidden,
+            inert: handle.inert,
+            pillFocused: document.activeElement === pill,
+            opacity: parseFloat(getComputedStyle(pill).opacity),
+            pointerEvents: getComputedStyle(pill).pointerEvents,
+        };
     });
     (0, fixtures_js_1.expect)(previewVisible.hidden).toBe(false);
+    (0, fixtures_js_1.expect)(previewVisible.inert).toBe(true);
+    (0, fixtures_js_1.expect)(previewVisible.pillFocused).toBe(false);
     (0, fixtures_js_1.expect)(previewVisible.opacity).toBeCloseTo(0.7, 2);
     (0, fixtures_js_1.expect)(previewVisible.pointerEvents).toBe('none');
-    // 6. Closing Settings ends preview, retains real handle, and retires old inputs.
+    // 6. Closing Settings ends preview, restores normal focusability, and retires old inputs.
     await page.evaluate(() => {
         const lengthSlider = fixtureInput(document.getElementById('edgeHandleLength'), '#edgeHandleLength');
         fixtureApp.ports.appBindings.actions.closeSettingsModal(new Event('click'), document.body);
         lengthSlider.value = '10';
         lengthSlider.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    (0, fixtures_js_1.expect)(await page.evaluate(() => ({
-        previewing: fixtureApp.features.edgeHandle.previewing,
-        settings: fixtureApp.features.edgeHandle.settings,
-        hasPreviewClass: document.getElementById('edgeHandle')?.classList.contains('edge-handle-preview'),
-    }))).toEqual({
+    (0, fixtures_js_1.expect)(await page.evaluate(() => {
+        const handle = fixtureElement(document.getElementById('edgeHandle'), '#edgeHandle');
+        const pill = fixtureElement(document.getElementById('edgeHandlePill'), '#edgeHandlePill');
+        pill.focus();
+        return {
+            previewing: fixtureApp.features.edgeHandle.previewing,
+            settings: fixtureApp.features.edgeHandle.settings,
+            hasPreviewClass: handle.classList.contains('edge-handle-preview'),
+            inert: handle.inert,
+            pillFocused: document.activeElement === pill,
+        };
+    })).toEqual({
         previewing: false,
         settings: { position: 75, length: 30, touchWidth: 40, visible: true, opacity: 0.7 },
         hasPreviewClass: false,
+        inert: false,
+        pillFocused: true,
     });
     // 7. Persisted settings survive reload.
     await page.reload();
@@ -435,4 +555,127 @@ async function setRangeValue(page, selector, value) {
     await page.setViewportSize({ width: 1280, height: 900 });
     await (0, fixtures_js_1.expect)(page.locator('#edgeHandle')).toBeHidden();
     (0, fixtures_js_1.expect)(errors).toEqual([]);
+});
+(0, fixtures_js_1.test)('nonzero left safe-area inset shifts swipe hit-test zone to [inset, inset + touchWidth]', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    await page.setViewportSize({ width: 700, height: 390 });
+    await fixtures_js_1.expect.poll(() => page.evaluate(() => {
+        const sidebar = document.getElementById('sidebar');
+        return sidebar ? sidebar.getBoundingClientRect().right : 0;
+    })).toBeLessThanOrEqual(0);
+    const cdp = await page.context().newCDPSession(page);
+    try {
+        await cdp.send('Emulation.setSafeAreaInsetsOverride', {
+            insets: { left: 32, leftMax: 32, top: 0, topMax: 0, right: 0, rightMax: 0, bottom: 0, bottomMax: 0 },
+        });
+        await fixtures_js_1.expect.poll(() => page.evaluate(() => fixtureApp.features.edgeHandle.zone())).toEqual({
+            left: 32,
+            right: 56,
+            top: 0,
+            bottom: 390,
+        });
+        // Swipe starting inside the 32px left safe-area inset (x=10 < zone.left) must NOT open.
+        await dispatchTouchSwipe(page, [
+            { x: 10, y: 200 },
+            { x: 90, y: 200 },
+            { x: 190, y: 200 },
+        ]);
+        (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+        // Swipe starting inside [32, 56] (x=40) MUST open.
+        await dispatchTouchSwipe(page, [
+            { x: 40, y: 200 },
+            { x: 120, y: 200 },
+            { x: 220, y: 200 },
+        ]);
+        (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(true);
+        // Close drawer, then verify x=64 (> 56) does NOT open.
+        await dispatchTouchSwipe(page, [
+            { x: 220, y: 200 },
+            { x: 130, y: 200 },
+            { x: 50, y: 200 },
+        ]);
+        (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+        await dispatchTouchSwipe(page, [
+            { x: 64, y: 200 },
+            { x: 150, y: 200 },
+            { x: 240, y: 200 },
+        ]);
+        (0, fixtures_js_1.expect)(await isDrawerOpen(page)).toBe(false);
+    }
+    finally {
+        await cdp.send('Emulation.setSafeAreaInsetsOverride', {
+            insets: { left: 0, leftMax: 0, top: 0, topMax: 0, right: 0, rightMax: 0, bottom: 0, bottomMax: 0 },
+        }).catch(() => { });
+        await cdp.detach().catch(() => { });
+    }
+});
+(0, fixtures_js_1.test)('storage events refresh open Settings controls and unsubscribe when Settings closes', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    await setMobileViewport(page);
+    await page.evaluate(() => fixtureApp.features.displayPreferences.open());
+    await (0, fixtures_js_1.expect)(page.locator('#edgeHandleSettings')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('#edgeHandleOpacityRow')).toBeHidden();
+    // Another tab updates localStorage while Settings is open -> controls refresh live.
+    await page.evaluate(() => {
+        const next = JSON.stringify({ position: 25, length: 40, touchWidth: 48, visible: true, opacity: 0.8 });
+        localStorage.setItem('pi-dish-edge-handle', next);
+        window.dispatchEvent(new StorageEvent('storage', { key: 'pi-dish-edge-handle', newValue: next }));
+    });
+    (0, fixtures_js_1.expect)(await page.evaluate(() => {
+        const visible = fixtureInput(document.getElementById('edgeHandleVisible'), '#edgeHandleVisible');
+        const opacityRow = fixtureElement(document.getElementById('edgeHandleOpacityRow'), '#edgeHandleOpacityRow');
+        const opacity = fixtureInput(document.getElementById('edgeHandleOpacity'), '#edgeHandleOpacity');
+        const position = fixtureInput(document.getElementById('edgeHandlePosition'), '#edgeHandlePosition');
+        const length = fixtureInput(document.getElementById('edgeHandleLength'), '#edgeHandleLength');
+        const touchWidth = fixtureInput(document.getElementById('edgeHandleTouchWidth'), '#edgeHandleTouchWidth');
+        const reset = fixtureElement(document.getElementById('edgeHandleReset'), '#edgeHandleReset');
+        return {
+            visible: visible.checked,
+            opacityHidden: opacityRow.hidden,
+            opacity: opacity.value,
+            position: position.value,
+            length: length.value,
+            touchWidth: touchWidth.value,
+            opacityText: document.getElementById('edgeHandleOpacityValue')?.textContent,
+            positionText: document.getElementById('edgeHandlePositionValue')?.textContent,
+            lengthText: document.getElementById('edgeHandleLengthValue')?.textContent,
+            touchWidthText: document.getElementById('edgeHandleTouchWidthValue')?.textContent,
+            resetDisabled: reset.disabled,
+        };
+    })).toEqual({
+        visible: true,
+        opacityHidden: false,
+        opacity: '80',
+        position: '25',
+        length: '40',
+        touchWidth: '48',
+        opacityText: '80%',
+        positionText: '25%',
+        lengthText: '40%',
+        touchWidthText: '48 px',
+        resetDisabled: false,
+    });
+    // Closing Settings drops the control refresh subscription; subsequent storage updates
+    // still update edgeHandle.settings without touching the closed/retired inputs.
+    const afterClose = await page.evaluate(() => {
+        const visible = fixtureInput(document.getElementById('edgeHandleVisible'), '#edgeHandleVisible');
+        const length = fixtureInput(document.getElementById('edgeHandleLength'), '#edgeHandleLength');
+        const touchWidth = fixtureInput(document.getElementById('edgeHandleTouchWidth'), '#edgeHandleTouchWidth');
+        fixtureApp.ports.appBindings.actions.closeSettingsModal(new Event('click'), document.body);
+        const updated = JSON.stringify({ position: 80, length: 20, touchWidth: 16, visible: false, opacity: 0.2 });
+        localStorage.setItem('pi-dish-edge-handle', updated);
+        window.dispatchEvent(new StorageEvent('storage', { key: 'pi-dish-edge-handle', newValue: updated }));
+        return {
+            settings: fixtureApp.features.edgeHandle.settings,
+            retiredVisible: visible.checked,
+            retiredLength: length.value,
+            retiredTouchWidth: touchWidth.value,
+        };
+    });
+    (0, fixtures_js_1.expect)(afterClose).toEqual({
+        settings: { position: 80, length: 20, touchWidth: 16, visible: false, opacity: 0.2 },
+        retiredVisible: true,
+        retiredLength: '40',
+        retiredTouchWidth: '48',
+    });
 });
