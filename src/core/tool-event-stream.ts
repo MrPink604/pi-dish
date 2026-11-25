@@ -28,6 +28,41 @@ export interface ExtractTaskSubagentsOptions {
   readonly allowProjectedSubagents?: boolean;
 }
 
+const UNTRUSTED_TASK_CALL_KEYS = ['taskSubagents', 'sessionId', 'routeId', 'sessionKey'] as const;
+
+/**
+ * Strip untrusted task-subagent / route fields from a raw `toolCall` block.
+ * Shared by `/messages` and live SSE `message_update`/`message_end` so raw
+ * harness payloads can never inject clickable routes.
+ */
+export function stripUntrustedTaskCallBlock(block: Record<string, unknown>): Record<string, unknown> | null {
+  let dirty = false;
+  for (const key of UNTRUSTED_TASK_CALL_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(block, key)) { dirty = true; break; }
+  }
+  if (!dirty) return null;
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(block)) {
+    if ((UNTRUSTED_TASK_CALL_KEYS as readonly string[]).includes(key)) continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
+/** Strip untrusted task-call route fields from an assistant message's content blocks without mutating it. */
+export function sanitizeAssistantTaskBlocks(message: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(message.content)) return message;
+  let changed = false;
+  const content = message.content.map((value: unknown) => {
+    if (!record(value) || value.type !== 'toolCall') return value;
+    const cleaned = stripUntrustedTaskCallBlock(value);
+    if (!cleaned) return value;
+    changed = true;
+    return cleaned;
+  });
+  return changed ? { ...message, content } : message;
+}
+
 export interface ToolEventProjectionOptions {
   /** Resolves an OMP task subagent id (`<parent>/<id>.jsonl`) to its verified canonical route id (`~sk1_...`). */
   readonly resolveTaskSubagent?: (agentId: string) => string | null;

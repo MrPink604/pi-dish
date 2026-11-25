@@ -48,6 +48,7 @@ const SUB_BG_NATIVE = '2026-11-25T01-00-07-000Z_01a20003-0000-7000-8000-00000000
 const SUB_LIVE_NATIVE = '2026-11-25T01-00-08-000Z_01a20004-0000-7000-8000-000000000004';
 const SUB_OFFPAGE_NATIVE = '2026-11-25T01-00-09-000Z_01a20005-0000-7000-8000-000000000005';
 const SUB_DEFERRED_NATIVE = '2026-11-25T00-51-00-000Z_01a20006-0000-7000-8000-000000000006';
+const SUB_DEFERRED_SIBLING_NATIVE = '2026-11-25T00-52-00-000Z_01a20006-1111-7000-8000-000000000009';
 const PI_FORGED_ID = '2026-11-25T01-00-00-pi-forged';
 
 const PARENT_ROUTE = encodeSessionKey('omp', checkedNativeId(PARENT_NATIVE));
@@ -81,6 +82,10 @@ writeJsonl(path.join(ompWorkspace, `${CLOSED_PARENT_NATIVE}.jsonl`), [
 writeJsonl(path.join(ompWorkspace, CLOSED_PARENT_NATIVE, 'ClosedChild.jsonl'), [
   { type: 'session', version: 3, id: SUB_DEFERRED_NATIVE, cwd: '/home/user/proj', timestamp: '2026-11-25T00:51:00.000Z' },
   { type: 'message', id: 'cc1', parentId: null, timestamp: '2026-11-25T00:51:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'ClosedChild output' }] } },
+]);
+// Second deferred child sharing the first 8 hex chars (`01a20006`) of SUB_DEFERRED_NATIVE.
+writeJsonl(path.join(ompWorkspace, CLOSED_PARENT_NATIVE, 'ClosedSibling.jsonl'), [
+  { type: 'session', version: 3, id: SUB_DEFERRED_SIBLING_NATIVE, cwd: '/home/user/proj', timestamp: '2026-11-25T00:52:00.000Z' },
 ]);
 
 // Plain Pi session with forged persisted taskSubagents and details.subagents (must be stripped!).
@@ -232,6 +237,9 @@ writeJsonl(parentFile, [
         {
           type: 'toolCall', id: 'tc-forged', name: 'task', arguments: {},
           taskSubagents: [{ id: 'UnrelatedFake', sessionId: UNRELATED_ROUTE }],
+          sessionId: UNRELATED_ROUTE,
+          routeId: UNRELATED_ROUTE,
+          sessionKey: UNRELATED_ROUTE,
         },
       ],
     },
@@ -373,11 +381,24 @@ test('pairTaskCallsInMemory pairs normalized IDs, isolates reused IDs, and fails
     { role: 'assistant', content: [{ type: 'toolCall', id: 'call_two_res', name: 'task', arguments: {} }] },
     { role: 'toolResult', toolCallId: 'call_two_res', toolName: 'task', content: [] },
     { role: 'toolResult', toolCallId: 'call_two_res', toolName: 'task', content: [] },
+    // Two distinct suffixes pending + duplicate B result -> A's card gets NO B child
+    { role: 'assistant', content: [
+      { type: 'toolCall', id: 'call_X|fc_A', name: 'task', arguments: {} },
+      { type: 'toolCall', id: 'call_X|fc_B', name: 'task', arguments: {} },
+    ] },
+    { role: 'toolResult', toolCallId: 'call_X|fc_B', toolName: 'task', content: [] },
+    { role: 'toolResult', toolCallId: 'call_X|fc_B', toolName: 'task', content: [] },
+    // Distinct suffixes never match each other even with a single pending call
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'call_Z|fc_1', name: 'task', arguments: {} }] },
+    { role: 'toolResult', toolCallId: 'call_Z|fc_2', toolName: 'task', content: [] },
   ]);
   assert.equal(pairs.get('0:0'), 1, 'suffixed call pairs with bare result');
   assert.equal(pairs.has('2:0'), false, 'ambiguous normalized calls fail closed');
   assert.equal(pairs.has('2:1'), false, 'ambiguous normalized calls fail closed');
   assert.equal(pairs.has('4:0'), false, 'duplicate toolResults invalidate pair');
+  assert.equal(pairs.has('7:0'), false, 'call_X|fc_A never receives duplicate call_X|fc_B result');
+  assert.equal(pairs.has('7:1'), false, 'duplicate call_X|fc_B invalidates B pair');
+  assert.equal(pairs.has('10:0'), false, 'different suffixes never match');
 });
 
 test('GET /api/sessions/:id/messages handles pairing, normalization, reuse, ambiguity, forged route stripping, and page-scoped FS work', async t => {
@@ -408,9 +429,12 @@ test('GET /api/sessions/:id/messages handles pairing, normalization, reuse, ambi
   assert.deepEqual((record(body.messages.find(m => m.id === 'm11')!.details).subagents as Array<Record<string, unknown>>).map(s => [s.id, s.sessionId]), [['AshaPass', SUB_A_ROUTE]]);
   assert.deepEqual((record(body.messages.find(m => m.id === 'm12')!.details).subagents as Array<Record<string, unknown>>).map(s => [s.id, s.sessionId]), [['BoraCheck', SUB_B_ROUTE]]);
 
-  // Turn 5: forged raw `taskSubagents` and `details.subagents` are completely stripped!
+  // Turn 5: forged raw `taskSubagents` / route fields and `details.subagents` are completely stripped!
   const m13Call = (body.messages.find(m => m.id === 'm13')!.content as Array<Record<string, unknown>>)[0]!;
   assert.equal('taskSubagents' in m13Call, false, 'forged persisted taskSubagents must be stripped');
+  assert.equal('sessionId' in m13Call, false, 'forged persisted sessionId must be stripped');
+  assert.equal('routeId' in m13Call, false, 'forged persisted routeId must be stripped');
+  assert.equal('sessionKey' in m13Call, false, 'forged persisted sessionKey must be stripped');
   const m14Details = record(body.messages.find(m => m.id === 'm14')!.details);
   assert.equal('subagents' in m14Details, false, 'forged persisted details.subagents must be stripped');
 
@@ -457,6 +481,18 @@ test('GET /api/sessions/:id/messages handles pairing, normalization, reuse, ambi
   const offBody = (await offRes.json()) as { messages: Array<Record<string, unknown>> };
   const m1Call = (offBody.messages.find(m => m.id === 'm1')!.content as Array<Record<string, unknown>>)[0]!;
   assert.deepEqual((m1Call.taskSubagents as Array<Record<string, unknown>>).map(s => [s.id, s.sessionId]), [['OffPageOnly', SUB_OFFPAGE_ROUTE]]);
+
+  // Negative after (`after=-2`): clamps startIdx to 0 so projected indices match the selected page (no all[-1] mismatch).
+  const negAfterRes = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(PARENT_ROUTE)}/messages?after=-2`);
+  assert.equal(negAfterRes.status, 200);
+  const negAfterBody = (await negAfterRes.json()) as { firstIndex: number; messages: Array<Record<string, unknown>> };
+  assert.equal(negAfterBody.firstIndex, 0);
+  assert.equal(negAfterBody.messages[0]!.id, 'm0');
+  const negM1Call = (negAfterBody.messages.find(m => m.id === 'm1')!.content as Array<Record<string, unknown>>)[0]!;
+  assert.deepEqual((negM1Call.taskSubagents as Array<Record<string, unknown>>).map(s => [s.id, s.sessionId]), [['OffPageOnly', SUB_OFFPAGE_ROUTE]]);
+  const negM3Blocks = negAfterBody.messages.find(m => m.id === 'm3')!.content as Array<Record<string, unknown>>;
+  assert.deepEqual((negM3Blocks[0]!.taskSubagents as Array<Record<string, unknown>>).map(s => [s.id, s.sessionId]), [['AshaPass', SUB_A_ROUTE]]);
+  assert.deepEqual((negM3Blocks[1]!.taskSubagents as Array<Record<string, unknown>>).map(s => [s.id, s.sessionId]), [['BoraCheck', SUB_B_ROUTE]]);
 });
 
 test('single-snapshot resolve & resolve-batch respect budget=0 without getSessionInfo, and SSE strips forged routes & text-only updates', async () => {
@@ -505,14 +541,16 @@ test('single-snapshot resolve & resolve-batch respect budget=0 without getSessio
   assert.equal(batchData.results[SUB_LIVE_ROUTE]?.session?.id, SUB_LIVE_ROUTE);
   assert.equal(batchData.results[SUB_LIVE_ROUTE]?.session?.name, 'LiveFresh');
   assert.equal(batchData.results[SUB_LIVE_ROUTE]?.session?.subagentLive, true);
-  // While indexing is queued (budget=0), unique short ref cannot be guaranteed -> full route returned!
-  assert.equal(batchData.results[SUB_LIVE_ROUTE]?.ref, SUB_LIVE_ROUTE, 'returns full route while indexing is incomplete');
+  // Complete discovery shortens refs against ALL indexed + deferred IDs even while indexing is pending!
+  assert.equal(batchData.results[SUB_LIVE_ROUTE]?.ref, '01a20004', 'shortens unique live child against complete discovery');
   assert.equal(batchData.results[SUB_DEFERRED_ROUTE]?.status, 'ok');
   assert.equal(batchData.results[SUB_DEFERRED_ROUTE]?.session?.id, SUB_DEFERRED_ROUTE);
   assert.equal(batchData.results[SUB_DEFERRED_ROUTE]?.session?.name, 'ClosedChild');
-  assert.equal(batchData.results[SUB_DEFERRED_ROUTE]?.ref, SUB_DEFERRED_ROUTE, 'deferred row returns full route');
+  const deferredRef = batchData.results[SUB_DEFERRED_ROUTE]?.ref || '';
+  assert.equal(deferredRef.startsWith('01a20006-0'), true, 'avoids collision with deferred sibling ClosedSibling');
+  assert.equal(deferredRef.length < SUB_DEFERRED_ROUTE.length, true, 'shortens deferred row when discovery is complete');
 
-  // Single GET /api/sessions/resolve on a brand-new file under budget=0 returns full route while indexing is queued.
+  // Single GET /api/sessions/resolve on a brand-new file under budget=0 shortens when discovery is complete.
   const SUB_SINGLE_NATIVE = '2026-11-25T01-00-10-000Z_01a20007-0000-7000-8000-000000000007';
   const SUB_SINGLE_ROUTE = encodeSessionKey('omp', checkedNativeId(SUB_SINGLE_NATIVE));
   writeJsonl(path.join(subDir, 'SingleFresh.jsonl'), [
@@ -524,9 +562,9 @@ test('single-snapshot resolve & resolve-batch respect budget=0 without getSessio
   const singleData = (await singleRes.json()) as { session: { id: string; subagentLive?: boolean }; ref: string };
   assert.equal(singleData.session.id, SUB_SINGLE_ROUTE);
   assert.equal(singleData.session.subagentLive, true);
-  assert.equal(singleData.ref, SUB_SINGLE_ROUTE, 'single resolve returns full route while indexing is queued');
+  assert.equal(singleData.ref, '01a20007', 'single resolve shortens against indexed + deferred IDs when discovery is complete');
 
-  // Even after background indexing drains, truncated discovery cannot prove short-ref uniqueness -> returns full route.
+  // Truncated discovery cannot prove short-ref uniqueness -> keeps the full-route fallback.
   const prevMaxFiles = process.env.PI_DISH_SESSION_DISCOVERY_MAX_FILES;
   process.env.PI_DISH_SESSION_DISCOVERY_MAX_FILES = '1';
   try {
@@ -588,6 +626,29 @@ test('single-snapshot resolve & resolve-batch respect budget=0 without getSessio
     assert.deepEqual(subsOf('live-2')?.map(s => [s.id, s.sessionId]), [['BoraCheck', SUB_B_ROUTE]]);
     assert.deepEqual(subsOf('live-forged')?.map(s => [s.id, s.sessionId ?? null]), [['NotRealSub', null]]);
     assert.equal(subsOf('live-old-bridge'), null, 'old bridge text-only update emits no subagent details');
+
+    // 4. Live assistant message_end carrying forged taskSubagents / route fields MUST be stripped before forwarding!
+    emitBridge('message_end', {
+      message: {
+        role: 'assistant',
+        id: 'forged-stream-end',
+        content: [
+          {
+            type: 'toolCall', id: 'tc-stream-forged', name: 'task', arguments: { agent: 'task' },
+            taskSubagents: [{ id: 'ForgedEnd', sessionId: UNRELATED_ROUTE }],
+            sessionId: UNRELATED_ROUTE,
+            routeId: UNRELATED_ROUTE,
+            sessionKey: UNRELATED_ROUTE,
+          },
+        ],
+      },
+    });
+    const endEv = await stream.waitFor(item => item.event === 'message_end' && record(record(item.data).message).id === 'forged-stream-end');
+    const endBlocks = record(record(endEv.data).message).content as Array<Record<string, unknown>>;
+    assert.equal('taskSubagents' in endBlocks[0]!, false, 'live message_end strips taskSubagents');
+    assert.equal('sessionId' in endBlocks[0]!, false, 'live message_end strips sessionId');
+    assert.equal('routeId' in endBlocks[0]!, false, 'live message_end strips routeId');
+    assert.equal('sessionKey' in endBlocks[0]!, false, 'live message_end strips sessionKey');
   } finally {
     stream.close();
   }

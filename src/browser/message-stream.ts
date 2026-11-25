@@ -253,7 +253,7 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
 
     addOwnedListener('message_update', (e) => {
       try {
-        const message = decodeRenderMessage(parseRecord(e.data).message);
+        const message = decodeRenderMessage(parseRecord(e.data).message, { allowTaskCallLinks: false });
         if (message.role === 'custom') {
           renderer.upsertCustom(message, { streaming: true });
           return;
@@ -271,7 +271,7 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
 
     addOwnedListener('message_end', (e) => {
       try {
-        const message = decodeRenderMessage(parseRecord(e.data).message);
+        const message = decodeRenderMessage(parseRecord(e.data).message, { allowTaskCallLinks: false });
         const container = document.getElementById('messages');
         if (!container) return;
         const messageKey = messageEndKey(message);

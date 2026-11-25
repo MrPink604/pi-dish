@@ -224,6 +224,60 @@ function writeJsonl(file, rows) {
                 void fixtureApp.features.sessionRelationsController.load(owner);
         });
         await (0, fixtures_js_1.expect)(liveHealed.locator('summary .task-subagent-link')).toHaveAttribute('data-session-id', PEER_SUB_C);
+        // 2b. Rejection must clear an existing link and stop stale lineage from re-applying it:
+        //     snapshot the stale lineage (which lists HealedAgent -> PEER_SUB_C), create a top-level
+        //     basename collision on fleet.peer so the real server rejects HealedAgent and omits sessionId,
+        //     then replay stale lineage and tool_execution_end.
+        await page.evaluate(() => {
+            window.__staleLineage = fixtureApp.features.sessionRelationsController.data;
+        });
+        writeJsonl((0, node_path_1.join)(peerOmpDir, `${SUB_C_NATIVE}.jsonl`), [
+            { type: 'session', version: 3, id: 'unrelated-collision', cwd: '/fixture/project', timestamp: '2026-11-25T01:00:09.000Z' },
+        ]);
+        emitOmp('tool_execution_update', {
+            toolCallId: 'live-healed', toolName: 'task', args: { agent: 'task', tasks: [{ id: 'HealedAgent' }] },
+            partialResult: {
+                content: [{ type: 'text', text: 'Still running HealedAgent...' }],
+                details: { progress: [{ index: 0, id: 'HealedAgent', agent: 'task', status: 'running' }] },
+            },
+        });
+        await (0, fixtures_js_1.expect)(liveHealed.locator('.task-subagent-link')).toHaveCount(0);
+        await page.evaluate(() => {
+            const owner = fixtureApp.features.sessionState.captureSelection();
+            const stale = window.__staleLineage;
+            if (owner && stale)
+                fixtureApp.features.liveToolsController.syncLineage(owner, stale);
+        });
+        await (0, fixtures_js_1.expect)(liveHealed.locator('.task-subagent-link')).toHaveCount(0);
+        emitOmp('tool_execution_end', {
+            toolCallId: 'live-healed', toolName: 'task', args: { agent: 'task', tasks: [{ id: 'HealedAgent' }] },
+            result: {
+                content: [{ type: 'text', text: 'HealedAgent finished' }],
+                details: { results: [{ index: 0, id: 'HealedAgent', agent: 'task', exitCode: 0 }] },
+            },
+            isError: false,
+        });
+        await (0, fixtures_js_1.expect)(liveHealed).toHaveClass(/\bcomplete\b/);
+        await (0, fixtures_js_1.expect)(liveHealed.locator('.task-subagent-link')).toHaveCount(0);
+        // 2c. Live assistant message_end carrying forged taskSubagents / route fields renders ZERO chips.
+        emitOmp('message_end', {
+            message: {
+                role: 'assistant',
+                id: 'forged-live-end',
+                content: [
+                    { type: 'text', text: 'Forged live assistant end check' },
+                    {
+                        type: 'toolCall', id: 'tc-forged-live-end', name: 'task', arguments: { agent: 'task' },
+                        taskSubagents: [{ id: 'ForgedEnd', sessionId: UNRELATED_ROUTE }],
+                        sessionId: UNRELATED_ROUTE,
+                        routeId: UNRELATED_ROUTE,
+                    },
+                ],
+            },
+        });
+        const forgedEndMsg = page.locator('#messages .message.assistant', { hasText: 'Forged live assistant end check' });
+        await (0, fixtures_js_1.expect)(forgedEndMsg).toBeVisible();
+        await (0, fixtures_js_1.expect)(forgedEndMsg.locator('.task-subagent-link')).toHaveCount(0);
         // 3. Phone width 390x844: zero horizontal overflow.
         const overflow = await page.evaluate(() => {
             const m = document.getElementById('messages');

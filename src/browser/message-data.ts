@@ -34,13 +34,14 @@ export function decodeMessageUsage(value: unknown): MessageUsage | undefined {
   return { input: number(value.input), output: number(value.output), reasoning: number(value.reasoning), cacheRead: number(value.cacheRead), cacheWrite: number(value.cacheWrite), cacheWrite1h: number(value.cacheWrite1h),
     cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : undefined };
 }
-export function decodeMessageContent(value: unknown): RenderMessage['content'] {
+export function decodeMessageContent(value: unknown, options: { allowTaskCallLinks?: boolean } = {}): RenderMessage['content'] {
   if (typeof value === 'string') return value;
   if (!Array.isArray(value)) return undefined;
+  const allowTaskCallLinks = options.allowTaskCallLinks !== false;
   return value.flatMap((block: unknown): (MessageBlock | string)[] => {
     if (typeof block === 'string') return [block];
     if (!record(block) || typeof block.type !== 'string') return [];
-    const taskSubagents = block.type === 'toolCall' && block.name === 'task' && Array.isArray(block.taskSubagents)
+    const taskSubagents = allowTaskCallLinks && block.type === 'toolCall' && block.name === 'task' && Array.isArray(block.taskSubagents)
       ? decodeTaskSubagents(block.taskSubagents) : undefined;
     return [{
       type: block.type, text: string(block.text), thinking: string(block.thinking), name: string(block.name), id: string(block.id),
@@ -56,11 +57,11 @@ function decodeCacheExpiry(value: unknown): CacheExpiryProjection | undefined {
   return { refreshedAt: value.refreshedAt, expiresAt: value.expiresAt, retentionMs: value.retentionMs,
     retention: value.retention, basis: value.basis as CacheExpiryProjection['basis'] };
 }
-export function decodeRenderMessage(value: unknown): RenderMessage {
+export function decodeRenderMessage(value: unknown, options: { allowTaskCallLinks?: boolean } = {}): RenderMessage {
   const row = record(value) ? value : {}, details = record(row.details) ? row.details : null;
   return { role: string(row.role) || '', id: string(row.id), index: finite(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : undefined,
     timestamp: row.timestamp instanceof Date ? new Date(row.timestamp.getTime()) : typeof row.timestamp === 'string' || finite(row.timestamp) ? row.timestamp : undefined,
-    content: decodeMessageContent(row.content), model: string(row.model), responseModel: string(row.responseModel), provider: string(row.provider), stopReason: string(row.stopReason), errorMessage: string(row.errorMessage),
+    content: decodeMessageContent(row.content, options), model: string(row.model), responseModel: string(row.responseModel), provider: string(row.provider), stopReason: string(row.stopReason), errorMessage: string(row.errorMessage),
     toolName: string(row.toolName), toolCallId: string(row.toolCallId), isError: row.isError === true, customType: string(row.customType), display: typeof row.display === 'boolean' ? row.display : undefined,
     toolDetails: row.role === 'toolResult' ? decodeToolDetails(string(row.toolName), row.details) : undefined,
     usage: decodeMessageUsage(row.usage), cacheExpiry: decodeCacheExpiry(row.cacheExpiry), durationMs: number(row.durationMs), outputTokens: number(row.outputTokens), ttftMs: number(row.ttftMs), streamMs: number(row.streamMs),

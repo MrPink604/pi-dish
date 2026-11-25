@@ -349,6 +349,25 @@ test('resolveNestedSubsessionRouteId verifies authoritative route-to-file mappin
         fs.opendirSync = origOpendir;
     }
     assert.equal(rootOpens, 1, 'multiple chips reuse one discovery snapshot');
+    // Truncated discovery fails closed on both direct resolution and reusable resolver.
+    assert.equal(resolveNestedSubsessionRouteId(parent, 'AshaPass', {
+        harnessId: 'omp',
+        rootDir: sessions,
+        snapshot: { harnessId: 'omp', byRoute: new Map([[expectedA, subA]]), truncated: true },
+    }), null, 'truncated snapshot refuses task link');
+    const prevMaxFiles = process.env.PI_DISH_SESSION_DISCOVERY_MAX_FILES;
+    process.env.PI_DISH_SESSION_DISCOVERY_MAX_FILES = '1';
+    try {
+        assert.equal(resolveNestedSubsessionRouteId(parent, 'AshaPass', { harnessId: 'omp', rootDir: sessions }), null, 'truncated discovery refuses direct task link');
+        const truncResolver = createNestedSubsessionResolver({ descriptor: registry.omp, rootDir: sessions, snapshotTtlMs: 2000 });
+        assert.equal(truncResolver.forParentFrame(parent)('AshaPass'), null, 'truncated discovery refuses cached resolver task link');
+    }
+    finally {
+        if (prevMaxFiles === undefined)
+            delete process.env.PI_DISH_SESSION_DISCOVERY_MAX_FILES;
+        else
+            process.env.PI_DISH_SESSION_DISCOVERY_MAX_FILES = prevMaxFiles;
+    }
     // Missing, malformed, reserved, non-session, and non-nested harnesses return null.
     assert.equal(resolveNestedSubsessionRouteId(parent, 'MissingAgent', { harnessId: 'omp', rootDir: sessions }), null);
     assert.equal(resolveNestedSubsessionRouteId(parent, 'NotASession', { harnessId: 'omp', rootDir: sessions }), null);

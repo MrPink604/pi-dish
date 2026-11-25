@@ -18,7 +18,7 @@ import { refreshHarnessPricing } from './harness-pricing';
 import * as piSDK from './pi-sdk';
 import { subsessionLabel } from './session-catalog';
 import { createNestedSubsessionResolver } from './session-discovery';
-import { extractTaskSubagents, type TaskSubagentProjection } from './tool-event-stream';
+import { extractTaskSubagents, stripUntrustedTaskCallBlock, type TaskSubagentProjection } from './tool-event-stream';
 import {
   getSessionStats, readSessionMessageById, readSessionMessages, readSessionMessagesAtLeaf, readSessionSearchText,
 } from './session-files';
@@ -114,10 +114,13 @@ export function pairTaskCallsInMemory(messages: readonly SessionMessage[]): Map<
     }
     const resRaw = msg.toolCallId;
     const resNorm = normalizeTaskToolCallId(resRaw);
+    const resHasPipe = resRaw.includes('|');
     const exactMatches = pending.filter(c => c.rawId === resRaw);
-    const normMatches = pending.filter(c => c.normId === resNorm);
+    // Normalize `call_X|fc_Y` <-> `call_X` ONLY when exactly one side is bare; two different suffixes never match.
+    const compatMatches = pending.filter(c =>
+      c.rawId === resRaw || (c.normId === resNorm && resHasPipe !== c.rawId.includes('|')));
 
-    if (exactMatches.length === 1 && (resRaw.includes('|') || normMatches.length === 1) && !poisonedNorms.has(resNorm)) {
+    if (exactMatches.length === 1 && (resHasPipe || compatMatches.length === 1) && !poisonedNorms.has(resNorm)) {
       const matched = exactMatches[0]!;
       pending.splice(pending.indexOf(matched), 1);
       pairs.set(matched.callKey, msgIdx);
@@ -125,19 +128,20 @@ export function pairTaskCallsInMemory(messages: readonly SessionMessage[]): Map<
       recentPairedByNorm.set(resNorm, matched.callKey);
       continue;
     }
-    if (exactMatches.length === 0 && normMatches.length === 1 && !poisonedNorms.has(resNorm)) {
-      const matched = normMatches[0]!;
-      if (resRaw.includes('|') || matched.rawId.includes('|')) {
-        pending.splice(pending.indexOf(matched), 1);
-        pairs.set(matched.callKey, msgIdx);
-        recentPairedByRaw.set(matched.rawId, matched.callKey);
-        recentPairedByNorm.set(resNorm, matched.callKey);
-        continue;
-      }
+    if (exactMatches.length === 0 && compatMatches.length === 1 && !poisonedNorms.has(resNorm)) {
+      const matched = compatMatches[0]!;
+      pending.splice(pending.indexOf(matched), 1);
+      pairs.set(matched.callKey, msgIdx);
+      recentPairedByRaw.set(matched.rawId, matched.callKey);
+      recentPairedByNorm.set(resNorm, matched.callKey);
+      continue;
     }
-    if (exactMatches.length > 1 || normMatches.length > 1) {
+    if (exactMatches.length > 1 || compatMatches.length > 1) {
       for (let i = pending.length - 1; i >= 0; i--) {
-        if (pending[i]!.normId === resNorm) pending.splice(i, 1);
+        const c = pending[i]!;
+        if (c.rawId === resRaw || (c.normId === resNorm && resHasPipe !== c.rawId.includes('|'))) {
+          pending.splice(i, 1);
+        }
       }
       poisonedNorms.add(resNorm);
       const prevNormKey = recentPairedByNorm.get(resNorm);
@@ -150,7 +154,7 @@ export function pairTaskCallsInMemory(messages: readonly SessionMessage[]): Map<
       pairs.delete(prevRawKey);
       recentPairedByRaw.delete(resRaw);
     }
-    if (normMatches.length === 0) {
+    if (!resHasPipe && compatMatches.length === 0) {
       const prevNormKey = recentPairedByNorm.get(resNorm);
       if (prevNormKey) {
         pairs.delete(prevNormKey);
@@ -190,17 +194,17 @@ function messageForClient(sessionId: string, message: SessionMessage, index: num
         };
       }
       if (block.type === 'toolCall') {
+        const cleaned = stripUntrustedTaskCallBlock(block);
+        const base = cleaned || block;
         const verified = block.name === 'task' ? taskProjection?.forCall(index, blockIndex) : undefined;
-        const hasRaw = Object.prototype.hasOwnProperty.call(block, 'taskSubagents');
         if (verified?.length) {
           contentChanged = true;
-          return { ...block, taskSubagents: verified };
+          return { ...base, taskSubagents: verified };
         }
-        if (hasRaw) {
-          // Strip any persisted/untrusted taskSubagents from raw JSONL blocks.
+        if (cleaned) {
+          // Strip any persisted/untrusted taskSubagents or route fields from raw JSONL blocks.
           contentChanged = true;
-          const { taskSubagents: _stripped, ...rest } = block;
-          return rest;
+          return cleaned;
         }
       }
       return value;
@@ -449,7 +453,7 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
     const totalMessages = all.length;
     let startIdx: number, endIdx: number;
     if (after != null) {
-      startIdx = after + 1; endIdx = totalMessages - 1;
+      startIdx = Math.max(0, after + 1); endIdx = totalMessages - 1;
     } else if (before != null) {
       endIdx = before - 1; startIdx = Math.max(0, endIdx - limit + 1);
     } else {

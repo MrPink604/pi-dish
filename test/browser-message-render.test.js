@@ -209,19 +209,25 @@ test('task subagent decoding and link rendering handle single, batch, unresolved
     assert.equal(decoded.subagents.length, 1);
     assert.equal(decoded.subagents[0].id, 'AshaPass');
     assert.equal(decoded.subagents[0].sessionId, subA);
-    // decodeRenderMessage keeps taskSubagents on task toolCall blocks only.
-    const assistant = decodeRenderMessage({
+    // decodeRenderMessage keeps taskSubagents on task toolCall blocks only for /messages,
+    // and strips them completely when allowTaskCallLinks is false (live SSE message_update/message_end).
+    const rawAssistant = {
         role: 'assistant',
         content: [
             { type: 'toolCall', id: 'tc-1', name: 'task', arguments: { tasks: [] }, taskSubagents: [{ id: 'AshaPass', sessionId: subA }] },
             { type: 'toolCall', id: 'tc-2', name: 'bash', arguments: { command: 'ls' }, taskSubagents: [{ id: 'Ignored', sessionId: subB }] },
         ],
-    });
+    };
+    const assistant = decodeRenderMessage(rawAssistant);
     assert.ok(Array.isArray(assistant.content));
     const taskBlock = (0, test_types_js_1.record)(assistant.content[0]);
     const bashBlock = (0, test_types_js_1.record)(assistant.content[1]);
     assert.equal(Array.isArray(taskBlock.taskSubagents) && taskBlock.taskSubagents.length, 1);
     assert.equal(bashBlock.taskSubagents, undefined);
+    const liveAssistant = decodeRenderMessage(rawAssistant, { allowTaskCallLinks: false });
+    assert.ok(Array.isArray(liveAssistant.content));
+    assert.equal((0, test_types_js_1.record)(liveAssistant.content[0]).taskSubagents, undefined, 'live assistant decode ignores taskSubagents');
+    assert.equal((0, test_types_js_1.record)(liveAssistant.content[1]).taskSubagents, undefined);
     // Unresolved subagent (missing sessionId) produces NO link.
     assert.equal(renderTaskSubagentLinkHtml({ id: 'AshaPass', status: 'running' }), '');
     assert.equal(taskHeaderLinkHtml([{ id: 'AshaPass', status: 'running' }]), '');

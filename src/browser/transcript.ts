@@ -22,7 +22,7 @@ const cursor = (value: unknown) => finite(value) && Number.isInteger(value) && v
 export function decodeTranscriptPage(value: unknown): TranscriptPage {
   if (!record(value) || !Array.isArray(value.messages)) throw new Error('Invalid transcript page');
   const session = record(value.session) ? decodeSessionTranscriptPatch(value.session) : {};
-  return { messages: value.messages.map(decodeRenderMessage), session, firstIndex: cursor(value.firstIndex), lastIndex: cursor(value.lastIndex), hasMore: value.hasMore === true, totalMessages: cursor(value.totalMessages) };
+  return { messages: value.messages.map(message => decodeRenderMessage(message)), session, firstIndex: cursor(value.firstIndex), lastIndex: cursor(value.lastIndex), hasMore: value.hasMore === true, totalMessages: cursor(value.totalMessages) };
 }
 /** The selected transcript owns its paging cursors, endpoint, requests and retained DOM. */
 export function createTranscript(options: {

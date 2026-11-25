@@ -139,10 +139,10 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     ];
     let deferredByPath: Map<string, DiscoveryCandidate> | null = null;
     const materialized = new Map<string, CatalogSession>();
-    const peerIds = catalog.list.map(entry => entry.id);
-    // Only shorten when discovery saw the entire corpus and indexing is caught up;
-    // otherwise return the full route so uniqueness is never assumed.
-    const canShorten = !catalog.discoveryTruncated && !catalog.indexing;
+    // Shorten against ALL discovered IDs (indexed + deferred) whenever discovery
+    // is complete; fall back to full routes only when discovery was truncated.
+    const peerIds = pool.map(entry => entry.id);
+    const canShorten = !catalog.discoveryTruncated;
 
     const materialize = (entry: ResolveEntry): CatalogSession => {
       if (entry.session) return entry.session;

@@ -12,6 +12,14 @@ export interface ExtractTaskSubagentsOptions {
     /** Allow bridge-projected `details.subagents` (live SSE wire); persisted JSONL reads only raw OMP `progress`/`results`. */
     readonly allowProjectedSubagents?: boolean;
 }
+/**
+ * Strip untrusted task-subagent / route fields from a raw `toolCall` block.
+ * Shared by `/messages` and live SSE `message_update`/`message_end` so raw
+ * harness payloads can never inject clickable routes.
+ */
+export declare function stripUntrustedTaskCallBlock(block: Record<string, unknown>): Record<string, unknown> | null;
+/** Strip untrusted task-call route fields from an assistant message's content blocks without mutating it. */
+export declare function sanitizeAssistantTaskBlocks(message: Record<string, unknown>): Record<string, unknown>;
 export interface ToolEventProjectionOptions {
     /** Resolves an OMP task subagent id (`<parent>/<id>.jsonl`) to its verified canonical route id (`~sk1_...`). */
     readonly resolveTaskSubagent?: (agentId: string) => string | null;

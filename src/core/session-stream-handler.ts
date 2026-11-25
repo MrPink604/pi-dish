@@ -6,7 +6,7 @@ import { errorMessage } from './http-boundary';
 import { canonicalSessionId } from './session-key';
 import { createNestedSubsessionResolver } from './session-discovery';
 import { sessionSwitchRouteData } from './session-ownership';
-import { createToolEventStream } from './tool-event-stream';
+import { createToolEventStream, sanitizeAssistantTaskBlocks } from './tool-event-stream';
 import { record as isRecord } from './helper-values';
 import type { LiveSession } from './session-ownership';
 import type { LiveSourceObservation, SessionSource } from './session-source';
@@ -118,7 +118,9 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     };
     const toolEvents = createToolEventStream(send, undefined, { resolveTaskSubagentsFrame });
     const messageForStream = (message: unknown): unknown => {
-      if (!isRecord(message) || message.role !== 'custom') return message;
+      if (!isRecord(message)) return message;
+      if (message.role === 'assistant') return sanitizeAssistantTaskBlocks(message);
+      if (message.role !== 'custom') return message;
       // interrupted-thinking is hidden reasoning; the client only needs its marker.
       if (message.customType === 'interrupted-thinking') return { ...message, content: [] };
       return message.display === false ? null : message;

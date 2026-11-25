@@ -713,6 +713,7 @@ function resolveNestedSubsessionRouteId(
   if (!local || !descriptor) return null;
   if (liveClaimConflicts(options.live, descriptor.id, local.nativeId, local.subFile)) return null;
   const snapshot = options.snapshot ?? buildAuthoritativeRouteSnapshot(descriptor, options);
+  if (snapshot.truncated) return null;
   const winnerFile = snapshot.byRoute.get(local.routeId);
   if (!winnerFile || !sameFilePath(winnerFile, local.subFile)) return null;
   return local.routeId;
@@ -758,7 +759,7 @@ function createNestedSubsessionResolver(options: NestedSubsessionResolverOptions
       } else if (ttlMs > 0 && !refreshedInFrame) {
         const expired = Date.now() - cached.builtAt >= ttlMs;
         const winner = cached.snapshot.byRoute.get(local.routeId);
-        const alreadyVerified = !!(winner && sameFilePath(winner, local.subFile));
+        const alreadyVerified = !cached.snapshot.truncated && !!(winner && sameFilePath(winner, local.subFile));
         const alreadyChecked = cached.checkedStamps.get(local.subFile) === local.fileStamp;
         if (expired || (!alreadyVerified && !alreadyChecked)) {
           refreshSnapshot();
@@ -766,9 +767,13 @@ function createNestedSubsessionResolver(options: NestedSubsessionResolverOptions
         }
       }
       const active = cached!;
-      const winnerFile = active.snapshot.byRoute.get(local.routeId);
       if (active.checkedStamps.size >= HEADER_CACHE_MAX) active.checkedStamps.clear();
       active.checkedStamps.set(local.subFile, local.fileStamp);
+      if (active.snapshot.truncated) {
+        frameMemo.set(agentId, null);
+        return null;
+      }
+      const winnerFile = active.snapshot.byRoute.get(local.routeId);
       const route = winnerFile && sameFilePath(winnerFile, local.subFile) ? local.routeId : null;
       frameMemo.set(agentId, route);
       return route;

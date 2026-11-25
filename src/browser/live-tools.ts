@@ -21,7 +21,7 @@ function decode(value: unknown): ToolEvent | null {
 interface WaitSnapshot { jobs: readonly WaitJob[]; receivedAt: number }
 interface ToolPanel {
   owner: SelectionOwner; el: HTMLDetailsElement; startTime: number | null; toolName: string; args: unknown; intent?: string;
-  wait?: WaitSnapshot; taskSubagents?: readonly TaskSubagent[]; taskLinksSig?: string;
+  wait?: WaitSnapshot; taskSubagents?: readonly TaskSubagent[]; taskLinksSig?: string; rejectedTaskIds?: Set<string>;
 }
 function findLineageNode(node: LineageNode | null, sessionId: string): LineageNode | null {
   if (!node) return null;
@@ -45,21 +45,30 @@ function mergeTaskSubagents(
   incoming: readonly TaskSubagent[] | undefined,
   owner: SelectionOwner,
   lineage: SessionLineage | undefined,
+  rejectedIds?: Set<string>,
 ): TaskSubagent[] | undefined {
   const byId = new Map<string, TaskSubagent>();
   for (const item of existing || []) byId.set(item.id, item);
+  const incomingIds = new Set<string>();
   for (const item of incoming || []) {
+    incomingIds.add(item.id);
     const prev = byId.get(item.id);
-    byId.set(item.id, {
-      ...prev,
-      ...item,
-      ...(item.sessionId || prev?.sessionId ? { sessionId: item.sessionId || prev?.sessionId } : {}),
-    });
+    if (item.sessionId) {
+      rejectedIds?.delete(item.id);
+      byId.set(item.id, { ...prev, ...item, sessionId: item.sessionId });
+    } else {
+      // A newer server row without sessionId is a rejection: clear any old route and block lineage re-application.
+      if (prev?.sessionId) rejectedIds?.add(item.id);
+      const next: TaskSubagent = { ...prev, ...item };
+      delete (next as { sessionId?: string }).sessionId;
+      byId.set(item.id, next);
+    }
   }
   if (!byId.size) return undefined;
   const merged: TaskSubagent[] = [];
   for (const item of byId.values()) {
-    const sessionId = item.sessionId || findDirectChildSessionId(lineage, owner.id, item.id);
+    const canHeal = !item.sessionId && !incomingIds.has(item.id) && !rejectedIds?.has(item.id);
+    const sessionId = item.sessionId || (canHeal ? findDirectChildSessionId(lineage, owner.id, item.id) : undefined);
     merged.push(sessionId && sessionId !== item.sessionId ? { ...item, sessionId } : item);
   }
   return merged;
@@ -336,7 +345,8 @@ function updateLiveToolPanel(data: ToolEvent) {
 
   const details = decodeToolDetails(resolvedName, partialResult?.details);
   if (details?.kind === 'task') {
-    entry.taskSubagents = mergeTaskSubagents(entry.taskSubagents, details.subagents, entry.owner, options.lineage?.());
+    const rejected = entry.rejectedTaskIds ?? (entry.rejectedTaskIds = new Set());
+    entry.taskSubagents = mergeTaskSubagents(entry.taskSubagents, details.subagents, entry.owner, options.lineage?.(), rejected);
     syncTaskSubagentsDom(entry, true);
   }
   if (details?.kind === 'wait') {
@@ -421,8 +431,9 @@ function finalizeLiveToolPanel(data: ToolEvent) {
     + (options.videos ? options.videos(result && result.content) : '');
   const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
   const details = decodeToolDetails(resolvedName, result?.details);
+  const rejected = resolvedName === 'task' ? (entry.rejectedTaskIds ?? (entry.rejectedTaskIds = new Set())) : undefined;
   const mergedTask = resolvedName === 'task'
-    ? mergeTaskSubagents(entry.taskSubagents, details?.kind === 'task' ? details.subagents : undefined, entry.owner, options.lineage?.())
+    ? mergeTaskSubagents(entry.taskSubagents, details?.kind === 'task' ? details.subagents : undefined, entry.owner, options.lineage?.(), rejected)
     : undefined;
 
   const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, mediaHtml, intent, details, entry.owner.host, mergedTask);
@@ -452,7 +463,7 @@ function finalizeLiveToolPanel(data: ToolEvent) {
       const entry = retained.get(el);
       if (!entry || entry.owner.id !== owner.id || entry.owner.host !== owner.host || entry.toolName !== 'task' || !entry.taskSubagents?.length) continue;
       entry.owner = owner;
-      entry.taskSubagents = mergeTaskSubagents(entry.taskSubagents, undefined, entry.owner, lineage);
+      entry.taskSubagents = mergeTaskSubagents(entry.taskSubagents, undefined, entry.owner, lineage, entry.rejectedTaskIds);
       syncTaskSubagentsDom(entry, entry.el.classList.contains('running'));
     }
   }
