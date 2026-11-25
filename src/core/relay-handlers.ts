@@ -7,6 +7,7 @@ import type { Remote, ProbeResult } from './remote-hosts';
 import type { ArtifactKind, FleetArtifactRecord, FleetArtifactStore } from './fleet-artifacts';
 import type { HostDescriptor, TransportRequest, TransportResponse, TransportHandler } from './access-handlers';
 import { isolateArtifact } from './artifact-isolation';
+import { sanitizeSpacesPath } from './cu-handlers';
 import { asRecord } from './wire-protocol';
 import { FORM_CLIENT_HEADER, PAGE_FORMS_CAPABILITY, PAGE_FORMS_RELAY_LIMIT, SUBMISSION_ID_RE } from './page-forms';
 
@@ -100,6 +101,7 @@ interface FleetHostEntry {
 /** A relayed reply's cap and how a chunk counts toward it. */
 interface BodyLimit { max: number; count(chunk: string): number }
 const PROXY_TERMINAL_PATH_RE = /^\/hosts\/([^/]+)\/api\/sessions\/[^/]+\/terminal$/;
+const PROXY_CU_SPACES_PATH_RE = /^\/hosts\/([^/]+)\/api\/cu\/spaces(\/.*)$/;
 const PROXY_RESPONSE_TIMEOUT_MS = 10_000;
 const HOSTS_PROBE_DEADLINE_MS = 3000;
 const HOP_BY_HOP_HEADERS: Record<string, true> = {
@@ -756,15 +758,27 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     );
   }
 
-  // Works even when this host's terminal feature is off: the PTY lives on the peer.
+  // Works even when this host's terminal or computer-use feature is off: the
+  // PTY or cua-spacesd lives on the peer.
   const upgrade: RelayHandlers['upgrade'] = (req, socket, head, url) => {
-    const match = PROXY_TERMINAL_PATH_RE.exec(url.pathname);
-    if (!match) return false;
-    const remote = remoteHosts.getRemote(match[1]);
+    const terminalMatch = PROXY_TERMINAL_PATH_RE.exec(url.pathname);
+    const cuSpacesMatch = terminalMatch ? null : PROXY_CU_SPACES_PATH_RE.exec(url.pathname);
+    const hostName = terminalMatch?.[1] ?? cuSpacesMatch?.[1];
+    if (!hostName) return false;
+    const remote = remoteHosts.getRemote(hostName);
     if (!remote) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
       socket.destroy();
       return true;
+    }
+    if (cuSpacesMatch) {
+      const rawPrefix = `/hosts/${hostName}/api/cu/spaces`;
+      const rawUrl = req.url || '';
+      if (!rawUrl.startsWith(`${rawPrefix}/`) || !sanitizeSpacesPath(rawUrl.slice(rawPrefix.length))) {
+        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+        socket.destroy();
+        return true;
+      }
     }
     // This host's gate, applied by hand; the peer's own credential is attached
     // downstream, never the caller's.

@@ -20,6 +20,7 @@ import { knownWorkspaceCwds } from './skill-feature-handlers';
 import { getHarness, listHarnesses } from './harnesses';
 import { dishDir, readDishSettings, readStore, replaceFile } from './dish-store';
 import { createAccessHandlers } from './access-handlers';
+import { createCuHandlers } from './cu-handlers';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';
 import { createPublicationHandlers } from './publication-handlers';
@@ -129,7 +130,14 @@ export function startServer(rootDirectory: string): Server {
     usageLimitsAvailable: () => listHarnesses().some(d => d.argv?.usage && harnessCommandAvailable(d)),
     botsAvailable: () => bots() !== null,
     knowledgeAvailable: () => knowledge() !== null,
+    computerUseAvailable: () => cuHandlers.available(),
   });
+  const cuHandlers = createCuHandlers({
+    upgradeAuthorized: req => accessHandlers.bearerUpgradeAuthorized(req),
+  });
+  // Raw cua-spacesd viewer/gRPC-Web proxy: mounted before compression and
+  // jsonBody so binary gRPC-Web payloads pass untouched, behind strict bearer auth.
+  app.use('/api/cu/spaces', accessHandlers.requireBearer, cuHandlers.spacesProxy);
   app.use(accessHandlers.compression);
   app.use(accessHandlers.jsonBody);
   app.use(accessHandlers.cors);
@@ -168,6 +176,14 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/vault', vaultHandlers.overview);
   app.post('/api/vault/requests/:id/decision', vaultHandlers.decide);
   app.delete('/api/vault/grants/:id', vaultHandlers.revokeGrant);
+
+  app.get('/api/cu/status', cuHandlers.status);
+  app.get('/api/cu/stream', cuHandlers.stream);
+  app.post('/api/cu/takeover', cuHandlers.takeover);
+  app.post('/api/cu/heartbeat', cuHandlers.heartbeat);
+  app.post('/api/cu/release', cuHandlers.release);
+  app.post('/api/cu/viewer/ticket', cuHandlers.viewerTicket);
+  app.get('/api/cu/audit', cuHandlers.audit);
 
   const relayHandlers = createRelayHandlers({
     fleetArtifacts,
@@ -1286,6 +1302,7 @@ export function startServer(rootDirectory: string): Server {
     // Detach from Prime's daemon: the poller and socket belong to this server.
     getPrimeDaemon().shutdown();
     if (shareServer) { try { shareServer.close(); } catch {} }
+    cuHandlers.stop();
     remoteHosts.shutdown();
     sessionBounces.stop();
     for (const entry of staleBots.values()) entry.resolve();
@@ -1297,11 +1314,12 @@ export function startServer(rootDirectory: string): Server {
     botRegistry = null;
   }
 
-  // Fleet relay takes precedence even when the terminal is disabled; unclaimed sockets are destroyed.
+  // Fleet relay takes precedence even when the terminal or computer-use feature
+  // is disabled; unclaimed sockets are destroyed.
   function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     let url: URL;
     try { url = new URL(req.url || '', 'http://localhost'); } catch { socket.destroy(); return; }
-    if (relayUpgrade(req, socket, head, url) || terminalUpgrade?.(req, socket, head, url)) return;
+    if (relayUpgrade(req, socket, head, url) || cuHandlers.upgrade(req, socket, head, url) || terminalUpgrade?.(req, socket, head, url)) return;
     socket.destroy();
   }
 

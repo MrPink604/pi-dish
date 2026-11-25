@@ -35,6 +35,12 @@ export { createRecovery, decodeRecoveryMode, decodeRecoveryReport } from './reco
 
 export { createBounce } from './bounce';
 export { createFleetView, decodeFleetHealth, formatBytes, formatUptime, meterLevel, fleetSessionsHtml, fleetHealthHtml } from './fleet-view';
+export { createCuViewer } from './cu-viewer';
+export {
+  decodeCuLease, decodeCuStatus, decodeCuTicket, decodeCuTakeover, decodeCuRelease, decodeCuBusyError,
+  formatRemainingMs, formatLeaseHolder, formatExpiryRemaining, isOwnHumanLease, cuSeatPresentation,
+  formatBusyMessage, cuSpacesViewerUrl,
+} from './cu-viewer-data';
 export { decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } from './bounce-data';
 
 export { createSessionRelations, decodeSessionLineage } from './session-relations';

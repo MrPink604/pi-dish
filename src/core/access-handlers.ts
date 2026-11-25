@@ -33,6 +33,8 @@ export interface AccessPorts {
   botsAvailable(): boolean;
   /** True where `knowledgeRemote` is set: this host serves the knowledge base. */
   knowledgeAvailable(): boolean;
+  /** True where the guest cu-broker Unix socket exists (PI_DISH_CU_BROKER_SOCKET). */
+  computerUseAvailable?(): boolean;
 }
 
 export interface AccessHandlers {
@@ -41,17 +43,19 @@ export interface AccessHandlers {
   cors: TransportHandler;
   pageCommentTransport: TransportHandler;
   sameOriginOnly: TransportHandler;
+  requireBearer: TransportHandler;
   apiGate: TransportHandler;
   hostsGate: TransportHandler;
   host: TransportHandler;
   ticket: TransportHandler;
   hostDescriptor(): HostDescriptor;
   upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+  bearerUpgradeAuthorized(req: IncomingMessage): boolean;
 }
 
-const STREAM_PATH_RE = /^\/sessions\/[^/]+\/stream\/?$/;
+const STREAM_PATH_RE = /^\/(?:sessions\/[^/]+|cu)\/stream\/?$/;
 const PROBE_PATH_RE = /^\/(?:host|ready)\/?$/;
-const PROXY_STREAM_PATH_RE = /^\/[^/]+\/api\/sessions\/[^/]+\/stream\/?$/;
+const PROXY_STREAM_PATH_RE = /^\/[^/]+\/api\/(?:sessions\/[^/]+|cu)\/stream\/?$/;
 const TICKET_TTL_MS = 60_000;
 type TicketPurpose = 'stream' | 'terminal';
 
@@ -132,14 +136,24 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     return Array.isArray(value) ? value.filter((origin): origin is string => typeof origin === 'string' && !!origin) : [];
   }
 
-  function upgradeAuthorized(req: IncomingMessage, url: URL): boolean {
-    if (!authToken) return true;
-    if (!tokenMatches(bearerToken(req)) && !ticketValid(url.searchParams.get('ticket'), 'terminal')) return false;
+  function upgradeOriginAllowed(req: IncomingMessage): boolean {
     const origin = req.headers.origin;
     if (!origin) return true;
     const host = req.headers.host || '';
     if (origin === `http://${host}` || origin === `https://${host}`) return true;
     return allowedOrigins().includes(origin);
+  }
+
+  function upgradeAuthorized(req: IncomingMessage, url: URL): boolean {
+    if (!authToken) return true;
+    if (!tokenMatches(bearerToken(req)) && !ticketValid(url.searchParams.get('ticket'), 'terminal')) return false;
+    return upgradeOriginAllowed(req);
+  }
+
+  function bearerUpgradeAuthorized(req: IncomingMessage): boolean {
+    if (!authToken) return true;
+    if (!tokenMatches(bearerToken(req))) return false;
+    return upgradeOriginAllowed(req);
   }
 
   function hostDescriptor(): HostDescriptor {
@@ -162,6 +176,7 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (ports.usageLimitsAvailable()) capabilities.usageLimits = true;
     if (ports.botsAvailable()) capabilities.bots = true;
     if (ports.knowledgeAvailable()) capabilities.knowledge = true;
+    if (ports.computerUseAvailable?.()) capabilities.computerUse = true;
     return {
       hostId,
       label,
@@ -266,6 +281,12 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
       res.status(401).json({ error: 'Unauthorized: bearer token required' });
     };
   }
+  // Strict bearer check with no probe or OPTIONS exemption, for pre-middleware
+  // proxies (such as /api/cu/spaces) that run before app.use('/api', apiGate).
+  const requireBearer: TransportHandler = (req, res, next) => {
+    if (!authToken || tokenMatches(bearerToken(req))) return next();
+    res.status(401).json({ error: 'Unauthorized: bearer token required' });
+  };
   const apiGate = tokenGate(req => PROBE_PATH_RE.test(req.path)
     || (STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')));
   const hostsGate = tokenGate(req => PROXY_STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream'));
@@ -278,5 +299,5 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (!authToken) { res.json({ ticket: null }); return; }
     res.json(mintTicket(purpose));
   };
-  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized };
+  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, requireBearer, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized, bearerUpgradeAuthorized };
 }

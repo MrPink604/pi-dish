@@ -18,14 +18,14 @@
   <meta name="pi-dish-asset-three-gltf" content="vendor/three-gltf.js?v=5c6d6f8d8752f624">
   <!-- Apply device theme tokens synchronously before the stylesheet paints. -->
   <script src="theme-prepaint.js?v=2ab165081b67b57d"></script>
-  <link rel="stylesheet" href="style.css?v=67af728461bf74ed">
+  <link rel="stylesheet" href="style.css?v=b180d2128f04fa85">
   <!-- Vendored (see scripts/build-vendor.js) — no CDN so the UI works on
        LAN-only clients and markdown rendering never silently degrades. -->
   <!-- The app bundles its local feature modules and helpers. Ordered deferred
        scripts load marked before the app. Math, syntax highlighting,
        diagrams, and terminal assets are loaded on first use. -->
   <script src="vendor/marked.min.js?v=15fabce5b65898b3" defer></script>
-  <script src="app.js?v=7cfdb2460ef81295" defer></script>
+  <script src="app.js?v=6c888169e218edc5" defer></script>
 </head>
 <body class="app-page">
   <div class="reachability" role="status">
@@ -174,6 +174,7 @@
               <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span><span class="spinner-text"></span></span>
               <span class="status" id="status"></span>
               <button class="badge mobile-only" id="sessionCwdChip" data-app-click="openStatsModal" title="Session stats" style="display:none"></button>
+              <button class="badge cu-desktop-chip" id="sessionDesktopChip" type="button" style="display:none">Desktop</button>
             </div>
             <div class="ext-ui-status-row collapsed" id="extUiStatuses" style="display:none">
               <div class="ext-ui-status-items" id="extUiStatusItems"></div>
@@ -792,6 +793,11 @@
           </div>
         </div>
       </div>
+
+      <!-- Computer-use desktop viewer (main-pane takeover, .main.cu-viewer-open).
+           Hidden by default so older cached JS/CSS ignores it cleanly; new JS
+           also creates it on demand if missing from older cached HTML. -->
+      <div class="cu-viewer-view" id="cuViewerView" hidden></div>
 
     </main>
   </div>

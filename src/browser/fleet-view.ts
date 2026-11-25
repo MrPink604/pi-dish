@@ -180,6 +180,8 @@ interface HostState { key: string; health?: FleetHealth; error?: string; receive
 export interface FleetViewOptions {
   root: HTMLElement; request: ApiRequest; hosts: () => readonly FleetHost[];
   connection: (host: FleetHost) => Connection; supports: (host: FleetHost) => boolean;
+  supportsComputerUse?: (host: FleetHost) => boolean;
+  openComputerUse?: (host: FleetHost) => void;
   selfIdentityFailure?: () => OriginFailure | null;
   clientSessions: (hostId: string | null) => { live: number; working: number } | null;
   dot: (hostId: string | null) => string;
@@ -196,10 +198,27 @@ export function createFleetView(options: FleetViewOptions) {
   const now = options.now || (() => Date.now());
   const pollMs = options.pollMs ?? 10_000;
   const states = new Map<string, HostState>();
-  let disposed = false, generation = 0, timer: ReturnType<typeof setTimeout> | null = null;
+  const lifetime = new AbortController();
+  let disposed = false, generation = 0, timer: ReturnType<typeof setTimeout> | null = null, listBound = false;
   const keyOf = (host: FleetHost) => `${host.hostId || ''}\0${host.base}\0${host.token || ''}`;
   const isOpen = () => !disposed && options.root.classList.contains('fleet-open');
   const list = () => doc.getElementById('fleetHosts');
+
+  function bindListClicks(): void {
+    if (listBound) return;
+    const element = list();
+    if (!element) return;
+    listBound = true;
+    element.addEventListener('click', (event) => {
+      if (disposed) return;
+      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.fleet-cu-btn') : null;
+      if (!button) return;
+      const targetId = button.dataset.cuHostId ?? '';
+      const targetBase = button.dataset.cuHostBase ?? '';
+      const host = options.hosts().find(candidate => (candidate.hostId || '') === targetId && candidate.base === targetBase);
+      if (host && options.supportsComputerUse?.(host)) options.openComputerUse?.(host);
+    }, { signal: lifetime.signal });
+  }
 
   function schedule(): void {
     if (timer) clearTimeout(timer);
@@ -232,9 +251,12 @@ export function createFleetView(options: FleetViewOptions) {
     const flags = [note && `<span class="fleet-host-state ${connection}">${escapeHtml(note)}</span>`,
       stale && '<span class="fleet-host-state stale" title="No fresh reading in the last 30s">stale</span>',
       state?.error && health ? `<span class="fleet-host-state error" title="${escapeHtml(state.error)}">last refresh failed</span>` : ''].filter(Boolean).join('');
+    const desktopBtn = !offline && options.supportsComputerUse?.(host)
+      ? `<button type="button" class="btn-small fleet-cu-btn" data-cu-host-id="${escapeHtml(host.hostId || '')}" data-cu-host-base="${escapeHtml(host.base)}">Desktop</button>`
+      : '';
     return `<section class="fleet-host${offline ? ' offline' : ''}">` +
       `<header class="fleet-host-head">${options.dot(host.hostId)}<strong class="fleet-host-name">${escapeHtml(hostDisplayLabel(host))}</strong>` +
-      `${host.self ? '<span class="fleet-host-self">this server</span>' : ''}${flags}` +
+      `${host.self ? '<span class="fleet-host-self">this server</span>' : ''}${flags}${desktopBtn}` +
       `${meta ? `<span class="fleet-host-meta">${escapeHtml(meta)}</span>` : ''}</header>` +
       (offline && !health ? '' : fleetSessionsHtml(health?.sessions || null, options.clientSessions(host.hostId))) + body + '</section>';
   }
@@ -242,6 +264,7 @@ export function createFleetView(options: FleetViewOptions) {
   function render(): void {
     const element = list();
     if (!element || !isOpen()) return;
+    bindListClicks();
     const hosts = options.hosts();
     const keys = new Set(hosts.map(keyOf));
     for (const key of states.keys()) if (!keys.has(key)) states.delete(key);
@@ -307,6 +330,6 @@ export function createFleetView(options: FleetViewOptions) {
   }
   return {
     open, close, isOpen, render, refresh: () => { void load(); },
-    dispose() { close(); disposed = true; states.clear(); },
+    dispose() { close(); disposed = true; lifetime.abort(); states.clear(); },
   };
 }

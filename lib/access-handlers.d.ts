@@ -20,6 +20,8 @@ export interface AccessPorts {
     botsAvailable(): boolean;
     /** True where `knowledgeRemote` is set: this host serves the knowledge base. */
     knowledgeAvailable(): boolean;
+    /** True where the guest cu-broker Unix socket exists (PI_DISH_CU_BROKER_SOCKET). */
+    computerUseAvailable?(): boolean;
 }
 export interface AccessHandlers {
     compression: TransportHandler;
@@ -27,12 +29,14 @@ export interface AccessHandlers {
     cors: TransportHandler;
     pageCommentTransport: TransportHandler;
     sameOriginOnly: TransportHandler;
+    requireBearer: TransportHandler;
     apiGate: TransportHandler;
     hostsGate: TransportHandler;
     host: TransportHandler;
     ticket: TransportHandler;
     hostDescriptor(): HostDescriptor;
     upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+    bearerUpgradeAuthorized(req: IncomingMessage): boolean;
 }
 /**
  * PI_DISH_PUBLIC_ORIGINS: comma-separated bare http(s) origins. Anything

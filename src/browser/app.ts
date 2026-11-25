@@ -37,6 +37,7 @@ import { createPushNotifications, type PushNotifications } from './push-notifica
 import { createRecovery } from './recovery';
 import { createHostSettings, hostSettingsHtml } from './host-settings';
 import { createFleetView } from './fleet-view';
+import { createCuViewer } from './cu-viewer';
 import { createSearchView } from './search-view';
 import { createSkills } from './skills';
 import { createUsageView } from './usage-view';
@@ -274,6 +275,7 @@ function hostsChanged() {
   renderHostsSection();
   routinesController.updateButton();
   composerSpeech.updateButton();
+  cuViewerController.syncSessionChip();
   void bots.sync();
   renderSessions();
   agentRefs.hydrate();
@@ -305,7 +307,7 @@ const sessionState: ReturnType<typeof createSessionState> = createSessionState({
   getSelfHostId: () => hostDirectory.self.hostId,
   getHostLabel: hostLabelFor,
   onListsChanged: () => { renderSessions(); vaultApprovals.render(); agentRefs.syncFromState(); },
-  onCurrentChanged: () => { sessionHeader.update(); vaultApprovals.render(); },
+  onCurrentChanged: () => { sessionHeader.update(); cuViewerController.syncSessionChip(); vaultApprovals.render(); },
 });
 
 // Spawn operations are server-process-local and cannot be resumed after a
@@ -865,6 +867,8 @@ function renderHostsSection() {
 const fleetController: ReturnType<typeof createFleetView> = createFleetView({
   root: document.querySelector<HTMLElement>('.main')!, request: readHostApi, hosts: effectiveHosts,
   connection: host => hostConnections.stateOf(host), supports: host => hostSupportsCapability(host, 'hostHealth', appConfig),
+  supportsComputerUse: host => hostSupportsCapability(host, 'computerUse', appConfig),
+  openComputerUse: host => cuViewerController.open(host),
   selfIdentityFailure: () => reachabilityFailures.identity,
   clientSessions: hostId => {
     const self = selfHostEntry();
@@ -883,6 +887,19 @@ const fleetController: ReturnType<typeof createFleetView> = createFleetView({
   },
   unmountSections: () => { recoveryController.unmountPreferences(); hostSettings.unmount(); },
   closeBounce: () => bounceController.close(),
+});
+
+const cuViewerController: ReturnType<typeof createCuViewer> = createCuViewer({
+  root: document.querySelector<HTMLElement>('.main')!,
+  request,
+  hosts: effectiveHosts,
+  host: hostEntryFor,
+  currentSession: () => sessionState.currentSession,
+  supports: host => hostSupportsCapability(host, 'computerUse', appConfig),
+  dot: hostId => hostPresentation.dotHtml(hostId, 'fleet-host-dot'),
+  ticket: host => mintHostTicket(host, 'stream'),
+  closeOtherViews: () => mainPane.beforeTakeover('cuViewer'),
+  toggleSidebar: () => sidebarQuery.open(),
 });
 
 const searchViewController: ReturnType<typeof createSearchView> = createSearchView({
@@ -1227,6 +1244,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); sessionInfo.closeArtifacts();
   } else if (recoveryController.isOpen()) {
     e.preventDefault(); recoveryController.close();
+  } else if (cuViewerController.isOpen()) {
+    e.preventDefault(); cuViewerController.close();
   } else if (fleetController.isOpen()) {
     e.preventDefault(); fleetController.close();
   } else if (routinesController.isOpen()) {
@@ -1256,6 +1275,7 @@ async function loadConfig() {
   terminalController.updateButtons();
   routinesController.updateButton();
   composerSpeech.updateButton();
+  cuViewerController.syncSessionChip();
 }
 
 const themesController: ReturnType<typeof createThemes> = createThemes({ document, storage: localStorage, request, host: () => hostEntryFor(null)!,
@@ -1304,6 +1324,7 @@ const mainPane = createMainPane({
     routines: { close: () => routinesController.close() },
     recovery: { close: () => recoveryController.close(), clearsSessionSurfaces: true },
     fleet: { close: () => fleetController.close(), hostsBounce: true },
+    cuViewer: { close: () => cuViewerController.close() },
   },
   sessionSurfaces: {
     search: { close: () => sessionSearch.close() },

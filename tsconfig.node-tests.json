@@ -82,6 +82,7 @@
     "test/bot-relay-restart.test.ts",
     "test/fixtures/bot-scripted-models.ts",
     "test/knowledge.test.ts",
-    "test/tmux-recovery.test.ts"
+    "test/tmux-recovery.test.ts",
+    "test/cu-viewer.test.ts"
   ]
 }

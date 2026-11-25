@@ -7556,6 +7556,168 @@ body.standalone-file-page {
   .fleet-view-body { padding: 12px 16px 32px; }
   .fleet-hosts { grid-template-columns: 1fr; }
 }
+.fleet-cu-btn { margin-left: auto; flex-shrink: 0; }
+
+/* --- Computer-use desktop viewer (main-pane takeover, .main.cu-viewer-open) */
+.cu-desktop-chip {
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-card));
+  color: var(--text-bright);
+  flex-shrink: 0;
+}
+.cu-desktop-chip:hover { background: color-mix(in srgb, var(--accent) 24%, var(--bg-card)); }
+.cu-viewer-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-dark); }
+.cu-viewer-view[hidden] { display: none !important; }
+.main.cu-viewer-open .cu-viewer-view { display: flex; }
+.main.cu-viewer-open .empty-state,
+.main.cu-viewer-open .session-view { display: none !important; }
+.cu-viewer-header { gap: 8px; flex-wrap: nowrap; min-width: 0; }
+.cu-viewer-title-wrap { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; overflow: hidden; }
+.cu-viewer-dot { display: inline-flex; align-items: center; flex-shrink: 0; }
+.cu-viewer-host { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cu-viewer-mode {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+}
+.cu-viewer-mode[data-mode="interactive"] {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+  background: color-mix(in srgb, var(--success) 16%, var(--bg-card));
+  color: var(--success-bright);
+}
+.cu-viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-darker);
+  min-width: 0;
+}
+.cu-seat-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+.cu-seat-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  white-space: nowrap;
+}
+.cu-seat-badge[data-tone="agent"] {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
+  color: var(--text-bright);
+}
+.cu-seat-badge[data-tone="self"] {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+  background: color-mix(in srgb, var(--success) 18%, var(--bg-card));
+  color: var(--success-bright);
+}
+.cu-seat-badge[data-tone="waiting"],
+.cu-seat-badge[data-tone="human"] {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+  background: color-mix(in srgb, var(--warning) 16%, var(--bg-card));
+  color: var(--warning);
+}
+.cu-seat-detail {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.cu-viewer-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.cu-detach-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.cu-detach-toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
+.cu-viewer-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 14px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-card);
+  color: var(--text);
+}
+.cu-viewer-notice[hidden] { display: none !important; }
+.cu-viewer-notice[data-kind="busy"] {
+  background: color-mix(in srgb, var(--warning) 14%, var(--bg-card));
+  border-bottom-color: color-mix(in srgb, var(--warning) 40%, var(--line));
+  color: var(--text-bright);
+}
+.cu-viewer-notice[data-kind="error"] {
+  background: color-mix(in srgb, var(--error) 14%, var(--bg-card));
+  border-bottom-color: color-mix(in srgb, var(--error) 40%, var(--line));
+  color: var(--text-bright);
+}
+.cu-viewer-notice-text { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
+.cu-viewer-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-darker);
+  overflow: hidden;
+}
+.cu-viewer-placeholder {
+  padding: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.cu-viewer-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: var(--bg-darker);
+}
+@media (max-width: 768px) {
+  .cu-viewer-header { padding: 8px 10px; gap: 6px; }
+  .cu-viewer-bar { padding: 8px 10px; flex-direction: column; align-items: stretch; gap: 8px; }
+  .cu-seat-status { flex: 0 0 auto; }
+  .cu-viewer-actions { width: 100%; justify-content: flex-start; }
+  .cu-viewer-actions .btn { min-height: 36px; }
+  .cu-viewer-notice { padding: 8px 10px; }
+}
 /* Bulk lifecycle controls live in the Fleet view. */
 .bounce-settings { border-bottom: 1px solid var(--line); padding: 0 0 14px; margin-bottom: 4px; min-width: 0; }
 .bounce-settings > summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 600; padding: 8px 0; }
