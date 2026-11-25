@@ -52,6 +52,8 @@ export interface CatalogRoutineAnnotation {
 export interface SessionCatalogInput {
   readonly active: readonly CatalogLiveObservation[];
   readonly history: readonly CatalogHistoryObservation[];
+  /** Discovery candidates deferred by PI_DISH_INDEX_SYNC_BUDGET (never serialized by /api/sessions). */
+  readonly deferred?: readonly DiscoveryCandidate[];
   readonly launchParents: ReadonlyMap<SessionId, SessionId>;
   readonly launchSourceBases?: ReadonlyMap<SessionId, LaunchSourceBasis>;
   readonly routines: ReadonlyMap<SessionId, CatalogRoutineAnnotation>;
@@ -94,6 +96,8 @@ export interface SessionCatalog {
   readonly children: readonly CatalogSession[];
   readonly byId: ReadonlyMap<SessionId, CatalogSession>;
   readonly byPath: ReadonlyMap<string, CatalogSession>;
+  /** Discovery candidates deferred by PI_DISH_INDEX_SYNC_BUDGET (internal to server resolution). */
+  readonly deferred: readonly DiscoveryCandidate[];
   readonly indexing: boolean;
   readonly discoveryTruncated: boolean;
   readonly discoverySkipped: number;
@@ -384,7 +388,9 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
       session.routineInvocationId = routine.routineInvocationId;
     }
   }
-  return { list, active, previous, children, byId, byPath,
+  const deferred = (input.deferred || []).filter(candidate =>
+    !seen.has(candidate.routeId) && (!input.hidePrivate || !candidate.private));
+  return { list, active, previous, children, byId, byPath, deferred,
     indexing: input.indexing, discoveryTruncated: input.discoveryTruncated, discoverySkipped: input.discoverySkipped };
 }
 

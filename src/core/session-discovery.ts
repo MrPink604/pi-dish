@@ -5,7 +5,7 @@ import { getHarness, listHarnesses } from './harnesses';
 import { isPrivateSessionFile, sessionRootsFor } from './private-sessions';
 import { record as isRecord } from './helper-values';
 import type { HarnessDescriptor, HarnessId, NativeSessionId, SessionId } from './contracts';
-import type { DiscoveryCandidate, DiscoveryOptions, DiscoveryResult } from './session-source';
+import type { DiscoveryCandidate, DiscoveryOptions, DiscoveryResult, LiveSourceObservation } from './session-source';
 import { readSessionTailEntry } from './session-files';
 import { AGY_BRAIN_PROFILE_ID, readAgySubagentDescriptors } from './agy-brain';
 import { errorMessage } from './http-boundary';
@@ -597,33 +597,78 @@ function inspectSubsessionExits(parentFile: unknown, options: DiscoveryOptions =
 
 const VALID_TASK_AGENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+/** Authoritative route -> file snapshot from discovery (omits ambiguous header IDs and lets basename/ordinary roots win). */
+interface AuthoritativeRouteSnapshot {
+  readonly harnessId: HarnessId;
+  readonly byRoute: ReadonlyMap<SessionId, string>;
+  readonly truncated: boolean;
+}
+
+interface ResolveNestedSubsessionOptions {
+  readonly harnessId?: HarnessId;
+  readonly descriptor?: HarnessDescriptor;
+  readonly snapshot?: AuthoritativeRouteSnapshot;
+  readonly rootDir?: string;
+  readonly roots?: Partial<Record<HarnessId, string>>;
+  readonly privateRoots?: Partial<Record<HarnessId, string>>;
+  readonly live?: readonly LiveSourceObservation[];
+}
+
+interface NestedSubsessionResolverOptions {
+  readonly harnessId?: HarnessId;
+  readonly descriptor?: HarnessDescriptor;
+  readonly rootDir?: string;
+  readonly roots?: Partial<Record<HarnessId, string>>;
+  readonly privateRoots?: Partial<Record<HarnessId, string>>;
+  /** Snapshot reuse TTL in ms (0 = reuse one lazy snapshot for the resolver's lifetime). */
+  readonly snapshotTtlMs?: number;
+  readonly live?: (routeId: SessionId) => readonly LiveSourceObservation[];
+}
+
+function sameFilePath(left: string, right: string): boolean {
+  if (path.resolve(left) === path.resolve(right)) return true;
+  try { return fs.realpathSync(left) === fs.realpathSync(right); } catch { return false; }
+}
+
+/** Build one authoritative route -> file map for a harness using the exact discovery precedence rules. */
+function buildAuthoritativeRouteSnapshot(
+  descriptor: HarnessDescriptor,
+  options: { rootDir?: string; roots?: Partial<Record<HarnessId, string>>; privateRoots?: Partial<Record<HarnessId, string>> } = {},
+): AuthoritativeRouteSnapshot {
+  const result = options.rootDir
+    ? discoverSessionCandidates(options.rootDir, { descriptor })
+    : discoverHarnessSessions([descriptor], { roots: options.roots, privateRoots: options.privateRoots });
+  const byRoute = new Map<SessionId, string>();
+  for (const candidate of result.candidates) {
+    if (!byRoute.has(candidate.routeId)) byRoute.set(candidate.routeId, candidate.file);
+  }
+  return { harnessId: descriptor.id, byRoute, truncated: result.truncated };
+}
+
 /** Safe OMP subagent filename stem (rejects traversal and OMP's `changes.jsonl` log). */
 function isValidTaskAgentId(value: unknown): value is string {
   return typeof value === 'string'
+    && value.length > 0
+    && value.length <= 128
     && VALID_TASK_AGENT_ID_RE.test(value)
     && !value.includes('..')
     && value !== 'changes';
 }
 
-/**
- * Resolve one OMP `task` subagent id (`<parent-stem>/<agentId>.jsonl`) to its
- * canonical pi-dish route id (`~sk1_...`), O(1) via the stat-cached header read.
- * Never follows symlinks or guesses when the transcript file is absent or invalid.
- */
-function resolveNestedSubsessionRouteId(
+function readLocalNestedCandidate(
   parentFile: unknown,
   agentId: unknown,
-  options: { harnessId?: HarnessId; descriptor?: HarnessDescriptor } = {},
-): SessionId | null {
-  const descriptor = options.descriptor || getHarness(options.harnessId || 'omp');
+  descriptor: HarnessDescriptor | null | undefined,
+): { subFile: string; nativeId: NativeSessionId; routeId: SessionId; fileStamp: string } | null {
   if (!descriptor?.nestedSubsessions || typeof parentFile !== 'string' || !parentFile.endsWith('.jsonl')) return null;
   if (!isValidTaskAgentId(agentId)) return null;
   const subDir = parentFile.slice(0, -'.jsonl'.length);
   const subFile = path.join(subDir, `${agentId}.jsonl`);
+  let fileStat: fs.Stats;
   try {
     const dirStat = fs.lstatSync(subDir);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return null;
-    const fileStat = fs.lstatSync(subFile);
+    fileStat = fs.lstatSync(subFile);
     if (!fileStat.isFile() || fileStat.isSymbolicLink()) return null;
   } catch {
     return null;
@@ -631,7 +676,106 @@ function resolveNestedSubsessionRouteId(
   const header = readSessionHeader(subFile, descriptor.profileId);
   const nativeId = safeHeaderSessionId(header?.id);
   if (!nativeId) return null;
-  return canonicalSessionId(encodeSessionKey(descriptor.id, nativeId));
+  const routeId = canonicalSessionId(encodeSessionKey(descriptor.id, nativeId));
+  const fileStamp = `${fileStat.mtimeMs}:${fileStat.size}:${fileStat.ino}`;
+  return { subFile, nativeId, routeId, fileStamp };
+}
+
+function liveClaimConflicts(
+  live: readonly LiveSourceObservation[] | undefined,
+  harnessId: HarnessId,
+  nativeId: NativeSessionId,
+  subFile: string,
+): boolean {
+  if (!live?.length) return false;
+  for (const observation of live) {
+    if (observation.harnessId === harnessId && observation.nativeSessionId === nativeId
+        && observation.file && !sameFilePath(observation.file, subFile)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolve one OMP `task` subagent id (`<parent-stem>/<agentId>.jsonl`) to its
+ * canonical pi-dish route id (`~sk1_...`), verified back against discovery's
+ * authoritative route-to-file mapping so collisions and non-routable copies
+ * never produce a link.
+ */
+function resolveNestedSubsessionRouteId(
+  parentFile: unknown,
+  agentId: unknown,
+  options: ResolveNestedSubsessionOptions = {},
+): SessionId | null {
+  const descriptor = options.descriptor || getHarness(options.harnessId || 'omp');
+  const local = readLocalNestedCandidate(parentFile, agentId, descriptor);
+  if (!local || !descriptor) return null;
+  if (liveClaimConflicts(options.live, descriptor.id, local.nativeId, local.subFile)) return null;
+  const snapshot = options.snapshot ?? buildAuthoritativeRouteSnapshot(descriptor, options);
+  const winnerFile = snapshot.byRoute.get(local.routeId);
+  if (!winnerFile || !sameFilePath(winnerFile, local.subFile)) return null;
+  return local.routeId;
+}
+
+/**
+ * Reusable authoritative resolver for a request (snapshotTtlMs: 0) or long-lived
+ * SSE stream (snapshotTtlMs > 0). Never scans per chip: refreshes at most once
+ * per frame when a previously unseen file appears, and memoizes misses within a frame.
+ */
+function createNestedSubsessionResolver(options: NestedSubsessionResolverOptions = {}) {
+  const descriptor = options.descriptor || getHarness(options.harnessId || 'omp');
+  const ttlMs = options.snapshotTtlMs ?? 0;
+  let cached: { snapshot: AuthoritativeRouteSnapshot; builtAt: number; checkedStamps: Map<string, string> } | null = null;
+
+  const refreshSnapshot = () => {
+    if (!descriptor) return null;
+    cached = {
+      snapshot: buildAuthoritativeRouteSnapshot(descriptor, options),
+      builtAt: Date.now(),
+      checkedStamps: new Map(),
+    };
+    return cached;
+  };
+
+  function forParentFrame(parentFile: string): (agentId: string) => SessionId | null {
+    const frameMemo = new Map<string, SessionId | null>();
+    let refreshedInFrame = false;
+    return (agentId: string): SessionId | null => {
+      if (frameMemo.has(agentId)) return frameMemo.get(agentId)!;
+      const local = readLocalNestedCandidate(parentFile, agentId, descriptor);
+      if (!local || !descriptor) {
+        frameMemo.set(agentId, null);
+        return null;
+      }
+      if (liveClaimConflicts(options.live?.(local.routeId), descriptor.id, local.nativeId, local.subFile)) {
+        frameMemo.set(agentId, null);
+        return null;
+      }
+      if (!cached) {
+        refreshSnapshot();
+        refreshedInFrame = true;
+      } else if (ttlMs > 0 && !refreshedInFrame) {
+        const expired = Date.now() - cached.builtAt >= ttlMs;
+        const winner = cached.snapshot.byRoute.get(local.routeId);
+        const alreadyVerified = !!(winner && sameFilePath(winner, local.subFile));
+        const alreadyChecked = cached.checkedStamps.get(local.subFile) === local.fileStamp;
+        if (expired || (!alreadyVerified && !alreadyChecked)) {
+          refreshSnapshot();
+          refreshedInFrame = true;
+        }
+      }
+      const active = cached!;
+      const winnerFile = active.snapshot.byRoute.get(local.routeId);
+      if (active.checkedStamps.size >= HEADER_CACHE_MAX) active.checkedStamps.clear();
+      active.checkedStamps.set(local.subFile, local.fileStamp);
+      const route = winnerFile && sameFilePath(winnerFile, local.subFile) ? local.routeId : null;
+      frameMemo.set(agentId, route);
+      return route;
+    };
+  }
+
+  return { forParentFrame };
 }
 
 /** Retire all parser-profile observations of a replaced file. */
@@ -651,6 +795,8 @@ export = {
   discoverSubsessionCandidates,
   inspectSubsessionExits,
   isValidTaskAgentId,
+  buildAuthoritativeRouteSnapshot,
+  createNestedSubsessionResolver,
   resolveNestedSubsessionRouteId,
   readSessionHeader,
   safeHeaderSessionId,

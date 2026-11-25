@@ -17,7 +17,7 @@ import { collectActivePath, walkBranchTree } from './helper-tree';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as piSDK from './pi-sdk';
 import { subsessionLabel } from './session-catalog';
-import { resolveNestedSubsessionRouteId } from './session-discovery';
+import { createNestedSubsessionResolver } from './session-discovery';
 import { extractTaskSubagents, type TaskSubagentProjection } from './tool-event-stream';
 import {
   getSessionStats, readSessionMessageById, readSessionMessages, readSessionMessagesAtLeaf, readSessionSearchText,
@@ -58,11 +58,111 @@ const VALID_ENTRY_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?$/;
 const BLOB_REF_RE = /^blob:sha256:([0-9a-f]{64})$/;
 
 interface TaskMessageProjection {
-  readonly byCallId: ReadonlyMap<string, readonly TaskSubagentProjection[]>;
-  readonly resolve: (agentId: string) => string | null;
+  forCall(msgIdx: number, blockIdx: number): readonly TaskSubagentProjection[] | undefined;
+  forResult(msgIdx: number): readonly TaskSubagentProjection[] | undefined;
 }
 
-/** Copy only the projected image/video blocks and task subagent links; never mutate the borrowed parser cache. */
+/** Normalize provider-suffixed toolCallIds (`call_X|fc_Y` -> `call_X`). */
+function normalizeTaskToolCallId(id: string): string {
+  const pipe = id.indexOf('|');
+  return pipe > 0 ? id.slice(0, pipe) : id;
+}
+
+interface PendingTaskCall {
+  readonly callKey: string;
+  readonly rawId: string;
+  readonly normId: string;
+}
+
+/**
+ * Pair task toolCall occurrences to their matching toolResult message index in
+ * chronological order, purely in memory (zero filesystem reads).
+ * - Matches exact IDs first and provider-normalized IDs (`call_X` <-> `call_X|fc_Y`).
+ * - A reused ID in a later turn pairs only with its own occurrence and never relinks
+ *   an earlier card.
+ * - Fails closed on ambiguity (duplicate open calls sharing a raw/normalized ID, or
+ *   multiple toolResults claiming the same call occurrence).
+ */
+export function pairTaskCallsInMemory(messages: readonly SessionMessage[]): Map<string, number> {
+  const pairs = new Map<string, number>();
+  const pending: PendingTaskCall[] = [];
+  const recentPairedByRaw = new Map<string, string>();
+  const recentPairedByNorm = new Map<string, string>();
+  const poisonedNorms = new Set<string>();
+
+  for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
+    const msg = messages[msgIdx];
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      for (let blockIdx = 0; blockIdx < msg.content.length; blockIdx++) {
+        const block = asRecord(msg.content[blockIdx]);
+        if (block.type !== 'toolCall' || block.name !== 'task' || typeof block.id !== 'string' || !block.id) continue;
+        const rawId = block.id;
+        const normId = normalizeTaskToolCallId(rawId);
+        // Only start a clean pairing scope for this normalized ID if no earlier
+        // call sharing it is still awaiting a result.
+        if (!pending.some(c => c.normId === normId)) {
+          recentPairedByNorm.delete(normId);
+          poisonedNorms.delete(normId);
+        }
+        recentPairedByRaw.delete(rawId);
+        pending.push({ callKey: `${msgIdx}:${blockIdx}`, rawId, normId });
+      }
+      continue;
+    }
+    if (msg.role !== 'toolResult' || msg.toolName !== 'task' || typeof msg.toolCallId !== 'string' || !msg.toolCallId) {
+      continue;
+    }
+    const resRaw = msg.toolCallId;
+    const resNorm = normalizeTaskToolCallId(resRaw);
+    const exactMatches = pending.filter(c => c.rawId === resRaw);
+    const normMatches = pending.filter(c => c.normId === resNorm);
+
+    if (exactMatches.length === 1 && (resRaw.includes('|') || normMatches.length === 1) && !poisonedNorms.has(resNorm)) {
+      const matched = exactMatches[0]!;
+      pending.splice(pending.indexOf(matched), 1);
+      pairs.set(matched.callKey, msgIdx);
+      recentPairedByRaw.set(matched.rawId, matched.callKey);
+      recentPairedByNorm.set(resNorm, matched.callKey);
+      continue;
+    }
+    if (exactMatches.length === 0 && normMatches.length === 1 && !poisonedNorms.has(resNorm)) {
+      const matched = normMatches[0]!;
+      if (resRaw.includes('|') || matched.rawId.includes('|')) {
+        pending.splice(pending.indexOf(matched), 1);
+        pairs.set(matched.callKey, msgIdx);
+        recentPairedByRaw.set(matched.rawId, matched.callKey);
+        recentPairedByNorm.set(resNorm, matched.callKey);
+        continue;
+      }
+    }
+    if (exactMatches.length > 1 || normMatches.length > 1) {
+      for (let i = pending.length - 1; i >= 0; i--) {
+        if (pending[i]!.normId === resNorm) pending.splice(i, 1);
+      }
+      poisonedNorms.add(resNorm);
+      const prevNormKey = recentPairedByNorm.get(resNorm);
+      if (prevNormKey) { pairs.delete(prevNormKey); recentPairedByNorm.delete(resNorm); }
+      continue;
+    }
+    // A second toolResult with no matching pending call invalidates the already-paired call for this ID.
+    const prevRawKey = recentPairedByRaw.get(resRaw);
+    if (prevRawKey) {
+      pairs.delete(prevRawKey);
+      recentPairedByRaw.delete(resRaw);
+    }
+    if (normMatches.length === 0) {
+      const prevNormKey = recentPairedByNorm.get(resNorm);
+      if (prevNormKey) {
+        pairs.delete(prevNormKey);
+        recentPairedByNorm.delete(resNorm);
+        poisonedNorms.add(resNorm);
+      }
+    }
+  }
+  return pairs;
+}
+
+/** Copy only the projected image/video blocks and verified task subagent links; never mutate the borrowed parser cache. */
 function messageForClient(sessionId: string, message: SessionMessage, index: number, taskProjection?: TaskMessageProjection) {
   let content: unknown = message.content;
   let contentChanged = false;
@@ -89,11 +189,18 @@ function messageForClient(sessionId: string, message: SessionMessage, index: num
           url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/media/${blockIndex}`,
         };
       }
-      if (taskProjection && block.type === 'toolCall' && block.name === 'task' && typeof block.id === 'string') {
-        const subagents = taskProjection.byCallId.get(block.id);
-        if (subagents?.length) {
+      if (block.type === 'toolCall') {
+        const verified = block.name === 'task' ? taskProjection?.forCall(index, blockIndex) : undefined;
+        const hasRaw = Object.prototype.hasOwnProperty.call(block, 'taskSubagents');
+        if (verified?.length) {
           contentChanged = true;
-          return { ...block, taskSubagents: subagents };
+          return { ...block, taskSubagents: verified };
+        }
+        if (hasRaw) {
+          // Strip any persisted/untrusted taskSubagents from raw JSONL blocks.
+          contentChanged = true;
+          const { taskSubagents: _stripped, ...rest } = block;
+          return rest;
         }
       }
       return value;
@@ -101,12 +208,18 @@ function messageForClient(sessionId: string, message: SessionMessage, index: num
   }
   let details: unknown = message.details;
   let detailsChanged = false;
-  if (taskProjection && message.role === 'toolResult' && message.toolName === 'task') {
-    const subagents = (typeof message.toolCallId === 'string' ? taskProjection.byCallId.get(message.toolCallId) : undefined)
-      ?? extractTaskSubagents(message.details, taskProjection.resolve);
-    if (subagents.length) {
+  if (message.role === 'toolResult' && message.toolName === 'task') {
+    const verified = taskProjection?.forResult(index);
+    const rawDetails = isRecord(message.details) ? message.details : null;
+    const hasRawSubagents = !!(rawDetails && Object.prototype.hasOwnProperty.call(rawDetails, 'subagents'));
+    if (verified?.length) {
       detailsChanged = true;
-      details = { ...(isRecord(message.details) ? message.details : {}), subagents };
+      details = { ...(rawDetails || {}), subagents: verified };
+    } else if (hasRawSubagents) {
+      // Strip any persisted/untrusted details.subagents when the server produced no verified entries.
+      detailsChanged = true;
+      const { subagents: _stripped, ...rest } = rawDetails!;
+      details = rest;
     }
   }
   return {
@@ -351,19 +464,39 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
     const descriptor = getHarness(source.harnessId);
     let taskProjection: TaskMessageProjection | undefined;
     if (descriptor?.nestedSubsessions && source.file.endsWith('.jsonl')) {
-      const hasTaskInPage = pageMessages.some(m =>
-        (m.role === 'toolResult' && m.toolName === 'task')
-        || (m.role === 'assistant' && Array.isArray(m.content)
-          && m.content.some(block => isRecord(block) && block.type === 'toolCall' && block.name === 'task')));
-      if (hasTaskInPage) {
-        const resolve = (agentId: string) => resolveNestedSubsessionRouteId(source.file, agentId, { descriptor });
-        const byCallId = new Map<string, readonly TaskSubagentProjection[]>();
-        for (const msg of all) {
-          if (msg.role !== 'toolResult' || msg.toolName !== 'task' || typeof msg.toolCallId !== 'string' || !msg.toolCallId) continue;
-          const subagents = extractTaskSubagents(msg.details, resolve);
-          if (subagents.length) byCallId.set(msg.toolCallId, subagents);
-        }
-        taskProjection = { byCallId, resolve };
+      const hasTaskCallInPage = pageMessages.some(m =>
+        m.role === 'assistant' && Array.isArray(m.content)
+          && m.content.some(block => isRecord(block) && block.type === 'toolCall' && block.name === 'task'));
+      const hasTaskResultInPage = pageMessages.some(m => m.role === 'toolResult' && m.toolName === 'task');
+      if (hasTaskCallInPage || hasTaskResultInPage) {
+        // Pure in-memory occurrence pairing (zero filesystem work for off-page invocations).
+        const pairedResultByCall = hasTaskCallInPage ? pairTaskCallsInMemory(all) : null;
+        // Lazily builds at most ONE authoritative discovery snapshot for the whole page request.
+        const resolveAgent = createNestedSubsessionResolver({
+          descriptor,
+          snapshotTtlMs: 0,
+          live: route => ownership.liveSourceObservations(route),
+        }).forParentFrame(source.file);
+        const resolvedByMsgIdx = new Map<number, readonly TaskSubagentProjection[]>();
+        const resolveResultMsg = (msgIdx: number): readonly TaskSubagentProjection[] => {
+          const cached = resolvedByMsgIdx.get(msgIdx);
+          if (cached) return cached;
+          const msg = all[msgIdx];
+          const subagents = msg && msg.role === 'toolResult' && msg.toolName === 'task'
+            ? extractTaskSubagents(msg.details, resolveAgent, { allowProjectedSubagents: false })
+            : [];
+          resolvedByMsgIdx.set(msgIdx, subagents);
+          return subagents;
+        };
+        taskProjection = {
+          forCall(msgIdx, blockIdx) {
+            const resIdx = pairedResultByCall?.get(`${msgIdx}:${blockIdx}`);
+            return resIdx !== undefined ? resolveResultMsg(resIdx) : undefined;
+          },
+          forResult(msgIdx) {
+            return resolveResultMsg(msgIdx);
+          },
+        };
       }
     }
     const slice = pageMessages.map((m, i) => messageForClient(routeId, m, startIdx + i, taskProjection));

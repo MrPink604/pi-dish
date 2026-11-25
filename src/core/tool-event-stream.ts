@@ -10,10 +10,8 @@ const EVAL_EVENT_TEXT_LIMIT = 300;
 const CODEMODE_CALL_LIMIT = 100;
 const CODEMODE_CALL_TEXT_LIMIT = 500;
 const TASK_SUBAGENT_LIMIT = 64;
+const TASK_ROW_SCAN_LIMIT = 256;
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const RUNNING_AGENT_TEXT_RE = /^Running agent ([A-Za-z0-9][A-Za-z0-9._-]{0,127})\.\.\.$/;
-const SPAWNED_BG_PREFIX_RE = /^Spawned (?:\d+ )?background agents?\b/;
-const SPAWNED_BG_LINE_RE = /^- `([A-Za-z0-9][A-Za-z0-9._-]{0,127})` \(job `([A-Za-z0-9][A-Za-z0-9._-]{0,127})`\)/gm;
 
 export interface TaskSubagentProjection {
   readonly id: string;
@@ -25,39 +23,40 @@ export interface TaskSubagentProjection {
   readonly sessionId?: string;
 }
 
+export interface ExtractTaskSubagentsOptions {
+  /** Allow bridge-projected `details.subagents` (live SSE wire); persisted JSONL reads only raw OMP `progress`/`results`. */
+  readonly allowProjectedSubagents?: boolean;
+}
+
 export interface ToolEventProjectionOptions {
-  /** Resolves an OMP task subagent id (`<parent>/<id>.jsonl`) to its canonical route id (`~sk1_...`). */
+  /** Resolves an OMP task subagent id (`<parent>/<id>.jsonl`) to its verified canonical route id (`~sk1_...`). */
   readonly resolveTaskSubagent?: (agentId: string) => string | null;
+  /** Creates one frame-scoped resolver per emitted snapshot (called only after coalescing). */
+  readonly resolveTaskSubagentsFrame?: () => (agentId: string) => string | null;
 }
 
 function validTaskId(value: unknown): value is string {
-  return typeof value === 'string' && TASK_ID_RE.test(value) && !value.includes('..') && value !== 'changes';
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 && TASK_ID_RE.test(value) && !value.includes('..') && value !== 'changes';
 }
 
 function boundedString(value: unknown, max: number): string | undefined {
   return typeof value === 'string' && value ? value.slice(0, max) : undefined;
 }
 
-function contentText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  let out = '';
-  for (const block of content) {
-    if (record(block) && block.type === 'text' && typeof block.text === 'string') out += block.text;
-  }
-  return out;
-}
-
 /**
- * Project OMP `task` subagent identities from either raw OMP details (`progress`/`results`)
- * or already-projected `details.subagents` (idempotent across bridge -> server hops).
- * Never walks traces, outputs, or arbitrary keys on `details`.
+ * Project OMP `task` subagent identities from structured OMP details (`progress`/`results`)
+ * or bridge-projected `details.subagents` (when `allowProjectedSubagents` is enabled).
+ * Untrusted incoming `sessionId` / route fields are ALWAYS stripped; routes are attached
+ * strictly from `resolveTaskSubagent` after applying the 64-entry cap, with misses memoized
+ * within the frame. Never walks traces, outputs, text content, or arbitrary keys on `details`.
  */
 export function extractTaskSubagents(
   details: unknown,
   resolveTaskSubagent?: (agentId: string) => string | null,
-  content?: unknown,
+  options: ExtractTaskSubagentsOptions = {},
 ): TaskSubagentProjection[] {
+  if (!record(details)) return [];
+  const allowProjected = options.allowProjectedSubagents !== false;
   const byId = new Map<string, TaskSubagentProjection>();
   const order: string[] = [];
   const upsert = (entry: TaskSubagentProjection) => {
@@ -66,9 +65,6 @@ export function extractTaskSubagents(
       if (order.length >= TASK_SUBAGENT_LIMIT) return;
       order.push(entry.id);
     }
-    const resolvedId = entry.sessionId
-      || existing?.sessionId
-      || (resolveTaskSubagent ? resolveTaskSubagent(entry.id) || undefined : undefined);
     const merged: TaskSubagentProjection = {
       id: entry.id,
       ...(entry.index !== undefined ? { index: entry.index } : existing?.index !== undefined ? { index: existing.index } : {}),
@@ -76,85 +72,79 @@ export function extractTaskSubagents(
       ...(entry.status ? { status: entry.status } : existing?.status ? { status: existing.status } : {}),
       ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : existing?.exitCode !== undefined ? { exitCode: existing.exitCode } : {}),
       ...(entry.durationMs !== undefined ? { durationMs: entry.durationMs } : existing?.durationMs !== undefined ? { durationMs: existing.durationMs } : {}),
-      ...(resolvedId ? { sessionId: resolvedId } : {}),
     };
     byId.set(entry.id, merged);
   };
 
-  if (record(details)) {
-    // 1. Already-projected hop (bridge -> server): preserve fields and resolve sessionId if missing.
-    if (Array.isArray(details.subagents)) {
-      for (const item of details.subagents) {
-        if (!record(item) || !validTaskId(item.id)) continue;
-        upsert({
-          id: item.id,
-          ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
-          ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
-          ...(boundedString(item.status, 32) ? { status: boundedString(item.status, 32) } : {}),
-          ...(finite(item.exitCode) ? { exitCode: item.exitCode } : {}),
-          ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
-          ...(boundedString(item.sessionId, 260) ? { sessionId: boundedString(item.sessionId, 260) } : {}),
-        });
-      }
+  // 1. Bridge-projected hop (live wire): preserve bounded metadata, ALWAYS strip any incoming route/sessionId.
+  if (allowProjected && Array.isArray(details.subagents)) {
+    const limit = Math.min(details.subagents.length, TASK_ROW_SCAN_LIMIT);
+    for (let i = 0; i < limit; i++) {
+      const item = details.subagents[i];
+      if (!record(item) || !validTaskId(item.id)) continue;
+      upsert({
+        id: item.id,
+        ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
+        ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
+        ...(boundedString(item.status, 32) ? { status: boundedString(item.status, 32) } : {}),
+        ...(finite(item.exitCode) ? { exitCode: item.exitCode } : {}),
+        ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
+      });
     }
-    // 2. Raw OMP `progress` rows (running sync/batch updates, async background spawns, error fallback).
-    if (Array.isArray(details.progress)) {
-      for (const item of details.progress) {
-        if (!record(item) || !validTaskId(item.id)) continue;
-        upsert({
-          id: item.id,
-          ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
-          ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
-          ...(boundedString(item.status, 32) ? { status: boundedString(item.status, 32) } : {}),
-          ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
-        });
-      }
+  }
+  // 2. Raw OMP `progress` rows (running sync/batch updates, async background spawns, error fallback).
+  if (Array.isArray(details.progress)) {
+    const limit = Math.min(details.progress.length, TASK_ROW_SCAN_LIMIT);
+    for (let i = 0; i < limit; i++) {
+      const item = details.progress[i];
+      if (!record(item) || !validTaskId(item.id)) continue;
+      upsert({
+        id: item.id,
+        ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
+        ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
+        ...(boundedString(item.status, 32) ? { status: boundedString(item.status, 32) } : {}),
+        ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
+      });
     }
-    // 3. Raw OMP `results` rows (completed/failed sync runs override status/exitCode/durationMs).
-    if (Array.isArray(details.results)) {
-      for (const item of details.results) {
-        if (!record(item) || !validTaskId(item.id)) continue;
-        const exitCode = finite(item.exitCode) ? item.exitCode : undefined;
-        const status = item.aborted === true
-          ? 'aborted'
-          : (exitCode !== undefined && exitCode !== 0) || typeof item.error === 'string' && item.error
-            ? 'failed'
-            : 'completed';
-        upsert({
-          id: item.id,
-          ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
-          ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
-          status,
-          ...(exitCode !== undefined ? { exitCode } : {}),
-          ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
-        });
-      }
+  }
+  // 3. Raw OMP `results` rows (completed/failed sync runs override status/exitCode/durationMs).
+  if (Array.isArray(details.results)) {
+    const limit = Math.min(details.results.length, TASK_ROW_SCAN_LIMIT);
+    for (let i = 0; i < limit; i++) {
+      const item = details.results[i];
+      if (!record(item) || !validTaskId(item.id)) continue;
+      const exitCode = finite(item.exitCode) ? item.exitCode : undefined;
+      const status = item.aborted === true
+        ? 'aborted'
+        : (exitCode !== undefined && exitCode !== 0) || typeof item.error === 'string' && item.error
+          ? 'failed'
+          : 'completed';
+      upsert({
+        id: item.id,
+        ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
+        ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
+        status,
+        ...(exitCode !== undefined ? { exitCode } : {}),
+        ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
+      });
     }
   }
 
-  // 4. Unreloaded-bridge fallback: when an already-running bridge stripped `details`
-  // before this server started, accept OMP's exact status text ONLY when the matching
-  // `<parent-stem>/<id>.jsonl` file is verified on disk with a valid session header.
-  if (!order.length && resolveTaskSubagent && content !== undefined) {
-    const text = contentText(content).trim();
-    const single = RUNNING_AGENT_TEXT_RE.exec(text);
-    if (single && validTaskId(single[1])) {
-      const sessionId = resolveTaskSubagent(single[1]);
-      if (sessionId) upsert({ id: single[1], status: 'running', sessionId });
-    } else if (SPAWNED_BG_PREFIX_RE.test(text)) {
-      SPAWNED_BG_LINE_RE.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = SPAWNED_BG_LINE_RE.exec(text)) !== null) {
-        if (match[1] !== match[2] || !validTaskId(match[1])) continue;
-        const sessionId = resolveTaskSubagent(match[1]);
-        if (sessionId) upsert({ id: match[1], status: 'running', sessionId });
-      }
-    }
-  }
-
-  const out = order.map(id => byId.get(id)!);
+  let out = order.map(id => byId.get(id)!);
   if (out.length > 1 && out.every(item => item.index !== undefined)) {
     out.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  }
+  if (resolveTaskSubagent && out.length) {
+    const memo = new Map<string, string | null>();
+    out = out.map(item => {
+      let resolved: string | null;
+      if (memo.has(item.id)) resolved = memo.get(item.id)!;
+      else {
+        resolved = resolveTaskSubagent(item.id) || null;
+        memo.set(item.id, resolved);
+      }
+      return resolved ? { ...item, sessionId: resolved } : item;
+    });
   }
   return out;
 }
@@ -194,6 +184,10 @@ function summarizeCodemodeObjectArgs(args: Record<string, unknown>): string | un
   return `{${parts.join(',')}}`.slice(0, CODEMODE_CALL_TEXT_LIMIT);
 }
 
+function resolveFrameOf(options?: ToolEventProjectionOptions): ((agentId: string) => string | null) | undefined {
+  return options?.resolveTaskSubagentsFrame ? options.resolveTaskSubagentsFrame() : options?.resolveTaskSubagent;
+}
+
 /**
  * The few result details the browser formats: OMP bash timing/exit/deadline,
  * wait job rows, eval cell status/activity, codemode call rows and task
@@ -204,10 +198,9 @@ function projectToolDetails(
   toolName: unknown,
   details: unknown,
   options?: ToolEventProjectionOptions,
-  content?: unknown,
 ): Record<string, unknown> | undefined {
   if (toolName === 'task') {
-    const subagents = extractTaskSubagents(details, options?.resolveTaskSubagent, content);
+    const subagents = extractTaskSubagents(details, resolveFrameOf(options), { allowProjectedSubagents: true });
     return subagents.length ? { subagents } : undefined;
   }
   if (!record(details)) return undefined;
@@ -278,7 +271,7 @@ export function projectToolEvent(event: string, value: unknown, options?: ToolEv
   const intent = typeof value.intent === 'string' && value.intent ? value.intent : undefined;
   const result = (value: unknown) => {
     if (!record(value)) return value;
-    const details = projectToolDetails(toolName, value.details, options, value.content);
+    const details = projectToolDetails(toolName, value.details, options);
     return details ? { content: value.content, details } : { content: value.content };
   };
   return {
@@ -286,6 +279,26 @@ export function projectToolEvent(event: string, value: unknown, options?: ToolEv
     ...(intent ? { intent } : {}),
     ...(event === 'tool_execution_update' ? { partialResult: result(value.partialResult) } : {}),
     ...(event === 'tool_execution_end' ? { result: result(value.result) } : {}),
+  };
+}
+
+/** Resolve verified task subagent routes on a projected snapshot right before emission. */
+function resolveProjectedTaskEvent(event: string, data: unknown, options?: ToolEventProjectionOptions): unknown {
+  if (!options?.resolveTaskSubagent && !options?.resolveTaskSubagentsFrame) return data;
+  if (!record(data) || data.toolName !== 'task') return data;
+  const slotKey = event === 'tool_execution_update' ? 'partialResult'
+    : event === 'tool_execution_end' ? 'result' : null;
+  if (!slotKey) return data;
+  const slot = data[slotKey];
+  if (!record(slot) || !record(slot.details) || !Array.isArray(slot.details.subagents) || !slot.details.subagents.length) {
+    return data;
+  }
+  const resolver = resolveFrameOf(options);
+  if (!resolver) return data;
+  const subagents = extractTaskSubagents(slot.details, resolver, { allowProjectedSubagents: true });
+  return {
+    ...data,
+    [slotKey]: subagents.length ? { ...slot, details: { subagents } } : { content: slot.content },
   };
 }
 
@@ -302,17 +315,20 @@ export function createToolEventStream(
 ): ToolEventStream {
   interface Lane { timer: NodeJS.Timeout; pending: unknown; hasPending: boolean }
   const lanes = new Map<string, Lane>();
+  const emit = (event: string, projected: unknown) => {
+    send(event, resolveProjectedTaskEvent(event, projected, options));
+  };
   function flush(id: string) {
     const lane = lanes.get(id);
     if (!lane) return;
     clearTimeout(lane.timer); lanes.delete(id);
-    if (lane.hasPending) send('tool_execution_update', lane.pending);
+    if (lane.hasPending) emit('tool_execution_update', lane.pending);
   }
   function tick(id: string, lane: Lane) {
     if (!lane.hasPending) { lanes.delete(id); return; }
     const pending = lane.pending;
     lane.pending = undefined; lane.hasPending = false;
-    send('tool_execution_update', pending);
+    emit('tool_execution_update', pending);
     lane.timer = setTimeout(() => tick(id, lane), windowMs);
   }
   function clear() {
@@ -320,19 +336,20 @@ export function createToolEventStream(
     lanes.clear();
   }
   function push(event: string, value: unknown) {
-    const data = projectToolEvent(event, value, options);
+    // Strip traces and untrusted route fields cheaply on ingress; resolve routes only when actually emitted.
+    const data = projectToolEvent(event, value);
     const id = record(data) && typeof data.toolCallId === 'string' ? data.toolCallId : null;
     if (event === 'tool_execution_update' && id) {
       const current = lanes.get(id);
       if (current) { current.pending = data; current.hasPending = true; return; }
-      send(event, data);
+      emit(event, data);
       const lane: Lane = { timer: setTimeout(() => tick(id, lane), windowMs), pending: undefined, hasPending: false };
       lanes.set(id, lane);
       return;
     }
     if (id) flush(id);
     if (event === 'turn_end' || event === 'agent_end') for (const id of lanes.keys()) flush(id);
-    send(event, data);
+    emit(event, data);
   }
   return { push, clear };
 }

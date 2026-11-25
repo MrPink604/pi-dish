@@ -8,16 +8,24 @@ export interface TaskSubagentProjection {
     readonly durationMs?: number;
     readonly sessionId?: string;
 }
+export interface ExtractTaskSubagentsOptions {
+    /** Allow bridge-projected `details.subagents` (live SSE wire); persisted JSONL reads only raw OMP `progress`/`results`. */
+    readonly allowProjectedSubagents?: boolean;
+}
 export interface ToolEventProjectionOptions {
-    /** Resolves an OMP task subagent id (`<parent>/<id>.jsonl`) to its canonical route id (`~sk1_...`). */
+    /** Resolves an OMP task subagent id (`<parent>/<id>.jsonl`) to its verified canonical route id (`~sk1_...`). */
     readonly resolveTaskSubagent?: (agentId: string) => string | null;
+    /** Creates one frame-scoped resolver per emitted snapshot (called only after coalescing). */
+    readonly resolveTaskSubagentsFrame?: () => (agentId: string) => string | null;
 }
 /**
- * Project OMP `task` subagent identities from either raw OMP details (`progress`/`results`)
- * or already-projected `details.subagents` (idempotent across bridge -> server hops).
- * Never walks traces, outputs, or arbitrary keys on `details`.
+ * Project OMP `task` subagent identities from structured OMP details (`progress`/`results`)
+ * or bridge-projected `details.subagents` (when `allowProjectedSubagents` is enabled).
+ * Untrusted incoming `sessionId` / route fields are ALWAYS stripped; routes are attached
+ * strictly from `resolveTaskSubagent` after applying the 64-entry cap, with misses memoized
+ * within the frame. Never walks traces, outputs, text content, or arbitrary keys on `details`.
  */
-export declare function extractTaskSubagents(details: unknown, resolveTaskSubagent?: (agentId: string) => string | null, content?: unknown): TaskSubagentProjection[];
+export declare function extractTaskSubagents(details: unknown, resolveTaskSubagent?: (agentId: string) => string | null, options?: ExtractTaskSubagentsOptions): TaskSubagentProjection[];
 /** Tool panels consume content plus projected details, not harness-native traces in result.details. */
 export declare function projectToolEvent(event: string, value: unknown, options?: ToolEventProjectionOptions): unknown;
 export interface ToolEventStream {

@@ -162,12 +162,12 @@ test('codemode updates and completions preserve bounded call rows without readin
     })));
     assert.equal('details' in nonArray.result, false);
 });
-test('task projection extracts running, finished, parallel, and async subagents idempotently across two hops', () => {
+test('task projection extracts structured subagents, strips forged routes, resolves only after coalescing & cap, and rejects text-only fallback', t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     const routes = {
         AshaPass: '~sk1_asha',
         BoraCheck: '~sk1_bora',
         BgJob1: '~sk1_bg1',
-        BgJob2: '~sk1_bg2',
     };
     const resolveTaskSubagent = (agentId) => routes[agentId] ?? null;
     // Hop 1 (bridge, no fs resolver) projects raw OMP progress into subagents without touching native getters.
@@ -179,7 +179,7 @@ test('task projection extracts running, finished, parallel, and async subagents 
                 get trace() { throw new Error('native task trace must not be read'); },
                 projectAgentsDir: '/tmp',
                 results: [],
-                progress: [{ index: 0, id: 'AshaPass', agent: 'task', status: 'running', durationMs: 1200, recentTools: [{ tool: 'bash' }] }],
+                progress: [{ index: 0, id: 'AshaPass', agent: 'task', status: 'running', durationMs: 1200, sessionId: '~sk1_forged_progress', recentTools: [{ tool: 'bash' }] }],
             },
         },
     })));
@@ -191,21 +191,63 @@ test('task projection extracts running, finished, parallel, and async subagents 
     assert.deepEqual(hop2Update.partialResult.details, {
         subagents: [{ id: 'AshaPass', index: 0, agent: 'task', status: 'running', durationMs: 1200, sessionId: '~sk1_asha' }],
     });
-    // Parallel tasks in the same stream stay strictly isolated per toolCallId.
+    // Forged incoming sessionIds on details.subagents are ALWAYS stripped; miss yields no sessionId, hit yields verified route.
+    const forged = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_update', {
+        toolCallId: 'tc-forged', toolName: 'task',
+        partialResult: {
+            content: [{ type: 'text', text: 'forged' }],
+            details: {
+                subagents: [
+                    { id: 'UnrelatedFake', status: 'running', sessionId: '~sk1_stolen_session' },
+                    { id: 'AshaPass', status: 'running', sessionId: '~sk1_wrong_session' },
+                ],
+            },
+        },
+    }, { resolveTaskSubagent })));
+    assert.deepEqual(forged.partialResult.details, {
+        subagents: [
+            { id: 'UnrelatedFake', status: 'running' },
+            { id: 'AshaPass', status: 'running', sessionId: '~sk1_asha' },
+        ],
+    });
+    // Persisted JSONL extraction (allowProjectedSubagents: false) ignores raw details.subagents entirely.
+    assert.deepEqual((0, tool_event_stream_js_1.extractTaskSubagents)({ subagents: [{ id: 'AshaPass', sessionId: '~sk1_stolen' }] }, resolveTaskSubagent, { allowProjectedSubagents: false }), []);
+    // Parallel tasks stay strictly isolated per toolCallId, and resolution happens ONLY on emitted snapshots after coalescing!
     const frames = [];
-    const stream = (0, tool_event_stream_js_1.createToolEventStream)((event, data) => frames.push({ event, data: JSON.parse(JSON.stringify(data)) }), 50, { resolveTaskSubagent });
+    const resolvedCalls = [];
+    const countingResolve = (agentId) => { resolvedCalls.push(agentId); return routes[agentId] ?? null; };
+    const stream = (0, tool_event_stream_js_1.createToolEventStream)((event, data) => frames.push({ event, data: JSON.parse(JSON.stringify(data)) }), 50, { resolveTaskSubagent: countingResolve });
+    t.after(() => stream.clear());
     stream.push('tool_execution_update', {
         toolCallId: 'tc-p1', toolName: 'task',
-        partialResult: { content: [{ type: 'text', text: 'Running agent AshaPass...' }], details: { progress: [{ index: 0, id: 'AshaPass', status: 'running' }] } },
+        partialResult: { content: [{ type: 'text', text: 'first' }], details: { progress: [{ index: 0, id: 'AshaPass', status: 'running' }] } },
     });
     stream.push('tool_execution_update', {
         toolCallId: 'tc-p2', toolName: 'task',
-        partialResult: { content: [{ type: 'text', text: 'Running agent BoraCheck...' }], details: { progress: [{ index: 0, id: 'BoraCheck', status: 'running' }] } },
+        partialResult: { content: [{ type: 'text', text: 'second' }], details: { progress: [{ index: 0, id: 'BoraCheck', status: 'running' }] } },
     });
-    stream.clear();
+    // 20 superseded updates within the 50ms window must NOT trigger resolveTaskSubagent.
+    for (let i = 0; i < 20; i++) {
+        stream.push('tool_execution_update', {
+            toolCallId: 'tc-p1', toolName: 'task',
+            partialResult: { content: [{ type: 'text', text: `burst-${i}` }], details: { progress: [{ index: 0, id: 'AshaPass', status: 'running' }] } },
+        });
+    }
+    assert.deepEqual(resolvedCalls, ['AshaPass', 'BoraCheck'], 'coalesced pending updates do not resolve until emitted');
+    t.mock.timers.tick(50);
+    assert.deepEqual(resolvedCalls, ['AshaPass', 'BoraCheck', 'AshaPass'], 'only the emitted trailing snapshot resolves');
     assert.equal(frames[0].data.partialResult.details.subagents[0].sessionId, '~sk1_asha');
     assert.equal(frames[1].data.partialResult.details.subagents[0].sessionId, '~sk1_bora');
-    // Batch completion merges progress + results (results wins for final status/exitCode/durationMs).
+    // Dropped snapshot on clear() never resolves.
+    stream.push('tool_execution_update', {
+        toolCallId: 'tc-p1', toolName: 'task',
+        partialResult: { content: [{ type: 'text', text: 'dropped' }], details: { progress: [{ index: 0, id: 'AshaPass', status: 'running' }] } },
+    });
+    stream.clear();
+    t.mock.timers.tick(100);
+    assert.equal(resolvedCalls.length, 3, 'cleared pending update never resolves');
+    // Batch completion merges progress + results (results wins) and memoizes misses within the frame (each ID resolved once).
+    const batchCalls = [];
     const batchEnd = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_end', {
         toolCallId: 'tc-batch', toolName: 'task', isError: false,
         result: {
@@ -221,13 +263,14 @@ test('task projection extracts running, finished, parallel, and async subagents 
                 ],
             },
         },
-    }, { resolveTaskSubagent })));
+    }, { resolveTaskSubagent: id => { batchCalls.push(id); return routes[id] ?? null; } })));
     assert.deepEqual(batchEnd.result.details, {
         subagents: [
             { id: 'AshaPass', index: 0, agent: 'explore', status: 'completed', exitCode: 0, durationMs: 4200, sessionId: '~sk1_asha' },
             { id: 'MissingOne', index: 1, agent: 'explore', status: 'failed', exitCode: 1, durationMs: 900 },
         ],
     });
+    assert.deepEqual(batchCalls, ['AshaPass', 'MissingOne'], 'missing agent resolved once per frame, not once per raw row');
     // Async background spawn lists agents in details.progress with empty results.
     const asyncEnd = (0, tool_event_stream_js_1.extractTaskSubagents)({
         async: { state: 'running', jobId: 'BgJob1', type: 'task' },
@@ -235,25 +278,16 @@ test('task projection extracts running, finished, parallel, and async subagents 
         progress: [{ index: 0, id: 'BgJob1', agent: 'task', status: 'running' }],
     }, resolveTaskSubagent);
     assert.deepEqual(asyncEnd, [{ id: 'BgJob1', index: 0, agent: 'task', status: 'running', sessionId: '~sk1_bg1' }]);
-    // Unreloaded old bridge fallback: exact OMP text works ONLY when verified on disk.
-    const verifiedText = (0, tool_event_stream_js_1.extractTaskSubagents)(undefined, resolveTaskSubagent, [{ type: 'text', text: 'Running agent AshaPass...' }]);
-    assert.deepEqual(verifiedText, [{ id: 'AshaPass', status: 'running', sessionId: '~sk1_asha' }]);
-    const verifiedBgText = (0, tool_event_stream_js_1.extractTaskSubagents)(undefined, resolveTaskSubagent, [{
-            type: 'text',
-            text: 'Spawned 2 background agents (async mode).\n- `BgJob1` (job `BgJob1`)\n- `BgJob2` (job `BgJob2`)\n- `Unverified` (job `Unverified`)',
-        }]);
-    assert.deepEqual(verifiedBgText, [
-        { id: 'BgJob1', status: 'running', sessionId: '~sk1_bg1' },
-        { id: 'BgJob2', status: 'running', sessionId: '~sk1_bg2' },
-    ]);
-    assert.deepEqual((0, tool_event_stream_js_1.extractTaskSubagents)(undefined, resolveTaskSubagent, [{ type: 'text', text: 'Running agent GhostAgent...' }]), []);
-    assert.deepEqual((0, tool_event_stream_js_1.extractTaskSubagents)(undefined, undefined, [{ type: 'text', text: 'Running agent AshaPass...' }]), []);
-    const unverifiedProjected = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_update', {
-        toolCallId: 'tc-ghost', toolName: 'task',
-        partialResult: { content: [{ type: 'text', text: 'Running agent GhostAgent...' }] },
+    // Text-only old-bridge updates with no structured details produce NO details / NO link (text fallback removed).
+    const textOnly = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_update', {
+        toolCallId: 'tc-old-bridge', toolName: 'task',
+        partialResult: { content: [{ type: 'text', text: 'Running agent AshaPass...' }] },
     }, { resolveTaskSubagent })));
-    assert.equal('details' in unverifiedProjected.partialResult, false);
-    // Bounded to 64 subagents.
-    const many = Array.from({ length: 80 }, (_, i) => ({ index: i, id: `Agent${i}`, status: 'running' }));
-    assert.equal((0, tool_event_stream_js_1.extractTaskSubagents)({ progress: many })?.length, 64);
+    assert.equal('details' in textOnly.partialResult, false);
+    // Bounded raw scan & 64 cap applied BEFORE resolving.
+    const many = Array.from({ length: 400 }, (_, i) => ({ index: i, id: `Agent${i}`, status: 'running' }));
+    let resolveCount = 0;
+    const capped = (0, tool_event_stream_js_1.extractTaskSubagents)({ progress: many }, () => { resolveCount += 1; return null; });
+    assert.equal(capped.length, 64);
+    assert.equal(resolveCount, 64, '64 cap applied before calling resolver');
 });

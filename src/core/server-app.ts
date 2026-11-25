@@ -447,7 +447,6 @@ export function startServer(rootDirectory: string): Server {
     catalog,
     hibernated: () => hibernation.records(),
     privateUnlocked,
-    resolveSessionCandidate,
   });
   const relationHandlers = createSessionRelationHandlers({ catalog, resolveSessionCandidate, privateUnlocked });
   const agySessionHandlers = createAgySessionHandlers({ ownership, findSessionSource });
@@ -1019,6 +1018,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/stream', createSessionStreamHandler({
     getLiveSession,
     findSessionSource,
+    liveSourceObservations,
     viewers: streamViewers,
     reviewUpdates: reviewHandlers.subscribe,
     isRestarting: id => {

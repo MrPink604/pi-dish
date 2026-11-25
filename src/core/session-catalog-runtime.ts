@@ -8,7 +8,7 @@ import { getPrimeDaemon, type PrimeDaemon, type PrimeDaemonSession } from './pri
 import tmux = require('./tmux');
 import sessionIndex = require('./session-index');
 import { sourceForIdentity } from './session-source';
-import { discoverHarnessSessions } from './session-discovery';
+import { discoverHarnessSessions, readSessionHeader } from './session-discovery';
 import {
   buildSnippet, evaluateSessionQuery, parseSessionQuery, positiveQueryTokens, scoreSessionMatch,
 } from './helper-query.js';
@@ -16,7 +16,7 @@ import { resolveSessionRefAmong } from './helper-refs.js';
 import { normalizeModels } from './session-api';
 import {
   composeSessionCatalog, decodeLaunchParents, decodeLaunchSourceBases, decodeRoutineAnnotations,
-  primeSessionObservation, registeredSessionObservation, rpcSessionObservation, withSessionContext,
+  primeSessionObservation, registeredSessionObservation, rpcSessionObservation, subsessionLabel, withSessionContext,
 } from './session-catalog';
 import sessionProvenance = require('./session-provenance');
 import routinesStore = require('./routines');
@@ -94,6 +94,24 @@ export interface CatalogRuntime {
 export function canonicalSessionPath(file: string | null): string | null {
   if (!file) return null;
   try { return fs.realpathSync(file); } catch { return path.resolve(file); }
+}
+
+/** Cheap header+stat metadata for a deferred candidate while full indexing is queued. */
+export function lightweightSessionInfo(source: DiscoveryCandidate): SessionInfo {
+  let lastActivity = new Date(0);
+  try { lastActivity = fs.statSync(source.file).mtime; } catch {}
+  const header = readSessionHeader(source.file, source.profileId);
+  return {
+    model: 'unknown',
+    name: subsessionLabel(source) || source.nativeSessionId.slice(0, 8),
+    messageCount: 0,
+    contextTokens: 0,
+    lastActivity,
+    cwd: typeof header?.cwd === 'string' && header.cwd ? header.cwd : null,
+    sessionId: source.nativeSessionId,
+    parentSession: source.parentSession || (typeof header?.parentSession === 'string' && header.parentSession ? header.parentSession : null),
+    cacheExpiry: null,
+  };
 }
 
 export function historicalAdvice(source: SessionSource, liveChild = false): CatalogAdvice {
@@ -328,17 +346,19 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     const launchParents = decodeLaunchParents(launches);
     const launchSourceBases = decodeLaunchSourceBases(launches);
     const history: CatalogHistoryObservation[] = [];
+    const deferred: DiscoveryCandidate[] = [];
     let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
     if (activeOnly) {
       const visibleIds = new Set<string>([
         ...active.map(observation => observation.id),
         ...liveChildren.map(source => source.routeId),
       ]);
-      for (const source of liveChildren) {
-        if (history.length >= SUBSESSION_ROW_CAP) break;
-        try {
-          history.push({ source, info: sessionIndex.getSessionInfo(source), liveChild: true, advice: historicalAdvice(source, true) });
-        } catch {}
+      const cappedLive = liveChildren.slice(0, SUBSESSION_ROW_CAP);
+      const liveScan = cappedLive.length ? sessionIndex.scanSessions(cappedLive) : null;
+      if (liveScan?.indexing) indexing = true;
+      for (const source of cappedLive) {
+        const info = liveScan?.infos.get(source.file) ?? lightweightSessionInfo(source);
+        history.push({ source, info, liveChild: true, advice: historicalAdvice(source, true) });
       }
       // Include closed intermediate parents between two live sessions (or below a
       // cross-host ancestor) from one shared history index, capping attempts (misses included).
@@ -420,10 +440,11 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
           const liveChild = liveIds.has(source.routeId);
           const info = scan.infos.get(source.file);
           if (!info) {
-            if (!liveChild) continue;
-            try {
-              history.push({ source, info: sessionIndex.getSessionInfo(source), liveChild, advice: historicalAdvice(source, liveChild) });
-            } catch {}
+            if (liveChild) {
+              history.push({ source, info: lightweightSessionInfo(source), liveChild: true, advice: historicalAdvice(source, true) });
+            } else {
+              deferred.push(source);
+            }
             continue;
           }
           history.push({ source, info, liveChild, advice: historicalAdvice(source, liveChild) });
@@ -431,7 +452,7 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
       } catch (error) { console.error('Error scanning sessions:', error); }
     }
     return composeSessionCatalog({
-      active, history, activeOnly, indexing, discoveryTruncated, discoverySkipped, hidePrivate: !includePrivate,
+      active, history, deferred, activeOnly, indexing, discoveryTruncated, discoverySkipped, hidePrivate: !includePrivate,
       launchParents,
       launchSourceBases,
       routines: decodeRoutineAnnotations(routinesStore.invocationsBySessionId()),

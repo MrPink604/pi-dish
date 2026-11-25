@@ -2,18 +2,16 @@ import path = require('path');
 import type { RouteHandler } from './http-boundary';
 import { errorMessage } from './http-boundary';
 import { createHostHealth } from './host-health';
-import { getHarness } from './harnesses';
-import { isPrivateSessionFile } from './private-sessions';
 import {
   buildSnippets, evaluateSessionQuery, isAutomationSession, parseSessionQuery,
   positiveQueryTokens, queryAsksForAutomation, scoreSessionMatch,
 } from './helper-query.js';
-import { stableSessionRef } from './helper-refs.js';
-import { sourceForIdentity, type SessionSource } from './session-source';
-import { getSearchText, getSessionInfo } from './session-index';
+import { stableSessionRef, resolveSessionRefAmong } from './helper-refs.js';
+import { sourceForIdentity, type DiscoveryCandidate } from './session-source';
+import { getSearchText } from './session-index';
 import { sessionForClient } from './session-api';
 import type { HibernationState } from './session-api';
-import { canonicalSessionPath, historicalAdvice, type CatalogRuntime } from './session-catalog-runtime';
+import { canonicalSessionPath, historicalAdvice, lightweightSessionInfo, type CatalogRuntime } from './session-catalog-runtime';
 import { buildSourceSession, type CatalogSession, type SessionCatalog } from './session-catalog';
 import type { IncomingMessage } from 'http';
 
@@ -22,8 +20,6 @@ export interface SessionBrowsePorts {
   hibernated(): ReadonlyMap<string, HibernationState>;
   /** The request carries a private-session unlock token. */
   privateUnlocked(req: IncomingMessage): boolean;
-  /** Exact-route fallback for sessions not yet folded into the bounded index scan. */
-  resolveSessionCandidate?(id: string): SessionSource | null;
 }
 
 const SEARCH_RESULT_CAP = 100;
@@ -126,27 +122,71 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     }
   };
 
-  function resolveExactFallback(catalog: SessionCatalog, ref: string, includePrivate: boolean): CatalogSession | null {
-    if (!ports.resolveSessionCandidate) return null;
-    const candidate = ports.resolveSessionCandidate(ref);
-    if (!candidate) return null;
-    if (!includePrivate && isPrivateSessionFile(getHarness(candidate.harnessId), candidate.file)) return null;
-    try {
-      const row = buildSourceSession(candidate, getSessionInfo(candidate), historicalAdvice(candidate), runtime.options);
+  interface ResolveEntry {
+    readonly id: CatalogSession['id'];
+    readonly session?: CatalogSession;
+    readonly candidate?: DiscoveryCandidate;
+  }
+
+  /**
+   * Resolve against ONE catalog + discovery snapshot (zero per-ref root walks,
+   * zero synchronous getSessionInfo for budget-deferred sessions).
+   */
+  function createCatalogResolver(catalog: SessionCatalog) {
+    const pool: ResolveEntry[] = [
+      ...catalog.list.map(session => ({ id: session.id, session })),
+      ...catalog.deferred.map(candidate => ({ id: candidate.routeId, candidate })),
+    ];
+    let deferredByPath: Map<string, DiscoveryCandidate> | null = null;
+    const materialized = new Map<string, CatalogSession>();
+    const peerIds = catalog.list.map(entry => entry.id);
+    // Only shorten when discovery saw the entire corpus and indexing is caught up;
+    // otherwise return the full route so uniqueness is never assumed.
+    const canShorten = !catalog.discoveryTruncated && !catalog.indexing;
+
+    const materialize = (entry: ResolveEntry): CatalogSession => {
+      if (entry.session) return entry.session;
+      const existing = materialized.get(entry.id);
+      if (existing) return existing;
+      const candidate = entry.candidate!;
+      const row = buildSourceSession(candidate, lightweightSessionInfo(candidate), historicalAdvice(candidate), runtime.options);
       if (row.parentSession && row.sessionFile) {
         const parentFile = path.isAbsolute(row.parentSession)
           ? row.parentSession : path.resolve(path.dirname(row.sessionFile), row.parentSession);
-        const parent = catalog.byPath.get(canonicalSessionPath(parentFile) || '');
-        if (parent && parent.id !== row.id) {
-          row.parentId = parent.id;
+        const canonical = canonicalSessionPath(parentFile) || '';
+        const parent = catalog.byPath.get(canonical);
+        let parentId: CatalogSession['id'] | null = parent ? parent.id : null;
+        if (!parentId && canonical && catalog.deferred.length) {
+          if (!deferredByPath) {
+            deferredByPath = new Map();
+            for (const item of catalog.deferred) {
+              const p = canonicalSessionPath(item.file);
+              if (p) deferredByPath.set(p, item);
+            }
+          }
+          parentId = deferredByPath.get(canonical)?.routeId || null;
+        }
+        if (parentId && parentId !== row.id) {
+          row.parentId = parentId;
           row.parentSource = row.parentSessionSource || 'pi-session-header';
-          row.familyParentId = parent.id;
+          row.familyParentId = parentId;
         }
       }
+      materialized.set(entry.id, row);
       return row;
-    } catch {
-      return null;
-    }
+    };
+
+    const resolveOne = (ref: string) => {
+      const { session, matches } = resolveSessionRefAmong(pool, ref);
+      return {
+        session: session ? materialize(session) : null,
+        matches,
+        materialize,
+      };
+    };
+
+    const refFor = (sessionId: string) => (canShorten ? stableSessionRef(sessionId, peerIds) : sessionId);
+    return { resolveOne, refFor };
   }
 
   const resolve: RouteHandler = (req, res) => {
@@ -156,31 +196,34 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
 
     const includePrivate = ports.privateUnlocked(req);
     const catalog = runtime.buildSessionCatalog({ includePrivate });
-    const { session: matched, matches } = runtime.resolveRefInCatalog(catalog, ref);
-    const session = matched || (matches.length === 0 ? resolveExactFallback(catalog, ref, includePrivate) : null);
+    const resolver = createCatalogResolver(catalog);
+    const { session, matches, materialize } = resolver.resolveOne(ref);
     if (session) {
       const hibernation = ports.hibernated().get(session.id);
       const resolved = hibernation ? { ...session, hibernation } : session;
-      return res.json({ session: resolved, ref: stableSessionRef(session.id, catalog.list.map((entry) => entry.id)) });
+      return res.json({ session: resolved, ref: resolver.refFor(session.id) });
     }
     if (matches.length > 1) {
       return res.status(409).json({
         error: 'ambiguous session id prefix',
-        matches: matches.slice(0, 10).map((match) => ({
-          id: match.id,
-          name: match.name,
-          cwd: match.cwd || null,
-          lastActivity: match.lastActivity,
-          isActive: !!match.isActive,
-        })),
+        matches: matches.slice(0, 10).map((match) => {
+          const item = materialize(match);
+          return {
+            id: item.id,
+            name: item.name,
+            cwd: item.cwd || null,
+            lastActivity: item.lastActivity,
+            isActive: !!item.isActive,
+          };
+        }),
       });
     }
     res.status(404).json({ error: 'Session not found' });
   };
 
   /**
-   * Resolve up to 50 refs against one catalog build, for agent-ref hydration
-   * without N catalog scans or N HTTP round-trips.
+   * Resolve up to 50 refs against one catalog + discovery snapshot, for agent-ref
+   * hydration without N catalog scans, N root walks, or N HTTP round-trips.
    */
   const resolveBatch: RouteHandler = (req, res) => {
     const raw = req.body && typeof req.body === 'object' && Array.isArray((req.body as { ids?: unknown }).ids)
@@ -199,16 +242,15 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     if (!ids.length) return res.json({ results: {} });
     const includePrivate = ports.privateUnlocked(req);
     const catalog = runtime.buildSessionCatalog({ includePrivate });
-    const peerIds = catalog.list.map((entry) => entry.id);
+    const resolver = createCatalogResolver(catalog);
     const hibernated = ports.hibernated();
     const results: Record<string, unknown> = Object.create(null);
     for (const id of ids) {
-      const { session: matched, matches } = runtime.resolveRefInCatalog(catalog, id);
-      const session = matched || (matches.length === 0 ? resolveExactFallback(catalog, id, includePrivate) : null);
+      const { session, matches } = resolver.resolveOne(id);
       if (session) {
         const hibernation = hibernated.get(session.id);
         const projected = sessionForClient(hibernation ? { ...session, hibernation } : session);
-        results[id] = { status: 'ok', session: projected, ref: stableSessionRef(session.id, peerIds) };
+        results[id] = { status: 'ok', session: projected, ref: resolver.refFor(session.id) };
       } else if (matches.length > 1) {
         results[id] = { status: 'ambiguous', count: matches.length };
       } else {

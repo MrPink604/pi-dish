@@ -2,227 +2,274 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const node_fs_1 = require("node:fs");
+const net = require("node:net");
 const node_path_1 = require("node:path");
 const fixtures_js_1 = require("./fixtures.js");
-const PEER_SUB_A = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-11-25T01-00-05-000Z_01a2aaaa-0000-7000-8000-000000000001'])).toString('base64url');
-const PEER_SUB_B = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-11-25T01-00-06-000Z_01a2bbbb-0000-7000-8000-000000000002'])).toString('base64url');
-const PEER_SUB_C = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-11-25T01-00-07-000Z_01a2cccc-0000-7000-8000-000000000003'])).toString('base64url');
-fixtures_js_1.test.use({ liveSessions: true });
-(0, fixtures_js_1.test)('task tool blocks link to running and finished subagents across /hosts/<host>/ at 390x844 while keeping details toggle', async ({ page, fleet }) => {
+const session_key_js_1 = require("../../lib/session-key.js");
+const process_identity_js_1 = require("../../lib/process-identity.js");
+const OMP_PARENT_NATIVE = '2026-11-25T01-00-00-000Z_01a21000-0000-7000-8000-000000000000';
+const SUB_A_NATIVE = '2026-11-25T01-00-05-000Z_01a21001-0000-7000-8000-000000000001';
+const SUB_B_NATIVE = '2026-11-25T01-00-06-000Z_01a21002-0000-7000-8000-000000000002';
+const SUB_C_NATIVE = '2026-11-25T01-00-07-000Z_01a21003-0000-7000-8000-000000000003';
+const UNRELATED_NATIVE = '2026-11-25T00-30-00-000Z_01a21099-0000-7000-8000-000000000099';
+const OMP_PARENT_ROUTE = (0, session_key_js_1.encodeSessionKey)('omp', OMP_PARENT_NATIVE);
+const PEER_SUB_A = (0, session_key_js_1.encodeSessionKey)('omp', SUB_A_NATIVE);
+const PEER_SUB_B = (0, session_key_js_1.encodeSessionKey)('omp', SUB_B_NATIVE);
+const PEER_SUB_C = (0, session_key_js_1.encodeSessionKey)('omp', SUB_C_NATIVE);
+const UNRELATED_ROUTE = (0, session_key_js_1.encodeSessionKey)('omp', UNRELATED_NATIVE);
+function writeJsonl(file, rows) {
+    (0, node_fs_1.mkdirSync)((0, node_path_1.dirname)(file), { recursive: true });
+    (0, node_fs_1.writeFileSync)(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+}
+(0, fixtures_js_1.test)('task tool blocks link to real running and finished OMP subagents across /hosts/desktop/ at 390x844, strip forged routes, and preserve toggle', async ({ page, fleet }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    // Mount peer through the hub's real /hosts/desktop/ proxy (matching the cross-host production path).
-    (0, node_fs_1.writeFileSync)((0, node_path_1.join)(fleet.self.home, '.pi/dish/settings.json'), JSON.stringify({
-        remotes: [{ name: 'desktop', url: fleet.peer.base, token: fleet.peer.token }],
-    }));
-    await page.reload();
-    await fixtures_js_1.expect.poll(() => page.evaluate(id => fixtureApp.features.hostDirectory.resolveHost(id).base, fleet.peer.hostId)).toBe('/hosts/desktop');
-    // Stay on Active tab (default after reload on phone width): subagent sessions are NOT preloaded in sessionState.sessions.
-    await (0, fixtures_js_1.expect)(page.locator('#tabActive')).toHaveClass(/\bactive\b/);
-    const subSessions = {
-        [PEER_SUB_A]: { id: PEER_SUB_A, name: 'AshaPass', harnessId: 'omp', model: 'anthropic/claude-opus-5-5', isActive: false, subagentLive: true },
-        [PEER_SUB_B]: { id: PEER_SUB_B, name: 'BoraCheck', harnessId: 'omp', model: 'anthropic/claude-opus-5-5', isActive: false, subagentLive: false },
-        [PEER_SUB_C]: { id: PEER_SUB_C, name: 'HealedAgent', harnessId: 'omp', model: 'anthropic/claude-opus-5-5', isActive: false, subagentLive: true },
-    };
-    let lineageIncludesHealed = false;
-    let resolveViaProxyCount = 0;
-    await page.route('**/hosts/desktop/api/sessions/resolve-batch', async (route) => {
-        resolveViaProxyCount++;
-        const body = route.request().postDataJSON();
-        const results = {};
-        for (const id of body?.ids || []) {
-            const found = subSessions[id];
-            results[id] = found ? { status: 'ok', session: found } : { status: 'not_found' };
-        }
-        await route.fulfill({ json: { results } });
-    });
-    await page.route('**/hosts/desktop/api/sessions/resolve?*', async (route) => {
-        resolveViaProxyCount++;
-        const id = new URL(route.request().url()).searchParams.get('id') || '';
-        const found = subSessions[id];
-        if (found)
-            return route.fulfill({ json: { session: found } });
-        return route.fulfill({ status: 404, json: { error: 'Session not found' } });
-    });
-    await page.route(`**/hosts/desktop/api/sessions/${encodeURIComponent(PEER_SUB_A)}/messages?*`, route => route.fulfill({
-        json: { messages: [{ index: 0, role: 'assistant', content: 'AshaPass subagent transcript on desktop!' }], session: { name: 'AshaPass' } },
-    }));
-    await page.route(`**/hosts/desktop/api/sessions/${encodeURIComponent(PEER_SUB_B)}/messages?*`, route => route.fulfill({
-        json: { messages: [{ index: 0, role: 'assistant', content: 'BoraCheck subagent transcript on desktop!' }], session: { name: 'BoraCheck' } },
-    }));
-    await page.route(`**/hosts/desktop/api/sessions/${encodeURIComponent(PEER_SUB_C)}/messages?*`, route => route.fulfill({
-        json: { messages: [{ index: 0, role: 'assistant', content: 'HealedAgent subagent transcript on desktop!' }], session: { name: 'HealedAgent' } },
-    }));
-    // Parent lineage endpoint: starts without HealedAgent, then includes it as a direct child to exercise race healing.
-    await page.route(`**/hosts/desktop/api/sessions/${fixtures_js_1.ROOT}/lineage`, route => route.fulfill({
-        json: {
-            session: { id: fixtures_js_1.ROOT, name: 'desktop root', harnessId: 'omp', isActive: true, subagentLive: false, turnInProgress: true, agentId: '' },
-            tree: {
-                session: { id: fixtures_js_1.ROOT, name: 'desktop root', harnessId: 'omp', isActive: true, subagentLive: false, turnInProgress: true, agentId: '' },
-                edge: null,
-                children: lineageIncludesHealed ? [{
-                        session: { id: PEER_SUB_C, name: 'HealedAgent', harnessId: 'omp', isActive: false, subagentLive: true, turnInProgress: true, agentId: 'HealedAgent' },
-                        edge: { kind: 'subagent', source: 'directory' },
-                        children: [],
-                    }] : [],
-            },
-            members: lineageIncludesHealed ? 2 : 1,
-            truncated: false,
-        },
-    }));
-    // Parent persisted messages include:
-    // - finished single task (with resolved link)
-    // - finished multi-subagent batch task (with chip bar)
-    // - version-skew old-peer task (raw OMP details, no projected subagents → degrades to no link)
-    const parentMessages = [
-        { index: 0, role: 'user', timestamp: '2026-11-25T01:00:00.000Z', content: 'Run finished and live tasks on desktop.' },
+    // Create real OMP parent + subagents + unrelated session on the remote peer (`desktop`).
+    const peerOmpDir = (0, node_path_1.join)(fleet.peer.home, '.omp/agent/sessions/project');
+    const parentFile = (0, node_path_1.join)(peerOmpDir, `${OMP_PARENT_NATIVE}.jsonl`);
+    const subDir = (0, node_path_1.join)(peerOmpDir, OMP_PARENT_NATIVE);
+    writeJsonl((0, node_path_1.join)(peerOmpDir, `${UNRELATED_NATIVE}.jsonl`), [
+        { type: 'session', version: 3, id: UNRELATED_NATIVE, cwd: '/fixture/other', timestamp: '2026-11-25T00:30:00.000Z' },
+        { type: 'message', id: 'u1', parentId: null, timestamp: '2026-11-25T00:30:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Unrelated secret session' }] } },
+    ]);
+    writeJsonl((0, node_path_1.join)(subDir, 'AshaPass.jsonl'), [
+        { type: 'title', title: 'AshaPass' },
+        { type: 'session', version: 3, id: SUB_A_NATIVE, cwd: '/fixture/project', timestamp: '2026-11-25T01:00:05.000Z' },
+        { type: 'message', id: 'sa1', parentId: null, timestamp: '2026-11-25T01:00:06.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'AshaPass subagent transcript on desktop!' }] } },
+    ]);
+    writeJsonl((0, node_path_1.join)(subDir, 'BoraCheck.jsonl'), [
+        { type: 'session', version: 3, id: SUB_B_NATIVE, cwd: '/fixture/project', timestamp: '2026-11-25T01:00:06.000Z' },
+        { type: 'message', id: 'sb1', parentId: null, timestamp: '2026-11-25T01:00:07.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'BoraCheck subagent transcript on desktop!' }] } },
+    ]);
+    writeJsonl(parentFile, [
+        { type: 'session', version: 3, id: OMP_PARENT_NATIVE, cwd: '/fixture/project', timestamp: '2026-11-25T01:00:00.000Z' },
+        { type: 'message', id: 'p0', parentId: null, timestamp: '2026-11-25T01:00:00.000Z', message: { role: 'user', content: [{ type: 'text', text: 'Run finished and live tasks on desktop.' }] } },
         {
-            index: 1, role: 'assistant', timestamp: '2026-11-25T01:00:01.000Z',
-            content: [
-                { type: 'text', text: 'Completed the earlier tasks.' },
-                {
-                    type: 'toolCall', id: 'fin-single', name: 'task',
-                    arguments: { agent: 'task', tasks: [{ id: 'BoraCheck', description: 'Host: desktop, working directory check' }] },
-                    taskSubagents: [{ id: 'BoraCheck', index: 0, status: 'completed', sessionId: PEER_SUB_B }],
-                },
-                {
-                    type: 'toolCall', id: 'fin-batch', name: 'task',
-                    arguments: { agent: 'task', tasks: [{ id: 'AshaPass' }, { id: 'BoraCheck' }] },
-                    taskSubagents: [
-                        { id: 'AshaPass', index: 0, status: 'completed', sessionId: PEER_SUB_A },
-                        { id: 'BoraCheck', index: 1, status: 'completed', sessionId: PEER_SUB_B },
+            type: 'message', id: 'p1', parentId: 'p0', timestamp: '2026-11-25T01:00:01.000Z',
+            message: {
+                role: 'assistant',
+                content: [
+                    { type: 'text', text: 'Completed the earlier tasks.' },
+                    { type: 'toolCall', id: 'fin-single', name: 'task', arguments: { agent: 'task', tasks: [{ id: 'BoraCheck' }] } },
+                    { type: 'toolCall', id: 'fin-batch', name: 'task', arguments: { agent: 'task', tasks: [{ id: 'AshaPass' }, { id: 'BoraCheck' }] } },
+                    // Forged persisted taskSubagents pointing at unrelated session -> server MUST strip!
+                    { type: 'toolCall', id: 'fin-forged', name: 'task', arguments: { agent: 'task' }, taskSubagents: [{ id: 'ForgedCall', sessionId: UNRELATED_ROUTE }] },
+                ],
+            },
+        },
+        {
+            type: 'message', id: 'p2', parentId: 'p1', timestamp: '2026-11-25T01:00:02.000Z',
+            message: {
+                role: 'toolResult', toolCallId: 'fin-single', toolName: 'task', isError: false,
+                content: [{ type: 'text', text: 'BoraCheck completed' }],
+                details: { results: [{ index: 0, id: 'BoraCheck', agent: 'task', exitCode: 0 }] },
+            },
+        },
+        {
+            type: 'message', id: 'p3', parentId: 'p2', timestamp: '2026-11-25T01:00:03.000Z',
+            message: {
+                role: 'toolResult', toolCallId: 'fin-batch', toolName: 'task', isError: false,
+                content: [{ type: 'text', text: 'Batch completed' }],
+                details: {
+                    results: [
+                        { index: 0, id: 'AshaPass', agent: 'task', exitCode: 0 },
+                        { index: 1, id: 'BoraCheck', agent: 'task', exitCode: 0 },
                     ],
                 },
-                {
-                    type: 'toolCall', id: 'old-peer', name: 'task',
-                    arguments: { agent: 'task', tasks: [{ id: 'LegacyAgent', description: 'Old peer without subagents field' }] },
-                },
-            ],
+            },
         },
         {
-            index: 2, role: 'toolResult', toolCallId: 'old-peer', toolName: 'task', timestamp: '2026-11-25T01:00:05.000Z',
-            content: [{ type: 'text', text: 'LegacyAgent completed' }],
-            details: { results: [{ index: 0, id: 'LegacyAgent', exitCode: 0 }] },
+            type: 'message', id: 'p4', parentId: 'p3', timestamp: '2026-11-25T01:00:04.000Z',
+            message: {
+                role: 'toolResult', toolCallId: 'fin-forged', toolName: 'task', isError: false,
+                content: [{ type: 'text', text: 'Forged completed' }],
+                details: { subagents: [{ id: 'ForgedResult', sessionId: UNRELATED_ROUTE }] },
+            },
         },
-    ];
-    await page.route(`**/hosts/desktop/api/sessions/${fixtures_js_1.ROOT}/messages?*`, route => route.fulfill({
-        json: {
-            messages: parentMessages,
-            firstIndex: 0,
-            lastIndex: parentMessages.length - 1,
-            totalMessages: parentMessages.length,
-            hasMore: false,
-            session: { name: 'desktop omp parent' },
-        },
-    }));
-    // Select the remote parent session on desktop and wait for its live SSE stream to connect.
-    await fleet.select(fleet.peer, fixtures_js_1.ROOT);
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
-    // 1. Finished single task block renders header link, multi-subagent renders chip bar, old-peer renders NO link.
-    const toolCalls = page.locator('#messages details.tool-call');
-    await (0, fixtures_js_1.expect)(toolCalls).toHaveCount(3);
-    const finSingle = toolCalls.nth(0);
-    const finBatch = toolCalls.nth(1);
-    const oldPeer = toolCalls.nth(2);
-    await (0, fixtures_js_1.expect)(finSingle.locator('summary .task-subagent-link')).toHaveCount(1);
-    await (0, fixtures_js_1.expect)(finSingle.locator('summary .task-subagent-link')).toHaveAttribute('data-session-id', PEER_SUB_B);
-    await (0, fixtures_js_1.expect)(finBatch.locator('summary .task-subagent-link')).toHaveCount(0);
-    await (0, fixtures_js_1.expect)(finBatch.locator('.task-subagent-bar .task-subagent-link')).toHaveCount(2);
-    await (0, fixtures_js_1.expect)(oldPeer.locator('.task-subagent-link')).toHaveCount(0);
-    // 2. Emit running parallel live tasks over the real /hosts/desktop/ SSE stream.
-    fleet.peer.emit('turn_start', {});
-    const ashaArgs = { context: 'Host: desktop, working directory /home/jyarwood/workspace/project', agent: 'task', tasks: [{ id: 'AshaPass', description: 'Host: desktop, working directory audit' }] };
-    fleet.peer.emit('tool_execution_start', {
-        toolCallId: 'live-asha', toolName: 'task',
-        args: ashaArgs,
-    });
-    const liveAsha = page.locator('details.live-tool-panel[data-tool-call-id="live-asha"]');
-    await (0, fixtures_js_1.expect)(liveAsha).toBeVisible();
-    // Before subagent id is known: zero links!
-    await (0, fixtures_js_1.expect)(liveAsha.locator('.task-subagent-link')).toHaveCount(0);
-    // Update arrives with resolved AshaPass + parallel BoraCheck + unresolved HealedAgent.
-    fleet.peer.emit('tool_execution_update', {
-        toolCallId: 'live-asha', toolName: 'task',
-        args: ashaArgs,
-        partialResult: {
-            content: [{ type: 'text', text: 'Running agent AshaPass...' }],
-            details: { subagents: [{ id: 'AshaPass', index: 0, status: 'running', sessionId: PEER_SUB_A }] },
-        },
-    });
-    fleet.peer.emit('tool_execution_update', {
-        toolCallId: 'live-bora', toolName: 'task',
-        args: { agent: 'task', tasks: [{ id: 'BoraCheck', description: 'Host: desktop, secondary check' }] },
-        partialResult: {
-            content: [{ type: 'text', text: 'Running agent BoraCheck...' }],
-            details: { subagents: [{ id: 'BoraCheck', index: 0, status: 'running', sessionId: PEER_SUB_B }] },
-        },
-    });
-    fleet.peer.emit('tool_execution_update', {
-        toolCallId: 'live-healed', toolName: 'task',
-        args: { agent: 'task', tasks: [{ id: 'HealedAgent', description: 'Startup race test' }] },
-        partialResult: {
-            content: [{ type: 'text', text: 'Running agent HealedAgent...' }],
-            details: { subagents: [{ id: 'HealedAgent', index: 0, status: 'running' }] },
-        },
-    });
-    const liveBora = page.locator('details.live-tool-panel[data-tool-call-id="live-bora"]');
-    const liveHealed = page.locator('details.live-tool-panel[data-tool-call-id="live-healed"]');
-    const ashaLink = liveAsha.locator('summary .task-subagent-link');
-    const boraLink = liveBora.locator('summary .task-subagent-link');
-    await (0, fixtures_js_1.expect)(ashaLink).toBeVisible();
-    await (0, fixtures_js_1.expect)(ashaLink).toHaveAttribute('data-session-id', PEER_SUB_A);
-    await (0, fixtures_js_1.expect)(ashaLink).toHaveAttribute('data-session-host', fleet.peer.hostId);
-    await (0, fixtures_js_1.expect)(ashaLink).toHaveAttribute('data-agent-state', 'working');
-    await (0, fixtures_js_1.expect)(boraLink).toHaveAttribute('data-session-id', PEER_SUB_B);
-    await (0, fixtures_js_1.expect)(liveHealed.locator('.task-subagent-link')).toHaveCount(0);
-    // Trigger a lineage refresh now that HealedAgent's file exists → heals live-healed link cleanly.
-    lineageIncludesHealed = true;
-    await page.evaluate(() => {
-        const owner = fixtureApp.features.sessionState.captureSelection();
-        if (owner)
-            void fixtureApp.features.sessionRelationsController.load(owner);
-    });
-    await (0, fixtures_js_1.expect)(liveHealed.locator('summary .task-subagent-link')).toHaveAttribute('data-session-id', PEER_SUB_C);
-    // 3. Phone width 390x844: zero horizontal overflow with live + finished task headers visible.
-    const overflow = await page.evaluate(() => {
-        const m = document.getElementById('messages');
-        return m ? { scrollWidth: m.scrollWidth, clientWidth: m.clientWidth } : null;
-    });
-    (0, fixtures_js_1.expect)(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
-    // 4. Expanding/collapsing the live task block still works without navigating.
-    await (0, fixtures_js_1.expect)(liveAsha).not.toHaveAttribute('open', '');
-    await liveAsha.locator('.live-tool-name').click();
-    await (0, fixtures_js_1.expect)(liveAsha).toHaveAttribute('open', '');
-    await (0, fixtures_js_1.expect)(liveAsha.locator('.live-tool-output')).toContainText('Running agent AshaPass...');
-    // 5. Clicking the running task link opens AshaPass's transcript via /hosts/desktop/ without toggling <details>.
-    await page.evaluate(() => {
-        const el = fixtureDetails(document.querySelector('details.live-tool-panel[data-tool-call-id="live-asha"]'), 'live-asha');
-        window.__ashaToggles = 0;
-        el.addEventListener('toggle', () => {
-            const w = window;
-            w.__ashaToggles = (w.__ashaToggles || 0) + 1;
+    ]);
+    // Attach a real v2 OMP bridge socket on fleet.peer so SSE events flow through the real peer server.
+    const socketPath = (0, node_path_1.join)(fleet.peer.home, 'omp-task-bridge.sock');
+    const procId = (0, process_identity_js_1.processIdentity)(process.pid);
+    if (!procId)
+        throw new Error('expected process identity');
+    const bridgeClaim = {
+        protocolVersion: 2,
+        wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+        harnessId: 'omp',
+        nativeSessionId: OMP_PARENT_NATIVE,
+        sessionId: OMP_PARENT_NATIVE,
+        bridgeInstanceId: OMP_PARENT_NATIVE,
+        instanceId: OMP_PARENT_NATIVE,
+        sessionFile: parentFile,
+        socketPath,
+        cwd: '/fixture/project',
+        name: 'desktop omp parent',
+        pid: procId.pid,
+        startTime: procId.startTime,
+        spawnToken: null,
+        capabilities: {},
+    };
+    const bridgeClients = new Set();
+    const bridge = net.createServer(sock => {
+        bridgeClients.add(sock);
+        sock.on('close', () => bridgeClients.delete(sock));
+        sock.on('error', () => bridgeClients.delete(sock));
+        sock.write(JSON.stringify({ type: 'hello', ...bridgeClaim, turnInProgress: true, queue: { steering: [], followUp: [] } }) + '\n');
+        let buf = '';
+        sock.on('data', chunk => {
+            buf += chunk;
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+                const msg = JSON.parse(buf.slice(0, nl));
+                buf = buf.slice(nl + 1);
+                sock.write(JSON.stringify({ type: 'response', id: msg.id, success: true, data: {} }) + '\n');
+            }
         });
     });
-    await ashaLink.click();
-    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('AshaPass subagent transcript on desktop!');
-    (0, fixtures_js_1.expect)(resolveViaProxyCount).toBeGreaterThanOrEqual(1);
-    (0, fixtures_js_1.expect)(await page.evaluate(() => window.__ashaToggles)).toBe(0);
-    // 6. Navigate back to parent session: retained transcript restores with liveAsha STILL open (link click didn't toggle it),
-    //    and tapping the header again collapses it cleanly.
-    await fleet.select(fleet.peer, fixtures_js_1.ROOT);
-    await (0, fixtures_js_1.expect)(liveAsha).toHaveAttribute('open', '');
-    await liveAsha.locator('.live-tool-name').click();
-    await (0, fixtures_js_1.expect)(liveAsha).not.toHaveAttribute('open', '');
-    // 7. Click the finished single-task header link (BoraCheck) → lands on BoraCheck's transcript; toggle on old-peer still works.
-    await oldPeer.locator('.tool-call-name').click();
-    await (0, fixtures_js_1.expect)(oldPeer).toHaveAttribute('open', '');
-    await oldPeer.locator('.tool-call-name').click();
-    await (0, fixtures_js_1.expect)(oldPeer).not.toHaveAttribute('open', '');
-    await finSingle.locator('summary .task-subagent-link').click();
-    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('BoraCheck subagent transcript on desktop!');
-    // 8. Return to parent and click one chip in the multi-subagent batch bar → lands on AshaPass's transcript.
-    await fleet.select(fleet.peer, fixtures_js_1.ROOT);
-    await finBatch.locator('.tool-call-name').click();
-    await (0, fixtures_js_1.expect)(finBatch).toHaveAttribute('open', '');
-    await finBatch.locator(`.task-subagent-bar .task-subagent-link[data-session-id="${PEER_SUB_A}"]`).click();
-    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('AshaPass subagent transcript on desktop!');
+    await new Promise(resolve => bridge.listen(socketPath, resolve));
+    const emitOmp = (event, data) => {
+        const line = JSON.stringify({ type: 'event', event, data }) + '\n';
+        for (const sock of bridgeClients)
+            sock.write(line);
+    };
+    try {
+        const peerRegDir = (0, node_path_1.join)(fleet.peer.home, '.pi/dish/sessions');
+        (0, node_fs_1.mkdirSync)(peerRegDir, { recursive: true });
+        (0, node_fs_1.writeFileSync)((0, node_path_1.join)(peerRegDir, `${OMP_PARENT_NATIVE}.json`), JSON.stringify(bridgeClaim));
+        // Mount peer through the hub's real /hosts/desktop/ proxy.
+        (0, node_fs_1.writeFileSync)((0, node_path_1.join)(fleet.self.home, '.pi/dish/settings.json'), JSON.stringify({
+            remotes: [{ name: 'desktop', url: fleet.peer.base, token: fleet.peer.token }],
+        }));
+        await page.reload();
+        await fixtures_js_1.expect.poll(() => page.evaluate(id => fixtureApp.features.hostDirectory.resolveHost(id).base, fleet.peer.hostId)).toBe('/hosts/desktop');
+        await (0, fixtures_js_1.expect)(page.locator('#tabActive')).toHaveClass(/\bactive\b/);
+        let proxySubMessagesHits = 0;
+        page.on('request', req => {
+            if (req.url().includes(`/hosts/desktop/api/sessions/${encodeURIComponent(PEER_SUB_A)}/messages`))
+                proxySubMessagesHits += 1;
+        });
+        // Wait for Active sidebar poll to discover our live OMP parent on desktop, then select it.
+        await fixtures_js_1.expect.poll(() => page.evaluate(({ id, host }) => !!fixtureApp.features.sessionState.findSession(id, host), {
+            id: OMP_PARENT_ROUTE, host: fleet.peer.hostId,
+        })).toBe(true);
+        await fleet.select(fleet.peer, OMP_PARENT_ROUTE);
+        await fixtures_js_1.expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
+        // 1. Finished blocks (real server messages): single -> BoraCheck, batch -> chip bar, forged -> ZERO links!
+        const toolCalls = page.locator('#messages details.tool-call');
+        await (0, fixtures_js_1.expect)(toolCalls).toHaveCount(3);
+        const finSingle = toolCalls.nth(0);
+        const finBatch = toolCalls.nth(1);
+        const finForged = toolCalls.nth(2);
+        await (0, fixtures_js_1.expect)(finSingle.locator('summary .task-subagent-link')).toHaveAttribute('data-session-id', PEER_SUB_B);
+        await (0, fixtures_js_1.expect)(finBatch.locator('summary .task-subagent-link')).toHaveCount(0);
+        await (0, fixtures_js_1.expect)(finBatch.locator('.task-subagent-bar .task-subagent-link')).toHaveCount(2);
+        await (0, fixtures_js_1.expect)(finForged.locator('.task-subagent-link')).toHaveCount(0);
+        // 2. Live SSE tasks through real peer server:
+        //    - live-asha (verified locally -> PEER_SUB_A)
+        //    - live-bora (parallel verified -> PEER_SUB_B)
+        //    - live-forged (forged sessionId pointing at UNRELATED_ROUTE -> stripped -> ZERO chips!)
+        //    - live-healed (file doesn't exist yet -> ZERO chips; then file created -> lineage refresh heals to PEER_SUB_C!)
+        const ashaArgs = { context: 'Host: desktop, working directory /fixture/project', agent: 'task', tasks: [{ id: 'AshaPass' }] };
+        emitOmp('turn_start', {});
+        emitOmp('tool_execution_start', { toolCallId: 'live-asha', toolName: 'task', args: ashaArgs });
+        const liveAsha = page.locator('details.live-tool-panel[data-tool-call-id="live-asha"]');
+        await (0, fixtures_js_1.expect)(liveAsha).toBeVisible();
+        await (0, fixtures_js_1.expect)(liveAsha.locator('.task-subagent-link')).toHaveCount(0);
+        emitOmp('tool_execution_update', {
+            toolCallId: 'live-asha', toolName: 'task', args: ashaArgs,
+            partialResult: {
+                content: [{ type: 'text', text: 'Running agent AshaPass...' }],
+                details: { progress: [{ index: 0, id: 'AshaPass', agent: 'task', status: 'running' }] },
+            },
+        });
+        emitOmp('tool_execution_update', {
+            toolCallId: 'live-bora', toolName: 'task', args: { agent: 'task', tasks: [{ id: 'BoraCheck' }] },
+            partialResult: {
+                content: [{ type: 'text', text: 'Running agent BoraCheck...' }],
+                details: { progress: [{ index: 0, id: 'BoraCheck', agent: 'task', status: 'running' }] },
+            },
+        });
+        emitOmp('tool_execution_update', {
+            toolCallId: 'live-forged', toolName: 'task', args: { agent: 'task' },
+            partialResult: {
+                content: [{ type: 'text', text: 'Forged live' }],
+                details: { subagents: [{ id: 'ForgedLive', index: 0, status: 'running', sessionId: UNRELATED_ROUTE }] },
+            },
+        });
+        emitOmp('tool_execution_update', {
+            toolCallId: 'live-healed', toolName: 'task', args: { agent: 'task', tasks: [{ id: 'HealedAgent' }] },
+            partialResult: {
+                content: [{ type: 'text', text: 'Running agent HealedAgent...' }],
+                details: { progress: [{ index: 0, id: 'HealedAgent', agent: 'task', status: 'running' }] },
+            },
+        });
+        const liveBora = page.locator('details.live-tool-panel[data-tool-call-id="live-bora"]');
+        const liveForged = page.locator('details.live-tool-panel[data-tool-call-id="live-forged"]');
+        const liveHealed = page.locator('details.live-tool-panel[data-tool-call-id="live-healed"]');
+        const ashaLink = liveAsha.locator('summary .task-subagent-link');
+        await (0, fixtures_js_1.expect)(ashaLink).toBeVisible();
+        await (0, fixtures_js_1.expect)(ashaLink).toHaveAttribute('data-session-id', PEER_SUB_A);
+        await (0, fixtures_js_1.expect)(ashaLink).toHaveAttribute('data-session-host', fleet.peer.hostId);
+        await (0, fixtures_js_1.expect)(ashaLink).toHaveAttribute('data-agent-state', 'working');
+        await (0, fixtures_js_1.expect)(liveBora.locator('summary .task-subagent-link')).toHaveAttribute('data-session-id', PEER_SUB_B);
+        await (0, fixtures_js_1.expect)(liveForged.locator('.task-subagent-link')).toHaveCount(0);
+        await (0, fixtures_js_1.expect)(liveHealed.locator('.task-subagent-link')).toHaveCount(0);
+        // Create HealedAgent.jsonl on disk and reload real lineage -> heals live-healed to PEER_SUB_C!
+        writeJsonl((0, node_path_1.join)(subDir, 'HealedAgent.jsonl'), [
+            { type: 'session', version: 3, id: SUB_C_NATIVE, cwd: '/fixture/project', timestamp: '2026-11-25T01:00:07.000Z' },
+            { type: 'message', id: 'sc1', parentId: null, timestamp: '2026-11-25T01:00:08.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'HealedAgent transcript' }] } },
+        ]);
+        await page.evaluate(() => {
+            const owner = fixtureApp.features.sessionState.captureSelection();
+            if (owner)
+                void fixtureApp.features.sessionRelationsController.load(owner);
+        });
+        await (0, fixtures_js_1.expect)(liveHealed.locator('summary .task-subagent-link')).toHaveAttribute('data-session-id', PEER_SUB_C);
+        // 3. Phone width 390x844: zero horizontal overflow.
+        const overflow = await page.evaluate(() => {
+            const m = document.getElementById('messages');
+            return m ? { scrollWidth: m.scrollWidth, clientWidth: m.clientWidth } : null;
+        });
+        (0, fixtures_js_1.expect)(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+        // 4. Expanding/collapsing liveAsha still works without navigating.
+        await (0, fixtures_js_1.expect)(liveAsha).not.toHaveAttribute('open', '');
+        await liveAsha.locator('.live-tool-name').click();
+        await (0, fixtures_js_1.expect)(liveAsha).toHaveAttribute('open', '');
+        await (0, fixtures_js_1.expect)(liveAsha.locator('.live-tool-output')).toContainText('Running agent AshaPass...');
+        // 5. Clicking AshaPass link opens the real subagent transcript via /hosts/desktop/ without toggling <details>.
+        await page.evaluate(() => {
+            const el = fixtureDetails(document.querySelector('details.live-tool-panel[data-tool-call-id="live-asha"]'), 'live-asha');
+            window.__ashaToggles = 0;
+            el.addEventListener('toggle', () => {
+                const w = window;
+                w.__ashaToggles = (w.__ashaToggles || 0) + 1;
+            });
+        });
+        await ashaLink.click();
+        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('AshaPass subagent transcript on desktop!');
+        (0, fixtures_js_1.expect)(proxySubMessagesHits).toBeGreaterThanOrEqual(1);
+        (0, fixtures_js_1.expect)(await page.evaluate(() => window.__ashaToggles)).toBe(0);
+        // 6. Navigate back to parent: retained transcript restores liveAsha STILL open, and header click collapses it.
+        await fleet.select(fleet.peer, OMP_PARENT_ROUTE);
+        await (0, fixtures_js_1.expect)(liveAsha).toHaveAttribute('open', '');
+        await liveAsha.locator('.live-tool-name').click();
+        await (0, fixtures_js_1.expect)(liveAsha).not.toHaveAttribute('open', '');
+        // 7. Toggle on linkless block works; clicking finished BoraCheck header link opens BoraCheck transcript.
+        await finForged.locator('.tool-call-name').click();
+        await (0, fixtures_js_1.expect)(finForged).toHaveAttribute('open', '');
+        await finForged.locator('.tool-call-name').click();
+        await (0, fixtures_js_1.expect)(finForged).not.toHaveAttribute('open', '');
+        await finSingle.locator('summary .task-subagent-link').click();
+        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('BoraCheck subagent transcript on desktop!');
+        // 8. Return to parent and click AshaPass chip inside the multi-subagent batch bar.
+        await fleet.select(fleet.peer, OMP_PARENT_ROUTE);
+        await finBatch.locator('.tool-call-name').click();
+        await (0, fixtures_js_1.expect)(finBatch).toHaveAttribute('open', '');
+        await finBatch.locator(`.task-subagent-bar .task-subagent-link[data-session-id="${PEER_SUB_A}"]`).click();
+        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('AshaPass subagent transcript on desktop!');
+    }
+    finally {
+        for (const sock of bridgeClients)
+            sock.destroy();
+        bridge.close();
+    }
 });

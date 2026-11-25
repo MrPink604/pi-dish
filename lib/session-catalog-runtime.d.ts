@@ -44,5 +44,7 @@ export interface CatalogRuntime {
     setModelsCache(models: AvailableModel[]): void;
 }
 export declare function canonicalSessionPath(file: string | null): string | null;
+/** Cheap header+stat metadata for a deferred candidate while full indexing is queued. */
+export declare function lightweightSessionInfo(source: DiscoveryCandidate): SessionInfo;
 export declare function historicalAdvice(source: SessionSource, liveChild?: boolean): CatalogAdvice;
 export declare function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime;

@@ -4,17 +4,19 @@ import { PrimeDaemonSession } from './prime-daemon';
 import { getHarness } from './harnesses';
 import { errorMessage } from './http-boundary';
 import { canonicalSessionId } from './session-key';
-import { resolveNestedSubsessionRouteId } from './session-discovery';
+import { createNestedSubsessionResolver } from './session-discovery';
 import { sessionSwitchRouteData } from './session-ownership';
 import { createToolEventStream } from './tool-event-stream';
 import { record as isRecord } from './helper-values';
 import type { LiveSession } from './session-ownership';
-import type { SessionSource } from './session-source';
+import type { LiveSourceObservation, SessionSource } from './session-source';
 
 export interface SessionStreamPorts {
   getLiveSession(sessionId: string): Promise<LiveSession | null>;
   /** Optional fallback for resolving the session's persisted file when not directly on the live transport. */
   findSessionSource?(sessionId: string): SessionSource | null;
+  /** Live source observations so a colliding live claim blocks stale nested subagent routes. */
+  liveSourceObservations?(sessionId: unknown): readonly LiveSourceObservation[];
   /** Open browser event streams per canonical session; hibernation reads it. */
   viewers: Map<string, number>;
   /** Interval for observable SSE heartbeats, also below reverse-proxy idle timeouts. */
@@ -87,23 +89,34 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
       if (remaining) ports.viewers.set(viewerKey, remaining); else ports.viewers.delete(viewerKey);
     });
 
-    const resolveTaskSubagent = (agentId: string): string | null => {
+    const nestedResolvers = new Map<string, ReturnType<typeof createNestedSubsessionResolver>>();
+    const resolveTaskSubagentsFrame = (): ((agentId: string) => string | null) => {
+      let parentFile: string | null = null;
+      let descriptor = null as ReturnType<typeof getHarness>;
       if (session instanceof BridgeSession && typeof session.sessionFile === 'string' && session.sessionFile) {
-        const descriptor = getHarness(session.harnessId);
-        if (descriptor?.nestedSubsessions) {
-          return resolveNestedSubsessionRouteId(session.sessionFile, agentId, { descriptor });
+        descriptor = getHarness(session.harnessId);
+        if (descriptor?.nestedSubsessions) parentFile = session.sessionFile;
+      }
+      if (!parentFile) {
+        const source = ports.findSessionSource?.(sessionId);
+        if (source) {
+          descriptor = getHarness(source.harnessId);
+          if (descriptor?.nestedSubsessions) parentFile = source.file;
         }
       }
-      const source = ports.findSessionSource?.(sessionId);
-      if (source) {
-        const descriptor = getHarness(source.harnessId);
-        if (descriptor?.nestedSubsessions) {
-          return resolveNestedSubsessionRouteId(source.file, agentId, { descriptor });
-        }
+      if (!parentFile || !descriptor?.nestedSubsessions) return () => null;
+      let resolver = nestedResolvers.get(descriptor.id);
+      if (!resolver) {
+        resolver = createNestedSubsessionResolver({
+          descriptor,
+          snapshotTtlMs: 2000,
+          live: ports.liveSourceObservations,
+        });
+        nestedResolvers.set(descriptor.id, resolver);
       }
-      return null;
+      return resolver.forParentFrame(parentFile);
     };
-    const toolEvents = createToolEventStream(send, undefined, { resolveTaskSubagent });
+    const toolEvents = createToolEventStream(send, undefined, { resolveTaskSubagentsFrame });
     const messageForStream = (message: unknown): unknown => {
       if (!isRecord(message) || message.role !== 'custom') return message;
       // interrupted-thinking is hidden reasoning; the client only needs its marker.
