@@ -4,7 +4,7 @@ import { encodeSessionKey, canonicalSessionId, validSessionId } from './session-
 import { getHarness, listHarnesses } from './harnesses';
 import { isPrivateSessionFile, sessionRootsFor } from './private-sessions';
 import { record as isRecord } from './helper-values';
-import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
+import type { HarnessDescriptor, HarnessId, NativeSessionId, SessionId } from './contracts';
 import type { DiscoveryCandidate, DiscoveryOptions, DiscoveryResult } from './session-source';
 import { readSessionTailEntry } from './session-files';
 import { AGY_BRAIN_PROFILE_ID, readAgySubagentDescriptors } from './agy-brain';
@@ -595,6 +595,45 @@ function inspectSubsessionExits(parentFile: unknown, options: DiscoveryOptions =
   return { complete, blockers };
 }
 
+const VALID_TASK_AGENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Safe OMP subagent filename stem (rejects traversal and OMP's `changes.jsonl` log). */
+function isValidTaskAgentId(value: unknown): value is string {
+  return typeof value === 'string'
+    && VALID_TASK_AGENT_ID_RE.test(value)
+    && !value.includes('..')
+    && value !== 'changes';
+}
+
+/**
+ * Resolve one OMP `task` subagent id (`<parent-stem>/<agentId>.jsonl`) to its
+ * canonical pi-dish route id (`~sk1_...`), O(1) via the stat-cached header read.
+ * Never follows symlinks or guesses when the transcript file is absent or invalid.
+ */
+function resolveNestedSubsessionRouteId(
+  parentFile: unknown,
+  agentId: unknown,
+  options: { harnessId?: HarnessId; descriptor?: HarnessDescriptor } = {},
+): SessionId | null {
+  const descriptor = options.descriptor || getHarness(options.harnessId || 'omp');
+  if (!descriptor?.nestedSubsessions || typeof parentFile !== 'string' || !parentFile.endsWith('.jsonl')) return null;
+  if (!isValidTaskAgentId(agentId)) return null;
+  const subDir = parentFile.slice(0, -'.jsonl'.length);
+  const subFile = path.join(subDir, `${agentId}.jsonl`);
+  try {
+    const dirStat = fs.lstatSync(subDir);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return null;
+    const fileStat = fs.lstatSync(subFile);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) return null;
+  } catch {
+    return null;
+  }
+  const header = readSessionHeader(subFile, descriptor.profileId);
+  const nativeId = safeHeaderSessionId(header?.id);
+  if (!nativeId) return null;
+  return canonicalSessionId(encodeSessionKey(descriptor.id, nativeId));
+}
+
 /** Retire all parser-profile observations of a replaced file. */
 function invalidateSessionHeader(file: string): void {
   for (const key of headerCache.keys()) {
@@ -611,6 +650,8 @@ export = {
   findSessionCandidate,
   discoverSubsessionCandidates,
   inspectSubsessionExits,
+  isValidTaskAgentId,
+  resolveNestedSubsessionRouteId,
   readSessionHeader,
   safeHeaderSessionId,
   DEFAULT_MAX_DEPTH,

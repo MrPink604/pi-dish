@@ -5,7 +5,7 @@ import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { assistantRoleHtml, formatTime, formatThinkingPreview, isGeminiAssistant } from './helper-format';
 import { sessionSupports } from './helper-identity';
-import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, codemodeResultChipsHtml, evalTitle, evalBodyHtml, evalActivityHtml, jobDeliveryOutputs, formatSpan } from './tool-format';
+import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, codemodeResultChipsHtml, evalTitle, evalBodyHtml, evalActivityHtml, jobDeliveryOutputs, formatSpan, taskHeaderLinkHtml, taskSubagentBarHtml, taskSubagentCountLabel } from './tool-format';
 import type { WaitJob } from './tool-format';
 import {
   parseUserSourceEntries, renderUserSourceHeaderHtml, parseInjectedBotMessage, renderBotNoticeHtml,
@@ -351,16 +351,22 @@ function renderThinkingBlock(thinking: string) {
 function renderToolCall(block: MessageBlock) {
   const args = block.arguments || {};
   const summary = getToolSummary(block.name || '', args);
-  const bodyHtml = toolCallBodyHtml(block.name, args, { matchRef: options.matchRef, markdown: options.markdown, contextHost: renderHost() ?? null });
+  const contextHost = renderHost() ?? null;
+  const bodyHtml = toolCallBodyHtml(block.name, args, { matchRef: options.matchRef, markdown: options.markdown, contextHost });
   const codeLines = block.name === 'codemode' && typeof args.code === 'string' ? args.code.split('\n').length : 0;
+  const taskLink = block.name === 'task' ? taskHeaderLinkHtml(block.taskSubagents, { hostId: contextHost, matchRef: options.matchRef }) : '';
+  const taskCount = block.name === 'task' ? taskSubagentCountLabel(block.taskSubagents) : '';
+  const taskBar = block.name === 'task' ? taskSubagentBarHtml(block.taskSubagents, { hostId: contextHost, matchRef: options.matchRef }) : '';
 
   return `<details class="tool-call">
     <summary class="tool-call-header">
       <span class="tool-call-icon">⚡</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
       ${codeLines > 1 ? `<span class="tool-call-meta">${codeLines} lines</span>` : ''}
       ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ''}
+      ${taskCount ? `<span class="tool-call-meta">${escapeHtml(taskCount)}</span>` : ''}
+      ${taskLink}
     </summary>
-    ${bodyHtml ? `<div class="tool-call-content">${bodyHtml}</div>` : ''}
+    ${taskBar || bodyHtml ? `<div class="tool-call-content">${taskBar}${bodyHtml}</div>` : ''}
   </details>`;
 }
 
@@ -409,6 +415,11 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
     (details?.kind === 'eval' && details.cells.some(cell => (cell.exitCode ?? 0) !== 0)) ||
     (parsedCodemode !== null && !parsedCodemode.ok);
   const waitJobs = details?.kind === 'wait' && details.jobs.length ? details.jobs : null;
+  const taskSubagents = details?.kind === 'task' ? details.subagents : undefined;
+  const contextHost = renderHost() ?? null;
+  const taskLink = taskHeaderLinkHtml(taskSubagents, { hostId: contextHost, matchRef: options.matchRef });
+  const taskCount = taskSubagentCountLabel(taskSubagents);
+  const taskBar = taskSubagentBarHtml(taskSubagents, { hostId: contextHost, matchRef: options.matchRef });
   // An eval call often renders inside a prose message, away from its result;
   // the result carries its title and cell code so it reads on its own.
   const evalDetails = details?.kind === 'eval' && details.cells.length ? details : null;
@@ -438,7 +449,7 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   const bodyHtml = waitJobs ? waitJobsHtml(waitJobs)
     : evalDetails ? evalBodyHtml(evalDetails, outputHtml, true)
     : details?.kind === 'codemode' ? evalActivityHtml(details.calls) + outputHtml
-    : outputHtml;
+    : taskBar + outputHtml;
 
   return `<div${attrs} class="message tool-result ${codemodeFailed ? 'error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${details?.kind === 'bash' ? bashJobAttrs(details) : ''}>
     <details class="tool-result-details" ${((!isLong && !waitJobs) || imageCount || videoCount) ? 'open' : ''}>
@@ -449,9 +460,11 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
         ${showLines ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
         ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? 'image' : imageCount + ' images'}</span>` : ''}
         ${videoCount ? `<span class="tool-result-meta">${videoCount === 1 ? 'video' : videoCount + ' videos'}</span>` : ''}
+        ${taskCount ? chip(taskCount, 'job') : ''}
         ${exitBadge}${resultChips}
         ${codemodeFailed && !statusShown ? '<span class="tool-result-meta error-badge">error</span>' : ''}
         ${(isLong && !title) || waitJobs ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
+        ${taskLink}
       </summary>
       <div class="tool-result-content">${bodyHtml}${imagesHtml}${videosHtml}</div>
     </details>

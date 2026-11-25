@@ -417,9 +417,16 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
         const scan = sessionIndex.scanSessions(candidates);
         indexing = scan.indexing;
         for (const source of candidates) {
+          const liveChild = liveIds.has(source.routeId);
           const info = scan.infos.get(source.file);
-          if (!info) continue;
-          history.push({ source, info, liveChild: liveIds.has(source.routeId), advice: historicalAdvice(source, liveIds.has(source.routeId)) });
+          if (!info) {
+            if (!liveChild) continue;
+            try {
+              history.push({ source, info: sessionIndex.getSessionInfo(source), liveChild, advice: historicalAdvice(source, liveChild) });
+            } catch {}
+            continue;
+          }
+          history.push({ source, info, liveChild, advice: historicalAdvice(source, liveChild) });
         }
       } catch (error) { console.error('Error scanning sessions:', error); }
     }

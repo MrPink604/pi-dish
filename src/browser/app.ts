@@ -778,6 +778,7 @@ const sessionRelationsController: ReturnType<typeof createSessionRelations> = cr
   // The takeover's own poll covers an open view (the header chips are
   // hidden there); the header poll defers to it instead of doubling requests.
   takeoverActive: () => subagentsController.isOpen(),
+  onLineage: (owner, lineage) => liveToolsController.syncLineage(owner, lineage),
   selectSession, status: setStatus,
 });
 
@@ -993,6 +994,8 @@ const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools(
   document, sessionState, started: (id, name) => sessionActivity.toolStarted(id, name),
   finished: id => sessionActivity.toolFinished(id), ...chromeScroll,
   images: (content, alt) => messageRenderer.images(content, alt), videos: content => messageRenderer.videos(content), mood: (name, args) => moodController.fromTool(name, args),
+  matchRef: ref => sessionReferences.match(ref), hydrateRefs: root => agentRefs.hydrate(root),
+  lineage: () => sessionRelationsController.data,
 });
 
 

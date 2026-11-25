@@ -7,7 +7,8 @@ const context = browserSandbox({ atob: globalThis.atob });
 const {
   decodeRenderMessage, shortDisplayRef, parseUserSourceEntries, parseInjectedBotMessage,
   parseCodemodeResult, formatCodemodeOutput, formatJsonToolOutput, formatBotChangeLineHtml,
-  decodeToolDetails, toolCallBodyHtml, codemodeResultChipsHtml,
+  decodeToolDetails, decodeTaskSubagents, toolCallBodyHtml, codemodeResultChipsHtml,
+  renderTaskSubagentLinkHtml, taskHeaderLinkHtml, taskSubagentBarHtml, taskSubagentCountLabel,
 } = context.PiDishBrowser;
 test('message projection preserves text/image content but narrows identifiers and telemetry', () => {
   const raw = { role: 'assistant', index: '0" onclick="bad', timestamp: 'literal', content: ['plain', { type: 'text', text: 'text' }, { type: 'image', url: '/image', mimeType: 'image/png' }, null],
@@ -214,6 +215,77 @@ test('codemode result parsing, output formatting, bot tool bodies and places cha
   const afterPlaces = JSON.stringify([{ host: null, cwd: '/a', label: 'main' }, { host: 'desktop', cwd: '/b', label: 'desk' }, { host: 'framework', cwd: '/c', label: 'fw' }, { host: null, cwd: '/d', label: 'bot-display' }]);
   const placesDiff = formatBotChangeLineHtml(`places: ${beforePlaces} → ${afterPlaces}`);
   assert.match(placesDiff, /\+ bot-display \(\/d\)/);
+});
+
+test('task subagent decoding and link rendering handle single, batch, unresolved, XSS, and old-peer skew', () => {
+  const subA = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-11-25T01-00-00-000Z_01a2aaaa-0000-7000-8000-000000000001'])).toString('base64url');
+  const subB = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-11-25T01-01-00-000Z_01a2bbbb-0000-7000-8000-000000000002'])).toString('base64url');
+
+  // Version skew: raw OMP details without projected `subagents` decode to undefined (no link).
+  assert.equal(decodeToolDetails('task', {
+    results: [{ index: 0, id: 'AshaPass', exitCode: 0 }],
+    progress: [{ index: 0, id: 'AshaPass', status: 'running' }],
+  }), undefined);
+
+  // Projected task toolDetails decode cleanly and deduplicate by id.
+  const decoded = decodeToolDetails('task', {
+    subagents: [
+      { id: 'AshaPass', index: 0, agent: 'task', status: 'running', sessionId: subA, extra: 'ignored' },
+      { id: 'AshaPass', index: 1, sessionId: subB },
+      { id: '', sessionId: subB },
+    ],
+  });
+  assert.ok(decoded && decoded.kind === 'task');
+  assert.equal(decoded.subagents.length, 1);
+  assert.equal(decoded.subagents[0].id, 'AshaPass');
+  assert.equal(decoded.subagents[0].sessionId, subA);
+
+  // decodeRenderMessage keeps taskSubagents on task toolCall blocks only.
+  const assistant = decodeRenderMessage({
+    role: 'assistant',
+    content: [
+      { type: 'toolCall', id: 'tc-1', name: 'task', arguments: { tasks: [] }, taskSubagents: [{ id: 'AshaPass', sessionId: subA }] },
+      { type: 'toolCall', id: 'tc-2', name: 'bash', arguments: { command: 'ls' }, taskSubagents: [{ id: 'Ignored', sessionId: subB }] },
+    ],
+  });
+  assert.ok(Array.isArray(assistant.content));
+  const taskBlock = record(assistant.content[0]);
+  const bashBlock = record(assistant.content[1]);
+  assert.equal(Array.isArray(taskBlock.taskSubagents) && taskBlock.taskSubagents.length, 1);
+  assert.equal(bashBlock.taskSubagents, undefined);
+
+  // Unresolved subagent (missing sessionId) produces NO link.
+  assert.equal(renderTaskSubagentLinkHtml({ id: 'AshaPass', status: 'running' }), '');
+  assert.equal(taskHeaderLinkHtml([{ id: 'AshaPass', status: 'running' }]), '');
+
+  // Single resolved subagent produces header chip with host context, working hint, preserve-label, and arrow.
+  const singleHtml = taskHeaderLinkHtml([{ id: 'AshaPass', agent: 'explore', status: 'running', sessionId: subA }], {
+    hostId: 'desktop-host-id', running: true,
+  });
+  assert.match(singleHtml, /class="agent-ref agent-ref-chip task-subagent-link"/);
+  assert.match(singleHtml, new RegExp(`data-agent-ref="${subA}"`));
+  assert.match(singleHtml, /data-session-host="desktop-host-id"/);
+  assert.match(singleHtml, /data-agent-context-host="desktop-host-id"/);
+  assert.match(singleHtml, /data-agent-state="working"/);
+  assert.match(singleHtml, /data-agent-spawn="1"/);
+  assert.match(singleHtml, /data-agent-preserve-label="1"/);
+  assert.match(singleHtml, /AshaPass/);
+  assert.match(singleHtml, /↗/);
+
+  // Multi-subagent batch renders count + chip bar, not a single header chip.
+  const batch = decodeTaskSubagents([
+    { id: 'AshaPass', status: 'completed', sessionId: subA },
+    { id: 'Bora<img src=x>', status: 'completed', sessionId: subB },
+    { id: 'Unready', status: 'running' },
+  ]);
+  assert.equal(taskHeaderLinkHtml(batch), '');
+  assert.equal(taskSubagentCountLabel(batch), '2 subagents');
+  const barHtml = taskSubagentBarHtml(batch, { hostId: 'desktop-host-id' });
+  assert.match(barHtml, /class="task-subagent-bar"/);
+  assert.match(barHtml, /AshaPass/);
+  assert.match(barHtml, /Bora&lt;img src=x&gt;/);
+  assert.doesNotMatch(barHtml, /<img/);
+  assert.doesNotMatch(barHtml, /Unready/);
 });
 
 export {};

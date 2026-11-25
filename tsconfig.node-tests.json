@@ -83,6 +83,7 @@
     "test/fixtures/bot-scripted-models.ts",
     "test/knowledge.test.ts",
     "test/tmux-recovery.test.ts",
-    "test/cu-viewer.test.ts"
+    "test/cu-viewer.test.ts",
+    "test/task-subagent-link.test.ts"
   ]
 }

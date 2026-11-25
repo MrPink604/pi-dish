@@ -7,7 +7,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { discoverSessionCandidates, discoverSubsessionCandidates, findSessionCandidate, readSessionHeader, discoverHarnessSessions, } = require('../lib/session-discovery');
+const { discoverSessionCandidates, discoverSubsessionCandidates, findSessionCandidate, readSessionHeader, discoverHarnessSessions, resolveNestedSubsessionRouteId, } = require('../lib/session-discovery');
 const { registry } = require('../lib/harnesses');
 const { encodeSessionKey } = require('../lib/session-key');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-discovery-'));
@@ -273,4 +273,55 @@ test('profile overrides and native-id exclusions retain descriptor-owned identit
     assert.deepEqual(discoverSessionCandidates(sessions, {
         descriptor: registry.pi, profileId: 'omp-v1',
     }).candidates, [], 'a parser output profile override cannot loosen the descriptor header identity policy');
+});
+test('resolveNestedSubsessionRouteId resolves valid OMP subagents and rejects unsafe or missing targets', () => {
+    const sessions = path.join(root, 'sessions-task-resolve');
+    const workspace = path.join(sessions, 'workspace');
+    const parent = path.join(workspace, 'parent-omp.jsonl');
+    const subA = path.join(workspace, 'parent-omp', 'AshaPass.jsonl');
+    const subB = path.join(workspace, 'parent-omp', 'OpusBrowser.SweepA.jsonl');
+    const subBadHeader = path.join(workspace, 'parent-omp', 'NotASession.jsonl');
+    const subChanges = path.join(workspace, 'parent-omp', 'changes.jsonl');
+    const outside = path.join(root, 'outside-subagent.jsonl');
+    write(parent, { type: 'session', version: 3, id: 'parent-omp', cwd: '/workspace' });
+    fs.mkdirSync(path.dirname(subA), { recursive: true });
+    fs.writeFileSync(subA, [
+        { type: 'title', title: 'AshaPass review' },
+        { type: 'session', version: 3, id: '2026-11-25T01-00-00-000Z_01a2aaaa-0000-7000-8000-000000000001', cwd: '/workspace' },
+    ].map(line => JSON.stringify(line)).join('\n') + '\n');
+    write(subB, { type: 'session', version: 3, id: '2026-11-25T01-01-00-000Z_01a2bbbb-0000-7000-8000-000000000002', cwd: '/workspace' });
+    write(subBadHeader, { type: 'message', id: 'no-session-header' });
+    write(subChanges, { type: 'session', version: 3, id: 'changes-ignored' });
+    write(outside, { type: 'session', version: 3, id: 'outside-secret' });
+    const expectedA = encodeSessionKey('omp', (0, test_types_js_1.nativeId)('2026-11-25T01-00-00-000Z_01a2aaaa-0000-7000-8000-000000000001'));
+    const expectedB = encodeSessionKey('omp', (0, test_types_js_1.nativeId)('2026-11-25T01-01-00-000Z_01a2bbbb-0000-7000-8000-000000000002'));
+    assert.equal(resolveNestedSubsessionRouteId(parent, 'AshaPass', { harnessId: 'omp' }), expectedA);
+    assert.equal(resolveNestedSubsessionRouteId(parent, 'OpusBrowser.SweepA', { descriptor: registry.omp }), expectedB);
+    // Missing, malformed, reserved, non-session, and non-nested harnesses return null.
+    assert.equal(resolveNestedSubsessionRouteId(parent, 'MissingAgent', { harnessId: 'omp' }), null);
+    assert.equal(resolveNestedSubsessionRouteId(parent, 'NotASession', { harnessId: 'omp' }), null);
+    assert.equal(resolveNestedSubsessionRouteId(parent, 'changes', { harnessId: 'omp' }), null);
+    assert.equal(resolveNestedSubsessionRouteId(parent, '../outside-subagent', { harnessId: 'omp' }), null);
+    assert.equal(resolveNestedSubsessionRouteId(parent, 'a/b', { harnessId: 'omp' }), null);
+    assert.equal(resolveNestedSubsessionRouteId(parent, '', { harnessId: 'omp' }), null);
+    assert.equal(resolveNestedSubsessionRouteId(parent, 'AshaPass', { harnessId: 'pi' }), null);
+    // Symlinked subagent files and sibling directories are refused.
+    let linkedFile = false;
+    try {
+        fs.symlinkSync(outside, path.join(workspace, 'parent-omp', 'Linked.jsonl'));
+        linkedFile = true;
+    }
+    catch { }
+    if (linkedFile)
+        assert.equal(resolveNestedSubsessionRouteId(parent, 'Linked', { harnessId: 'omp' }), null);
+    const symParent = path.join(workspace, 'sym-parent.jsonl');
+    write(symParent, { type: 'session', version: 3, id: 'sym-parent', cwd: '/workspace' });
+    let linkedDir = false;
+    try {
+        fs.symlinkSync(path.join(workspace, 'parent-omp'), path.join(workspace, 'sym-parent'), 'dir');
+        linkedDir = true;
+    }
+    catch { }
+    if (linkedDir)
+        assert.equal(resolveNestedSubsessionRouteId(symParent, 'AshaPass', { harnessId: 'omp' }), null);
 });

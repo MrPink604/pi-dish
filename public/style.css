@@ -4104,7 +4104,52 @@ pre.tool-code code.hljs {
   border-radius: 3px;
 }
 
+.task-subagent-link {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 170px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  line-height: 18px;
+}
+
+.tool-call-header > .task-subagent-link,
+.tool-result-header > .task-subagent-link {
+  margin-left: auto;
+}
+
+.task-subagent-arrow {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.72;
+}
+
+.task-subagent-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-darker);
+}
+
+.live-task-subagents > .task-subagent-bar {
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.live-task-subagents > .task-subagent-bar .task-subagent-link,
+.task-subagent-bar .task-subagent-link {
+  max-width: 220px;
+}
+
 @media (max-width: 520px) {
+  .task-subagent-link {
+    max-width: 132px;
+    padding: 0 6px;
+  }
   .agent-ref-head {
     padding: 6px 8px 6px 9px;
     gap: 6px;
@@ -9905,6 +9950,7 @@ mark.comment-mark {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   padding: 6px 12px;
   font-size: 12px;
   color: var(--text-muted);

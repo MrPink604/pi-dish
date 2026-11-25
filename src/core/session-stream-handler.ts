@@ -1,15 +1,20 @@
 import type { RouteHandler } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
+import { getHarness } from './harnesses';
 import { errorMessage } from './http-boundary';
 import { canonicalSessionId } from './session-key';
+import { resolveNestedSubsessionRouteId } from './session-discovery';
 import { sessionSwitchRouteData } from './session-ownership';
 import { createToolEventStream } from './tool-event-stream';
 import { record as isRecord } from './helper-values';
 import type { LiveSession } from './session-ownership';
+import type { SessionSource } from './session-source';
 
 export interface SessionStreamPorts {
   getLiveSession(sessionId: string): Promise<LiveSession | null>;
+  /** Optional fallback for resolving the session's persisted file when not directly on the live transport. */
+  findSessionSource?(sessionId: string): SessionSource | null;
   /** Open browser event streams per canonical session; hibernation reads it. */
   viewers: Map<string, number>;
   /** Interval for observable SSE heartbeats, also below reverse-proxy idle timeouts. */
@@ -82,7 +87,23 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
       if (remaining) ports.viewers.set(viewerKey, remaining); else ports.viewers.delete(viewerKey);
     });
 
-    const toolEvents = createToolEventStream(send);
+    const resolveTaskSubagent = (agentId: string): string | null => {
+      if (session instanceof BridgeSession && typeof session.sessionFile === 'string' && session.sessionFile) {
+        const descriptor = getHarness(session.harnessId);
+        if (descriptor?.nestedSubsessions) {
+          return resolveNestedSubsessionRouteId(session.sessionFile, agentId, { descriptor });
+        }
+      }
+      const source = ports.findSessionSource?.(sessionId);
+      if (source) {
+        const descriptor = getHarness(source.harnessId);
+        if (descriptor?.nestedSubsessions) {
+          return resolveNestedSubsessionRouteId(source.file, agentId, { descriptor });
+        }
+      }
+      return null;
+    };
+    const toolEvents = createToolEventStream(send, undefined, { resolveTaskSubagent });
     const messageForStream = (message: unknown): unknown => {
       if (!isRecord(message) || message.role !== 'custom') return message;
       // interrupted-thinking is hidden reasoning; the client only needs its marker.

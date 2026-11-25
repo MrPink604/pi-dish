@@ -1,13 +1,16 @@
 // Generated from src/core/session-browse-handlers.ts; edit that source and run npm run build:core.
 import type { RouteHandler } from './http-boundary';
+import { type SessionSource } from './session-source';
 import type { HibernationState } from './session-api';
-import type { CatalogRuntime } from './session-catalog-runtime';
+import { type CatalogRuntime } from './session-catalog-runtime';
 import type { IncomingMessage } from 'http';
 export interface SessionBrowsePorts {
     catalog: CatalogRuntime;
     hibernated(): ReadonlyMap<string, HibernationState>;
     /** The request carries a private-session unlock token. */
     privateUnlocked(req: IncomingMessage): boolean;
+    /** Exact-route fallback for sessions not yet folded into the bounded index scan. */
+    resolveSessionCandidate?(id: string): SessionSource | null;
 }
 /** Opt-in `/api/sessions` bounds for agent callers; the browser sends neither, so its payload is unchanged. */
 export interface CatalogBounds {

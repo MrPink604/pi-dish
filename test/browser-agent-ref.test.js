@@ -103,6 +103,8 @@ test('deriveAgentState and shared card/chip renderers cover all states and degra
     assert.equal(deriveAgentState({ isActive: true, turnInProgress: true }).state, 'working');
     assert.equal(deriveAgentState({ isActive: true, askPending: true }).state, 'waiting');
     assert.equal(deriveAgentState({ isActive: true, turnInProgress: false }).state, 'idle');
+    assert.equal(deriveAgentState({ isActive: false, subagentLive: true }).state, 'working');
+    assert.equal(deriveAgentState({ isActive: false, subagentLive: true }).label, 'subagent');
     assert.equal(deriveAgentState({ isActive: false }, { reportStatus: 'finished', reportTone: 'ok' }).state, 'finished');
     assert.equal(deriveAgentState({ isActive: false }).state, 'closed');
     const ambig = deriveAgentState(null, { resolveStatus: 'ambiguous' });

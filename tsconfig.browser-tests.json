@@ -122,6 +122,7 @@
     "test/browser/bots.spec.ts",
     "test/browser/agent-ref.spec.ts",
     "test/browser/review-deck.spec.ts",
-    "test/browser/cu-viewer.spec.ts"
+    "test/browser/cu-viewer.spec.ts",
+    "test/browser/task-link.spec.ts"
   ]
 }

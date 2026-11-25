@@ -2,8 +2,10 @@ import type { SessionState, SelectionOwner } from './session-state';
 import { record, finite } from '../core/helper-values';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { parseIpythonResult, getToolSummary, getToolOutputText } from '../core/helper-content';
-import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, evalBodyHtml, evalActivityHtml, evalDurationMs, evalResultChipsHtml, codemodeResultChipsHtml, WAIT_SAFETY_CAP_MS } from './tool-format';
-import type { ToolDetails, WaitJob } from './tool-format';
+import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, evalBodyHtml, evalActivityHtml, evalDurationMs, evalResultChipsHtml, codemodeResultChipsHtml, taskHeaderLinkHtml, taskSubagentBarHtml, taskSubagentCountLabel, WAIT_SAFETY_CAP_MS } from './tool-format';
+import type { TaskSubagent, ToolDetails, WaitJob } from './tool-format';
+import type { AgentRefSession } from './agent-ref';
+import type { LineageNode, SessionLineage } from './session-relations';
 import { parseCodemodeResult, formatJsonToolOutput } from './bot-display';
 interface ToolResultData { content?: unknown; details?: unknown }
 interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; intent?: string; startedAt?: string | number; partialResult?: ToolResultData; result?: ToolResultData; isError: boolean }
@@ -17,11 +19,61 @@ function decode(value: unknown): ToolEvent | null {
 }
 /** Latest wait snapshot and when it arrived, so clocks advance between progress frames. */
 interface WaitSnapshot { jobs: readonly WaitJob[]; receivedAt: number }
-interface ToolPanel { owner: SelectionOwner; el: HTMLDetailsElement; startTime: number | null; toolName: string; args: unknown; intent?: string; wait?: WaitSnapshot }
+interface ToolPanel {
+  owner: SelectionOwner; el: HTMLDetailsElement; startTime: number | null; toolName: string; args: unknown; intent?: string;
+  wait?: WaitSnapshot; taskSubagents?: readonly TaskSubagent[]; taskLinksSig?: string;
+}
+function findLineageNode(node: LineageNode | null, sessionId: string): LineageNode | null {
+  if (!node) return null;
+  if (node.session.id === sessionId) return node;
+  for (const child of node.children) {
+    const found = findLineageNode(child, sessionId);
+    if (found) return found;
+  }
+  return null;
+}
+/** Heal a task subagent's missing route id strictly against unique direct children in the parent's lineage tree. */
+function findDirectChildSessionId(lineage: SessionLineage | undefined, parentId: string, agentId: string): string | undefined {
+  if (!lineage?.tree || !parentId || !agentId) return undefined;
+  const parent = findLineageNode(lineage.tree, parentId);
+  if (!parent) return undefined;
+  const matches = parent.children.filter(child => child.session.agentId === agentId && child.session.id);
+  return matches.length === 1 ? matches[0].session.id : undefined;
+}
+function mergeTaskSubagents(
+  existing: readonly TaskSubagent[] | undefined,
+  incoming: readonly TaskSubagent[] | undefined,
+  owner: SelectionOwner,
+  lineage: SessionLineage | undefined,
+): TaskSubagent[] | undefined {
+  const byId = new Map<string, TaskSubagent>();
+  for (const item of existing || []) byId.set(item.id, item);
+  for (const item of incoming || []) {
+    const prev = byId.get(item.id);
+    byId.set(item.id, {
+      ...prev,
+      ...item,
+      ...(item.sessionId || prev?.sessionId ? { sessionId: item.sessionId || prev?.sessionId } : {}),
+    });
+  }
+  if (!byId.size) return undefined;
+  const merged: TaskSubagent[] = [];
+  for (const item of byId.values()) {
+    const sessionId = item.sessionId || findDirectChildSessionId(lineage, owner.id, item.id);
+    merged.push(sessionId && sessionId !== item.sessionId ? { ...item, sessionId } : item);
+  }
+  return merged;
+}
+function taskLinksSignature(subagents: readonly TaskSubagent[] | undefined, hostId: string | null): string {
+  if (!subagents?.length) return '';
+  return `${hostId || ''}|${subagents.length}|${subagents.map(s => `${s.id}:${s.sessionId || ''}`).join(',')}`;
+}
 export function createLiveTools(options: {
   document: Document; sessionState: SessionState; started: (id: string, name: string) => void; finished: (id: string) => void;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
   images: (content: unknown, alt: string) => string; videos?: (content: unknown) => string; mood: (tool: string, args: unknown) => void;
+  matchRef?: (ref: string) => AgentRefSession | null | undefined; hydrateRefs?: (root: ParentNode) => void;
+  lineage?: () => SessionLineage;
 }) {
   const { document, sessionState } = options; let disposed = false;
   const liveToolPanels = new Map<string, ToolPanel>(), retained = new WeakMap<HTMLDetailsElement, ToolPanel>();
@@ -122,7 +174,37 @@ function syncWait(entry: ToolPanel) {
   waitTicker ??= setInterval(tickWaits, 1000);
 }
 
-function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown, output: string, isError: boolean, isComplete: boolean, durationMs: number | null = null, imagesHtml = '', intent?: string, details?: ToolDetails) {
+function syncTaskSubagentsDom(entry: ToolPanel, running: boolean) {
+  const hostId = entry.owner.host;
+  const sig = taskLinksSignature(entry.taskSubagents, hostId);
+  if (sig === (entry.taskLinksSig || '')) return;
+  entry.taskLinksSig = sig;
+  const header = entry.el.querySelector('.live-tool-header');
+  const linkOpts = { hostId, running, matchRef: options.matchRef };
+  const linkHtml = taskHeaderLinkHtml(entry.taskSubagents, linkOpts);
+  const countLabel = taskSubagentCountLabel(entry.taskSubagents);
+  const barHtml = taskSubagentBarHtml(entry.taskSubagents, linkOpts);
+  if (header) {
+    header.querySelectorAll('.task-subagent-count, .task-subagent-link').forEach(node => node.remove());
+    const insertHtml = (countLabel ? '<span class="live-tool-status task-subagent-count">' + escapeHtml(countLabel) + '</span>' : '') + linkHtml;
+    if (insertHtml) {
+      const anchor = header.querySelector('.live-tool-status:not(.task-subagent-count)') || header.querySelector('.live-tool-status-dot');
+      if (anchor) anchor.insertAdjacentHTML('beforebegin', insertHtml);
+      else header.insertAdjacentHTML('beforeend', insertHtml);
+    }
+  }
+  const existingBar = entry.el.querySelector<HTMLElement>('.live-task-subagents');
+  if (barHtml) {
+    if (existingBar) existingBar.innerHTML = barHtml;
+    else {
+      header?.insertAdjacentHTML('afterend', '<div class="live-task-subagents">' + barHtml + '</div>');
+      entry.el.setAttribute('open', '');
+    }
+  } else existingBar?.remove();
+  if (linkHtml || barHtml) options.hydrateRefs?.(entry.el);
+}
+
+function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown, output: string, isError: boolean, isComplete: boolean, durationMs: number | null = null, imagesHtml = '', intent?: string, details?: ToolDetails, hostId: string | null = null, taskSubagents?: readonly TaskSubagent[]) {
   const isCodemode = toolName === 'codemode' || details?.kind === 'codemode';
   const parsedCodemode = isCodemode && isComplete && output ? parseCodemodeResult(output) : null;
   const effectiveError = isError || (parsedCodemode !== null && !parsedCodemode.ok);
@@ -130,9 +212,13 @@ function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown,
   const summary = kernelSummary(toolName, args, intent);
   const source = toolSourceText(toolName, args, intent);
   const waitJobs = details?.kind === 'wait' && details.jobs.length ? details.jobs : null;
+  const taskLinkOpts = { hostId, running: !isComplete, matchRef: options.matchRef };
+  const taskLink = toolName === 'task' ? taskHeaderLinkHtml(taskSubagents, taskLinkOpts) : '';
+  const taskCount = toolName === 'task' ? taskSubagentCountLabel(taskSubagents) : '';
+  const taskBar = toolName === 'task' ? taskSubagentBarHtml(taskSubagents, taskLinkOpts) : '';
   const shownOutput = parsedCodemode ? parsedCodemode.output.trim() : output;
   const formattedJson = isComplete && shownOutput ? formatJsonToolOutput(shownOutput) : null;
-  const openAttr = (output || imagesHtml || source || waitJobs) ? ' open' : '';
+  const openAttr = (output || imagesHtml || source || waitJobs || taskBar) ? ' open' : '';
 
   let statusHtml = '';
   if (isComplete) {
@@ -170,9 +256,12 @@ function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown,
       '<span class="live-tool-icon">⚡</span>' +
       '<span class="live-tool-name">' + escapeHtml(toolName) + '</span>' +
       (summary ? '<span class="live-tool-summary">' + escapeHtml(summary) + '</span>' : '') +
+      (taskCount ? '<span class="live-tool-status task-subagent-count">' + escapeHtml(taskCount) + '</span>' : '') +
+      taskLink +
       statusHtml +
       '<span class="live-tool-status-dot"></span>' +
     '</summary>' +
+    (taskBar ? '<div class="live-task-subagents">' + taskBar + '</div>' : '') +
     (source ? sourceBlockHtml(toolName, source) : '') +
     outputHtml +
     imagesHtml +
@@ -246,6 +335,10 @@ function updateLiveToolPanel(data: ToolEvent) {
   entry.toolName = resolvedName; entry.args = resolvedArgs; entry.intent = intent;
 
   const details = decodeToolDetails(resolvedName, partialResult?.details);
+  if (details?.kind === 'task') {
+    entry.taskSubagents = mergeTaskSubagents(entry.taskSubagents, details.subagents, entry.owner, options.lineage?.());
+    syncTaskSubagentsDom(entry, true);
+  }
   if (details?.kind === 'wait') {
     entry.wait = { jobs: details.jobs, receivedAt: Date.now() };
     entry.el.querySelector('.live-tool-output')?.remove();
@@ -328,8 +421,11 @@ function finalizeLiveToolPanel(data: ToolEvent) {
     + (options.videos ? options.videos(result && result.content) : '');
   const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
   const details = decodeToolDetails(resolvedName, result?.details);
+  const mergedTask = resolvedName === 'task'
+    ? mergeTaskSubagents(entry.taskSubagents, details?.kind === 'task' ? details.subagents : undefined, entry.owner, options.lineage?.())
+    : undefined;
 
-  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, mediaHtml, intent, details);
+  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, mediaHtml, intent, details, entry.owner.host, mergedTask);
   const tmp = document.createElement('div');
   tmp.innerHTML = newHtml;
   const newEl = tmp.firstElementChild as HTMLDetailsElement;
@@ -340,11 +436,26 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   entry.args = resolvedArgs;
   entry.intent = intent;
   entry.wait = undefined;
+  entry.taskSubagents = mergedTask;
+  entry.taskLinksSig = taskLinksSignature(mergedTask, entry.owner.host);
+  if (mergedTask?.some(subagent => !!subagent.sessionId)) options.hydrateRefs?.(newEl);
 
   // Keep in map for dedup — will be cleaned up on turn_end
 }
 
   function clear(container?: HTMLElement | null) { container?.querySelectorAll('details.live-tool-panel').forEach(el => el.remove()); liveToolPanels.clear(); }
+  function syncLineage(owner: SelectionOwner, lineage: SessionLineage) {
+    if (!owns(owner)) return;
+    const container = document.getElementById('messages');
+    if (!container) return;
+    for (const el of container.querySelectorAll<HTMLDetailsElement>('details.live-tool-panel')) {
+      const entry = retained.get(el);
+      if (!entry || entry.owner.id !== owner.id || entry.owner.host !== owner.host || entry.toolName !== 'task' || !entry.taskSubagents?.length) continue;
+      entry.owner = owner;
+      entry.taskSubagents = mergeTaskSubagents(entry.taskSubagents, undefined, entry.owner, lineage);
+      syncTaskSubagentsDom(entry, entry.el.classList.contains('running'));
+    }
+  }
   function finishRunning() {
     for (const entry of liveToolPanels.values()) {
       if (!owns(entry.owner) || !entry.el.classList.contains('running')) continue;
@@ -355,6 +466,6 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   }
   return { append(value: unknown, options?: { completionOnly?: boolean }) { const data = decode(value); return data ? appendLiveToolPanel(data, options) : null; },
     update(value: unknown) { const data = decode(value); if (data) updateLiveToolPanel(data); }, finish(value: unknown) { const data = decode(value); if (data) finalizeLiveToolPanel(data); },
-    clear, finishRunning, get count() { return liveToolPanels.size; },
+    clear, syncLineage, finishRunning, get count() { return liveToolPanels.size; },
     dispose() { if (disposed) return; disposed = true; liveToolPanels.clear(); clearInterval(waitTicker); waitTicker = undefined; } };
 }

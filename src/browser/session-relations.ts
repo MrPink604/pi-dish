@@ -89,6 +89,7 @@ export function createSessionRelations(options: {
   openTasksView?: (owner: SelectionOwner, endpoint: HostEndpoint, initial: SessionTasksPayload) => void;
   openSwarmView?: (owner: SelectionOwner, endpoint: HostEndpoint) => void;
   status: (message: string, kind: 'error') => void;
+  onLineage?: (owner: SelectionOwner, lineage: SessionLineage) => void;
   // True while a related takeover owns the main pane. Its own poll covers
   // the family/tasks/swarm there and the header chips are hidden, so this poll stands down.
   takeoverActive?: () => boolean;
@@ -284,6 +285,7 @@ export function createSessionRelations(options: {
       lastIndexing = indexing;
       lineage = decodeSessionLineage(data);
       tasksData = loadedTasks;
+      options.onLineage?.(owner, lineage);
       renderRelationsLink(owner, endpoint);
       if (indexing) indexingTimer = setTimeout(() => {
         if (current()) void loadSessionRelations(owner);

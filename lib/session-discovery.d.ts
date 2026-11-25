@@ -1,5 +1,5 @@
 // Generated from src/core/session-discovery.ts; edit that source and run npm run build:core.
-import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
+import type { HarnessDescriptor, HarnessId, NativeSessionId, SessionId } from './contracts';
 import type { DiscoveryCandidate, DiscoveryOptions, DiscoveryResult } from './session-source';
 interface SessionHeader {
     id: string | null;
@@ -45,6 +45,17 @@ declare function inspectSubsessionExits(parentFile: unknown, options?: Discovery
     complete: boolean;
     blockers: string[];
 };
+/** Safe OMP subagent filename stem (rejects traversal and OMP's `changes.jsonl` log). */
+declare function isValidTaskAgentId(value: unknown): value is string;
+/**
+ * Resolve one OMP `task` subagent id (`<parent-stem>/<agentId>.jsonl`) to its
+ * canonical pi-dish route id (`~sk1_...`), O(1) via the stat-cached header read.
+ * Never follows symlinks or guesses when the transcript file is absent or invalid.
+ */
+declare function resolveNestedSubsessionRouteId(parentFile: unknown, agentId: unknown, options?: {
+    harnessId?: HarnessId;
+    descriptor?: HarnessDescriptor;
+}): SessionId | null;
 /** Retire all parser-profile observations of a replaced file. */
 declare function invalidateSessionHeader(file: string): void;
 declare function clearSessionHeaders(): void;
@@ -56,6 +67,8 @@ declare const _default: {
     findSessionCandidate: typeof findSessionCandidate;
     discoverSubsessionCandidates: typeof discoverSubsessionCandidates;
     inspectSubsessionExits: typeof inspectSubsessionExits;
+    isValidTaskAgentId: typeof isValidTaskAgentId;
+    resolveNestedSubsessionRouteId: typeof resolveNestedSubsessionRouteId;
     readSessionHeader: typeof readSessionHeader;
     safeHeaderSessionId: typeof safeHeaderSessionId;
     DEFAULT_MAX_DEPTH: number;

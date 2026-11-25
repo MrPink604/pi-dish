@@ -1,6 +1,7 @@
 import { record, finite } from '../core/helper-values';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { getToolSummary } from '../core/helper-content';
+import { deriveAgentState, type AgentRefSession } from './agent-ref';
 import { botToolCallBodyHtml, type MatchRefFn, type ParsedCodemodeResult } from './bot-display';
 
 /** OMP bash result details: timing, exit status and the deadline of a backgrounded job. */
@@ -26,14 +27,53 @@ export interface EvalCell {
 export interface EvalToolDetails { readonly kind: 'eval'; readonly cells: readonly EvalCell[] }
 /** A bot's code mode result details: the tool calls its script made, as eval activity rows. */
 export interface CodemodeToolDetails { readonly kind: 'codemode'; readonly calls: readonly EvalEvent[]; readonly truncated?: boolean }
-export type ToolDetails = BashToolDetails | WaitToolDetails | EvalToolDetails | CodemodeToolDetails;
+/** One OMP `task` subagent entry projected by the server (sessionId present only once resolved on disk). */
+export interface TaskSubagent {
+  readonly id: string;
+  readonly index?: number;
+  readonly agent?: string;
+  readonly status?: string;
+  readonly exitCode?: number;
+  readonly durationMs?: number;
+  readonly sessionId?: string;
+}
+/** OMP `task` tool details: projected subagent identities and resolved transcript route ids. */
+export interface TaskToolDetails { readonly kind: 'task'; readonly subagents: readonly TaskSubagent[] }
+export type ToolDetails = BashToolDetails | WaitToolDetails | EvalToolDetails | CodemodeToolDetails | TaskToolDetails;
 
 /** OMP's `wait` returns a still-running snapshot after this cap even if no job settled. */
 export const WAIT_SAFETY_CAP_MS = 30 * 60_000;
 const OUTPUT_LIMIT = 8000;
 const EVAL_EVENT_LIMIT = 100;
+const TASK_SUBAGENT_LIMIT = 64;
 const string = (value: unknown) => typeof value === 'string' && value ? value : undefined;
 const number = (value: unknown) => finite(value) ? value : undefined;
+
+export function decodeTaskSubagents(value: unknown): TaskSubagent[] {
+  if (!Array.isArray(value)) return [];
+  const out: TaskSubagent[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (out.length >= TASK_SUBAGENT_LIMIT) break;
+    if (!record(item)) continue;
+    const id = string(item.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const index = number(item.index);
+    const exitCode = number(item.exitCode);
+    const durationMs = number(item.durationMs);
+    out.push({
+      id,
+      ...(index !== undefined && Number.isInteger(index) && index >= 0 ? { index } : {}),
+      ...(string(item.agent) ? { agent: string(item.agent) } : {}),
+      ...(string(item.status) ? { status: string(item.status) } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
+      ...(string(item.sessionId) ? { sessionId: string(item.sessionId) } : {}),
+    });
+  }
+  return out;
+}
 /** Eval/ipython language names → highlight.js grammars in the vendored common bundle. */
 const HIGHLIGHT_LANGUAGES: Readonly<Record<string, string>> = {
   py: 'python', python: 'python', ipython: 'python', js: 'javascript', javascript: 'javascript', ts: 'typescript', typescript: 'typescript',
@@ -96,7 +136,71 @@ export function decodeToolDetails(toolName: string | undefined, value: unknown):
       events: Array.isArray(cell.statusEvents) ? cell.statusEvents.slice(0, EVAL_EVENT_LIMIT).flatMap(decodeEvalEvent) : [],
     }] : []) };
   }
+  if (toolName === 'task' && Array.isArray(value.subagents)) {
+    const subagents = decodeTaskSubagents(value.subagents);
+    return subagents.length ? { kind: 'task', subagents } : undefined;
+  }
   return undefined;
+}
+
+export interface TaskLinkRenderOptions {
+  readonly hostId?: string | null;
+  readonly running?: boolean;
+  readonly matchRef?: (ref: string) => AgentRefSession | null | undefined;
+}
+
+function taskSubagentState(subagent: TaskSubagent, opts: TaskLinkRenderOptions): string {
+  const session = subagent.sessionId ? opts.matchRef?.(subagent.sessionId) : null;
+  if (session) return deriveAgentState(session).state;
+  if (opts.running || subagent.status === 'running' || subagent.status === 'pending') return 'working';
+  if (subagent.status === 'completed') return 'finished';
+  return 'closed';
+}
+
+/** Single clickable subagent transcript link using the shared agent-ref chip visuals and click handler. */
+export function renderTaskSubagentLinkHtml(subagent: TaskSubagent, opts: TaskLinkRenderOptions = {}): string {
+  const sessionId = subagent.sessionId;
+  if (!sessionId) return '';
+  const state = taskSubagentState(subagent, opts);
+  const roleHint = subagent.agent && subagent.agent !== 'task' ? ` (${subagent.agent})` : '';
+  const title = `Open subagent transcript: ${subagent.id}${roleHint}`;
+  const hostAttrs = opts.hostId
+    ? ` data-session-host="${escapeHtml(opts.hostId)}" data-agent-context-host="${escapeHtml(opts.hostId)}"`
+    : '';
+  const spawnAttr = state === 'working' ? ' data-agent-spawn="1"' : '';
+  return `<button type="button" class="agent-ref agent-ref-chip task-subagent-link"` +
+    ` data-agent-ref="${escapeHtml(sessionId)}"` +
+    ` data-agent-state="${escapeHtml(state)}"` +
+    ` data-session-ref="${escapeHtml(sessionId)}"` +
+    ` data-session-id="${escapeHtml(sessionId)}"` +
+    hostAttrs +
+    spawnAttr +
+    ` data-agent-preserve-label="1"` +
+    ` data-task-agent-id="${escapeHtml(subagent.id)}"` +
+    ` title="${escapeHtml(title)}">` +
+    `<span class="agent-ref-chip-label">${escapeHtml(subagent.id)}</span>` +
+    `<span class="task-subagent-arrow" aria-hidden="true">↗</span>` +
+    `</button>`;
+}
+
+/** Header link for single-subagent `task` blocks; multi-subagent batches use the body chip bar instead. */
+export function taskHeaderLinkHtml(subagents: readonly TaskSubagent[] | undefined, opts: TaskLinkRenderOptions = {}): string {
+  if (!subagents || subagents.length !== 1) return '';
+  return renderTaskSubagentLinkHtml(subagents[0], opts);
+}
+
+/** Quiet header count chip for multi-subagent batch `task` blocks once at least one link is resolved. */
+export function taskSubagentCountLabel(subagents: readonly TaskSubagent[] | undefined): string {
+  if (!subagents || subagents.length <= 1) return '';
+  const resolved = subagents.filter(s => !!s.sessionId).length;
+  return resolved ? `${resolved} subagent${resolved === 1 ? '' : 's'}` : '';
+}
+
+/** Compact wrapping chip bar at the top of a multi-subagent batch `task` block body. */
+export function taskSubagentBarHtml(subagents: readonly TaskSubagent[] | undefined, opts: TaskLinkRenderOptions = {}): string {
+  if (!subagents || subagents.length <= 1) return '';
+  const chips = subagents.map(subagent => renderTaskSubagentLinkHtml(subagent, opts)).filter(Boolean).join('');
+  return chips ? `<div class="task-subagent-bar">${chips}</div>` : '';
 }
 
 /** Compact span for tool timing: 85ms, 4.2s, 42s, 3m 08s, 1h 02m. */

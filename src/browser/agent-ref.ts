@@ -345,6 +345,7 @@ export function deriveAgentState(session: AgentRefSession | null | undefined, hi
       if (session.turnInProgress || session.subagentLive) return { state: 'working', label: 'working', tone: 'working' };
       return { state: 'idle', label: 'idle', tone: 'ok' };
     }
+    if (session.subagentLive) return { state: 'working', label: 'subagent', tone: 'working' };
     if (session.hibernation) return { state: 'idle', label: 'idle', tone: 'muted' };
     if (hint.reportStatus) {
       if (hint.reportTone === 'warn') return { state: 'closed', label: hint.reportStatus, tone: 'warn' };

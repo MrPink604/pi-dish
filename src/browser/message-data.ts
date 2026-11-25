@@ -1,8 +1,8 @@
 import { record, finite } from '../core/helper-values';
 import type { RefContextEntry, Timestamp } from '../core/helper-types';
 import type { CacheExpiryProjection } from '../core/session-api';
-import { decodeToolDetails, type ToolDetails } from './tool-format';
-export interface MessageBlock { readonly type: string; readonly text?: string; readonly thinking?: string; readonly name?: string; readonly id?: string; readonly arguments?: Readonly<Record<string, unknown>>; readonly url?: string; readonly data?: string; readonly path?: string; readonly mimeType?: string }
+import { decodeToolDetails, decodeTaskSubagents, type TaskSubagent, type ToolDetails } from './tool-format';
+export interface MessageBlock { readonly type: string; readonly text?: string; readonly thinking?: string; readonly name?: string; readonly id?: string; readonly arguments?: Readonly<Record<string, unknown>>; readonly taskSubagents?: readonly TaskSubagent[]; readonly url?: string; readonly data?: string; readonly path?: string; readonly mimeType?: string }
 export interface MessageUsage { readonly input?: number; readonly output?: number; readonly reasoning?: number; readonly cacheRead?: number; readonly cacheWrite?: number; readonly cacheWrite1h?: number; readonly cost?: { readonly input?: number | null; readonly output?: number | null; readonly cacheRead?: number | null; readonly cacheWrite?: number | null; readonly total?: number | null } }
 export interface AdvisorNote { readonly note: string; readonly severity?: string; readonly advisor?: string }
 /** A change a bot made to its own or a descendant's entry; an undo restores `fields` from the revision before. */
@@ -37,10 +37,18 @@ export function decodeMessageUsage(value: unknown): MessageUsage | undefined {
 export function decodeMessageContent(value: unknown): RenderMessage['content'] {
   if (typeof value === 'string') return value;
   if (!Array.isArray(value)) return undefined;
-  return value.flatMap((block: unknown): (MessageBlock | string)[] => typeof block === 'string' ? [block] : !record(block) || typeof block.type !== 'string' ? [] : [{
-    type: block.type, text: string(block.text), thinking: string(block.thinking), name: string(block.name), id: string(block.id),
-    arguments: record(block.arguments) ? block.arguments : undefined, url: string(block.url), data: string(block.data), path: string(block.path), mimeType: string(block.mimeType),
-  }]);
+  return value.flatMap((block: unknown): (MessageBlock | string)[] => {
+    if (typeof block === 'string') return [block];
+    if (!record(block) || typeof block.type !== 'string') return [];
+    const taskSubagents = block.type === 'toolCall' && block.name === 'task' && Array.isArray(block.taskSubagents)
+      ? decodeTaskSubagents(block.taskSubagents) : undefined;
+    return [{
+      type: block.type, text: string(block.text), thinking: string(block.thinking), name: string(block.name), id: string(block.id),
+      arguments: record(block.arguments) ? block.arguments : undefined,
+      ...(taskSubagents?.length ? { taskSubagents } : {}),
+      url: string(block.url), data: string(block.data), path: string(block.path), mimeType: string(block.mimeType),
+    }];
+  });
 }
 function decodeCacheExpiry(value: unknown): CacheExpiryProjection | undefined {
   if (!record(value) || !finite(value.refreshedAt) || !finite(value.expiresAt) || !finite(value.retentionMs) ||

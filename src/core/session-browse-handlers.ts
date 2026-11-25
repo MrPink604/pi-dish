@@ -1,17 +1,20 @@
+import path = require('path');
 import type { RouteHandler } from './http-boundary';
 import { errorMessage } from './http-boundary';
 import { createHostHealth } from './host-health';
+import { getHarness } from './harnesses';
+import { isPrivateSessionFile } from './private-sessions';
 import {
   buildSnippets, evaluateSessionQuery, isAutomationSession, parseSessionQuery,
   positiveQueryTokens, queryAsksForAutomation, scoreSessionMatch,
 } from './helper-query.js';
 import { stableSessionRef } from './helper-refs.js';
-import { sourceForIdentity } from './session-source';
-import { getSearchText } from './session-index';
+import { sourceForIdentity, type SessionSource } from './session-source';
+import { getSearchText, getSessionInfo } from './session-index';
 import { sessionForClient } from './session-api';
 import type { HibernationState } from './session-api';
-import type { CatalogRuntime } from './session-catalog-runtime';
-import type { CatalogSession } from './session-catalog';
+import { canonicalSessionPath, historicalAdvice, type CatalogRuntime } from './session-catalog-runtime';
+import { buildSourceSession, type CatalogSession, type SessionCatalog } from './session-catalog';
 import type { IncomingMessage } from 'http';
 
 export interface SessionBrowsePorts {
@@ -19,6 +22,8 @@ export interface SessionBrowsePorts {
   hibernated(): ReadonlyMap<string, HibernationState>;
   /** The request carries a private-session unlock token. */
   privateUnlocked(req: IncomingMessage): boolean;
+  /** Exact-route fallback for sessions not yet folded into the bounded index scan. */
+  resolveSessionCandidate?(id: string): SessionSource | null;
 }
 
 const SEARCH_RESULT_CAP = 100;
@@ -121,13 +126,38 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     }
   };
 
+  function resolveExactFallback(catalog: SessionCatalog, ref: string, includePrivate: boolean): CatalogSession | null {
+    if (!ports.resolveSessionCandidate) return null;
+    const candidate = ports.resolveSessionCandidate(ref);
+    if (!candidate) return null;
+    if (!includePrivate && isPrivateSessionFile(getHarness(candidate.harnessId), candidate.file)) return null;
+    try {
+      const row = buildSourceSession(candidate, getSessionInfo(candidate), historicalAdvice(candidate), runtime.options);
+      if (row.parentSession && row.sessionFile) {
+        const parentFile = path.isAbsolute(row.parentSession)
+          ? row.parentSession : path.resolve(path.dirname(row.sessionFile), row.parentSession);
+        const parent = catalog.byPath.get(canonicalSessionPath(parentFile) || '');
+        if (parent && parent.id !== row.id) {
+          row.parentId = parent.id;
+          row.parentSource = row.parentSessionSource || 'pi-session-header';
+          row.familyParentId = parent.id;
+        }
+      }
+      return row;
+    } catch {
+      return null;
+    }
+  }
+
   const resolve: RouteHandler = (req, res) => {
     const ref = String(req.query.id ?? '').trim();
     if (!ref) return res.status(400).json({ error: 'id is required' });
     if (ref.length < 4) return res.status(400).json({ error: 'id prefix must be at least 4 characters' });
 
-    const catalog = runtime.buildSessionCatalog({ includePrivate: ports.privateUnlocked(req) });
-    const { session, matches } = runtime.resolveRefInCatalog(catalog, ref);
+    const includePrivate = ports.privateUnlocked(req);
+    const catalog = runtime.buildSessionCatalog({ includePrivate });
+    const { session: matched, matches } = runtime.resolveRefInCatalog(catalog, ref);
+    const session = matched || (matches.length === 0 ? resolveExactFallback(catalog, ref, includePrivate) : null);
     if (session) {
       const hibernation = ports.hibernated().get(session.id);
       const resolved = hibernation ? { ...session, hibernation } : session;
@@ -167,12 +197,14 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
       if (ids.length >= 50) break;
     }
     if (!ids.length) return res.json({ results: {} });
-    const catalog = runtime.buildSessionCatalog({ includePrivate: ports.privateUnlocked(req) });
+    const includePrivate = ports.privateUnlocked(req);
+    const catalog = runtime.buildSessionCatalog({ includePrivate });
     const peerIds = catalog.list.map((entry) => entry.id);
     const hibernated = ports.hibernated();
     const results: Record<string, unknown> = Object.create(null);
     for (const id of ids) {
-      const { session, matches } = runtime.resolveRefInCatalog(catalog, id);
+      const { session: matched, matches } = runtime.resolveRefInCatalog(catalog, id);
+      const session = matched || (matches.length === 0 ? resolveExactFallback(catalog, id, includePrivate) : null);
       if (session) {
         const hibernation = hibernated.get(session.id);
         const projected = sessionForClient(hibernation ? { ...session, hibernation } : session);

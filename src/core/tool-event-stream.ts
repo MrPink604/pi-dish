@@ -9,6 +9,155 @@ const EVAL_EVENT_LIMIT = 50;
 const EVAL_EVENT_TEXT_LIMIT = 300;
 const CODEMODE_CALL_LIMIT = 100;
 const CODEMODE_CALL_TEXT_LIMIT = 500;
+const TASK_SUBAGENT_LIMIT = 64;
+const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const RUNNING_AGENT_TEXT_RE = /^Running agent ([A-Za-z0-9][A-Za-z0-9._-]{0,127})\.\.\.$/;
+const SPAWNED_BG_PREFIX_RE = /^Spawned (?:\d+ )?background agents?\b/;
+const SPAWNED_BG_LINE_RE = /^- `([A-Za-z0-9][A-Za-z0-9._-]{0,127})` \(job `([A-Za-z0-9][A-Za-z0-9._-]{0,127})`\)/gm;
+
+export interface TaskSubagentProjection {
+  readonly id: string;
+  readonly index?: number;
+  readonly agent?: string;
+  readonly status?: string;
+  readonly exitCode?: number;
+  readonly durationMs?: number;
+  readonly sessionId?: string;
+}
+
+export interface ToolEventProjectionOptions {
+  /** Resolves an OMP task subagent id (`<parent>/<id>.jsonl`) to its canonical route id (`~sk1_...`). */
+  readonly resolveTaskSubagent?: (agentId: string) => string | null;
+}
+
+function validTaskId(value: unknown): value is string {
+  return typeof value === 'string' && TASK_ID_RE.test(value) && !value.includes('..') && value !== 'changes';
+}
+
+function boundedString(value: unknown, max: number): string | undefined {
+  return typeof value === 'string' && value ? value.slice(0, max) : undefined;
+}
+
+function contentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  let out = '';
+  for (const block of content) {
+    if (record(block) && block.type === 'text' && typeof block.text === 'string') out += block.text;
+  }
+  return out;
+}
+
+/**
+ * Project OMP `task` subagent identities from either raw OMP details (`progress`/`results`)
+ * or already-projected `details.subagents` (idempotent across bridge -> server hops).
+ * Never walks traces, outputs, or arbitrary keys on `details`.
+ */
+export function extractTaskSubagents(
+  details: unknown,
+  resolveTaskSubagent?: (agentId: string) => string | null,
+  content?: unknown,
+): TaskSubagentProjection[] {
+  const byId = new Map<string, TaskSubagentProjection>();
+  const order: string[] = [];
+  const upsert = (entry: TaskSubagentProjection) => {
+    const existing = byId.get(entry.id);
+    if (!existing) {
+      if (order.length >= TASK_SUBAGENT_LIMIT) return;
+      order.push(entry.id);
+    }
+    const resolvedId = entry.sessionId
+      || existing?.sessionId
+      || (resolveTaskSubagent ? resolveTaskSubagent(entry.id) || undefined : undefined);
+    const merged: TaskSubagentProjection = {
+      id: entry.id,
+      ...(entry.index !== undefined ? { index: entry.index } : existing?.index !== undefined ? { index: existing.index } : {}),
+      ...(entry.agent ? { agent: entry.agent } : existing?.agent ? { agent: existing.agent } : {}),
+      ...(entry.status ? { status: entry.status } : existing?.status ? { status: existing.status } : {}),
+      ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : existing?.exitCode !== undefined ? { exitCode: existing.exitCode } : {}),
+      ...(entry.durationMs !== undefined ? { durationMs: entry.durationMs } : existing?.durationMs !== undefined ? { durationMs: existing.durationMs } : {}),
+      ...(resolvedId ? { sessionId: resolvedId } : {}),
+    };
+    byId.set(entry.id, merged);
+  };
+
+  if (record(details)) {
+    // 1. Already-projected hop (bridge -> server): preserve fields and resolve sessionId if missing.
+    if (Array.isArray(details.subagents)) {
+      for (const item of details.subagents) {
+        if (!record(item) || !validTaskId(item.id)) continue;
+        upsert({
+          id: item.id,
+          ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
+          ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
+          ...(boundedString(item.status, 32) ? { status: boundedString(item.status, 32) } : {}),
+          ...(finite(item.exitCode) ? { exitCode: item.exitCode } : {}),
+          ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
+          ...(boundedString(item.sessionId, 260) ? { sessionId: boundedString(item.sessionId, 260) } : {}),
+        });
+      }
+    }
+    // 2. Raw OMP `progress` rows (running sync/batch updates, async background spawns, error fallback).
+    if (Array.isArray(details.progress)) {
+      for (const item of details.progress) {
+        if (!record(item) || !validTaskId(item.id)) continue;
+        upsert({
+          id: item.id,
+          ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
+          ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
+          ...(boundedString(item.status, 32) ? { status: boundedString(item.status, 32) } : {}),
+          ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
+        });
+      }
+    }
+    // 3. Raw OMP `results` rows (completed/failed sync runs override status/exitCode/durationMs).
+    if (Array.isArray(details.results)) {
+      for (const item of details.results) {
+        if (!record(item) || !validTaskId(item.id)) continue;
+        const exitCode = finite(item.exitCode) ? item.exitCode : undefined;
+        const status = item.aborted === true
+          ? 'aborted'
+          : (exitCode !== undefined && exitCode !== 0) || typeof item.error === 'string' && item.error
+            ? 'failed'
+            : 'completed';
+        upsert({
+          id: item.id,
+          ...(finite(item.index) && Number.isInteger(item.index) && item.index >= 0 ? { index: item.index } : {}),
+          ...(boundedString(item.agent, 64) ? { agent: boundedString(item.agent, 64) } : {}),
+          status,
+          ...(exitCode !== undefined ? { exitCode } : {}),
+          ...(finite(item.durationMs) && item.durationMs >= 0 ? { durationMs: item.durationMs } : {}),
+        });
+      }
+    }
+  }
+
+  // 4. Unreloaded-bridge fallback: when an already-running bridge stripped `details`
+  // before this server started, accept OMP's exact status text ONLY when the matching
+  // `<parent-stem>/<id>.jsonl` file is verified on disk with a valid session header.
+  if (!order.length && resolveTaskSubagent && content !== undefined) {
+    const text = contentText(content).trim();
+    const single = RUNNING_AGENT_TEXT_RE.exec(text);
+    if (single && validTaskId(single[1])) {
+      const sessionId = resolveTaskSubagent(single[1]);
+      if (sessionId) upsert({ id: single[1], status: 'running', sessionId });
+    } else if (SPAWNED_BG_PREFIX_RE.test(text)) {
+      SPAWNED_BG_LINE_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = SPAWNED_BG_LINE_RE.exec(text)) !== null) {
+        if (match[1] !== match[2] || !validTaskId(match[1])) continue;
+        const sessionId = resolveTaskSubagent(match[1]);
+        if (sessionId) upsert({ id: match[1], status: 'running', sessionId });
+      }
+    }
+  }
+
+  const out = order.map(id => byId.get(id)!);
+  if (out.length > 1 && out.every(item => item.index !== undefined)) {
+    out.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  }
+  return out;
+}
 
 function pick(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -47,10 +196,20 @@ function summarizeCodemodeObjectArgs(args: Record<string, unknown>): string | un
 
 /**
  * The few result details the browser formats: OMP bash timing/exit/deadline,
- * wait job rows, eval cell status/activity and codemode call rows. Everything
- * else in result.details (task traces, widgets, previews) stays on the server.
+ * wait job rows, eval cell status/activity, codemode call rows and task
+ * subagent links. Everything else in result.details (task traces, widgets,
+ * previews) stays on the server.
  */
-function projectToolDetails(toolName: unknown, details: unknown): Record<string, unknown> | undefined {
+function projectToolDetails(
+  toolName: unknown,
+  details: unknown,
+  options?: ToolEventProjectionOptions,
+  content?: unknown,
+): Record<string, unknown> | undefined {
+  if (toolName === 'task') {
+    const subagents = extractTaskSubagents(details, options?.resolveTaskSubagent, content);
+    return subagents.length ? { subagents } : undefined;
+  }
   if (!record(details)) return undefined;
   if (toolName === 'bash') {
     const out = pick(details, BASH_DETAIL_KEYS);
@@ -113,13 +272,13 @@ function projectToolDetails(toolName: unknown, details: unknown): Record<string,
 }
 
 /** Tool panels consume content plus projected details, not harness-native traces in result.details. */
-export function projectToolEvent(event: string, value: unknown): unknown {
+export function projectToolEvent(event: string, value: unknown, options?: ToolEventProjectionOptions): unknown {
   if (!event.startsWith('tool_execution_') || !record(value)) return value;
   const { toolCallId, toolName, args, startedAt, isError } = value;
   const intent = typeof value.intent === 'string' && value.intent ? value.intent : undefined;
   const result = (value: unknown) => {
     if (!record(value)) return value;
-    const details = projectToolDetails(toolName, value.details);
+    const details = projectToolDetails(toolName, value.details, options, value.content);
     return details ? { content: value.content, details } : { content: value.content };
   };
   return {
@@ -136,7 +295,11 @@ export interface ToolEventStream {
 }
 
 /** Cumulative updates replace pending snapshots; lifecycle frames never wait. */
-export function createToolEventStream(send: (event: string, data: unknown) => void, windowMs = 50): ToolEventStream {
+export function createToolEventStream(
+  send: (event: string, data: unknown) => void,
+  windowMs = 50,
+  options?: ToolEventProjectionOptions,
+): ToolEventStream {
   interface Lane { timer: NodeJS.Timeout; pending: unknown; hasPending: boolean }
   const lanes = new Map<string, Lane>();
   function flush(id: string) {
@@ -157,7 +320,7 @@ export function createToolEventStream(send: (event: string, data: unknown) => vo
     lanes.clear();
   }
   function push(event: string, value: unknown) {
-    const data = projectToolEvent(event, value);
+    const data = projectToolEvent(event, value, options);
     const id = record(data) && typeof data.toolCallId === 'string' ? data.toolCallId : null;
     if (event === 'tool_execution_update' && id) {
       const current = lanes.get(id);

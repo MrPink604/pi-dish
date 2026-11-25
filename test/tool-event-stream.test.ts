@@ -1,6 +1,6 @@
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import { createToolEventStream, projectToolEvent } from '../lib/tool-event-stream.js';
+import { createToolEventStream, extractTaskSubagents, projectToolEvent } from '../lib/tool-event-stream.js';
 
 const update = (id: string, text: string) => ({ toolCallId: id, toolName: 'task', partialResult: { content: [{ type: 'text', text }] } });
 
@@ -170,4 +170,107 @@ test('codemode updates and completions preserve bounded call rows without readin
     result: { content: [], details: { calls: 'invalid', extra: true } },
   })));
   assert.equal('details' in nonArray.result, false);
+});
+
+test('task projection extracts running, finished, parallel, and async subagents idempotently across two hops', () => {
+  const routes: Record<string, string> = {
+    AshaPass: '~sk1_asha',
+    BoraCheck: '~sk1_bora',
+    BgJob1: '~sk1_bg1',
+    BgJob2: '~sk1_bg2',
+  };
+  const resolveTaskSubagent = (agentId: string) => routes[agentId] ?? null;
+
+  // Hop 1 (bridge, no fs resolver) projects raw OMP progress into subagents without touching native getters.
+  const hop1Update = JSON.parse(JSON.stringify(projectToolEvent('tool_execution_update', {
+    toolCallId: 'tc-1', toolName: 'task', args: { agent: 'task', tasks: [{ id: 'AshaPass', description: 'audit' }] },
+    partialResult: {
+      content: [{ type: 'text', text: 'Running agent AshaPass...' }],
+      details: {
+        get trace() { throw new Error('native task trace must not be read'); },
+        projectAgentsDir: '/tmp',
+        results: [],
+        progress: [{ index: 0, id: 'AshaPass', agent: 'task', status: 'running', durationMs: 1200, recentTools: [{ tool: 'bash' }] }],
+      },
+    },
+  })));
+  assert.deepEqual(hop1Update.partialResult.details, {
+    subagents: [{ id: 'AshaPass', index: 0, agent: 'task', status: 'running', durationMs: 1200 }],
+  });
+
+  // Hop 2 (server, with fs resolver) enriches the already-projected subagents with verified sessionIds.
+  const hop2Update = JSON.parse(JSON.stringify(projectToolEvent('tool_execution_update', hop1Update, { resolveTaskSubagent })));
+  assert.deepEqual(hop2Update.partialResult.details, {
+    subagents: [{ id: 'AshaPass', index: 0, agent: 'task', status: 'running', durationMs: 1200, sessionId: '~sk1_asha' }],
+  });
+
+  // Parallel tasks in the same stream stay strictly isolated per toolCallId.
+  const frames: Array<{ event: string; data: Record<string, unknown> }> = [];
+  const stream = createToolEventStream((event, data) => frames.push({ event, data: JSON.parse(JSON.stringify(data)) }), 50, { resolveTaskSubagent });
+  stream.push('tool_execution_update', {
+    toolCallId: 'tc-p1', toolName: 'task',
+    partialResult: { content: [{ type: 'text', text: 'Running agent AshaPass...' }], details: { progress: [{ index: 0, id: 'AshaPass', status: 'running' }] } },
+  });
+  stream.push('tool_execution_update', {
+    toolCallId: 'tc-p2', toolName: 'task',
+    partialResult: { content: [{ type: 'text', text: 'Running agent BoraCheck...' }], details: { progress: [{ index: 0, id: 'BoraCheck', status: 'running' }] } },
+  });
+  stream.clear();
+  assert.equal(((frames[0]!.data.partialResult as Record<string, unknown>).details as { subagents: Array<{ sessionId: string }> }).subagents[0]!.sessionId, '~sk1_asha');
+  assert.equal(((frames[1]!.data.partialResult as Record<string, unknown>).details as { subagents: Array<{ sessionId: string }> }).subagents[0]!.sessionId, '~sk1_bora');
+
+  // Batch completion merges progress + results (results wins for final status/exitCode/durationMs).
+  const batchEnd = JSON.parse(JSON.stringify(projectToolEvent('tool_execution_end', {
+    toolCallId: 'tc-batch', toolName: 'task', isError: false,
+    result: {
+      content: [{ type: 'text', text: 'done' }],
+      details: {
+        progress: [
+          { index: 0, id: 'AshaPass', agent: 'explore', status: 'running', durationMs: 500 },
+          { index: 1, id: 'MissingOne', agent: 'explore', status: 'running', durationMs: 600 },
+        ],
+        results: [
+          { index: 0, id: 'AshaPass', agent: 'explore', exitCode: 0, durationMs: 4200 },
+          { index: 1, id: 'MissingOne', agent: 'explore', exitCode: 1, durationMs: 900 },
+        ],
+      },
+    },
+  }, { resolveTaskSubagent })));
+  assert.deepEqual(batchEnd.result.details, {
+    subagents: [
+      { id: 'AshaPass', index: 0, agent: 'explore', status: 'completed', exitCode: 0, durationMs: 4200, sessionId: '~sk1_asha' },
+      { id: 'MissingOne', index: 1, agent: 'explore', status: 'failed', exitCode: 1, durationMs: 900 },
+    ],
+  });
+
+  // Async background spawn lists agents in details.progress with empty results.
+  const asyncEnd = extractTaskSubagents({
+    async: { state: 'running', jobId: 'BgJob1', type: 'task' },
+    results: [],
+    progress: [{ index: 0, id: 'BgJob1', agent: 'task', status: 'running' }],
+  }, resolveTaskSubagent);
+  assert.deepEqual(asyncEnd, [{ id: 'BgJob1', index: 0, agent: 'task', status: 'running', sessionId: '~sk1_bg1' }]);
+
+  // Unreloaded old bridge fallback: exact OMP text works ONLY when verified on disk.
+  const verifiedText = extractTaskSubagents(undefined, resolveTaskSubagent, [{ type: 'text', text: 'Running agent AshaPass...' }]);
+  assert.deepEqual(verifiedText, [{ id: 'AshaPass', status: 'running', sessionId: '~sk1_asha' }]);
+  const verifiedBgText = extractTaskSubagents(undefined, resolveTaskSubagent, [{
+    type: 'text',
+    text: 'Spawned 2 background agents (async mode).\n- `BgJob1` (job `BgJob1`)\n- `BgJob2` (job `BgJob2`)\n- `Unverified` (job `Unverified`)',
+  }]);
+  assert.deepEqual(verifiedBgText, [
+    { id: 'BgJob1', status: 'running', sessionId: '~sk1_bg1' },
+    { id: 'BgJob2', status: 'running', sessionId: '~sk1_bg2' },
+  ]);
+  assert.deepEqual(extractTaskSubagents(undefined, resolveTaskSubagent, [{ type: 'text', text: 'Running agent GhostAgent...' }]), []);
+  assert.deepEqual(extractTaskSubagents(undefined, undefined, [{ type: 'text', text: 'Running agent AshaPass...' }]), []);
+  const unverifiedProjected = JSON.parse(JSON.stringify(projectToolEvent('tool_execution_update', {
+    toolCallId: 'tc-ghost', toolName: 'task',
+    partialResult: { content: [{ type: 'text', text: 'Running agent GhostAgent...' }] },
+  }, { resolveTaskSubagent })));
+  assert.equal('details' in unverifiedProjected.partialResult, false);
+
+  // Bounded to 64 subagents.
+  const many = Array.from({ length: 80 }, (_, i) => ({ index: i, id: `Agent${i}`, status: 'running' }));
+  assert.equal(extractTaskSubagents({ progress: many })?.length, 64);
 });

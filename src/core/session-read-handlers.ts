@@ -17,6 +17,8 @@ import { collectActivePath, walkBranchTree } from './helper-tree';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as piSDK from './pi-sdk';
 import { subsessionLabel } from './session-catalog';
+import { resolveNestedSubsessionRouteId } from './session-discovery';
+import { extractTaskSubagents, type TaskSubagentProjection } from './tool-event-stream';
 import {
   getSessionStats, readSessionMessageById, readSessionMessages, readSessionMessagesAtLeaf, readSessionSearchText,
 } from './session-files';
@@ -55,35 +57,64 @@ export interface SessionReadHandlers {
 const VALID_ENTRY_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?$/;
 const BLOB_REF_RE = /^blob:sha256:([0-9a-f]{64})$/;
 
-/** Copy only the projected image/video blocks; never mutate the borrowed parser cache. */
-function messageForClient(sessionId: string, message: SessionMessage, index: number) {
-  if (!Array.isArray(message.content)) return { ...message, index };
-  let changed = false;
-  const resourceId = typeof message.id === 'string' && VALID_ENTRY_ID_RE.test(message.id)
-    ? message.id : String(index);
-  const content = message.content.map((value: unknown, blockIndex: number) => {
-    const block = asRecord(value);
-    if (block.type === 'image' && typeof block.data === 'string' && block.data) {
-      changed = true;
-      const { data: _data, ...metadata } = block;
-      return {
-        ...metadata,
-        mimeType: block.mimeType || 'image/png',
-        url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/images/${blockIndex}`,
-      };
+interface TaskMessageProjection {
+  readonly byCallId: ReadonlyMap<string, readonly TaskSubagentProjection[]>;
+  readonly resolve: (agentId: string) => string | null;
+}
+
+/** Copy only the projected image/video blocks and task subagent links; never mutate the borrowed parser cache. */
+function messageForClient(sessionId: string, message: SessionMessage, index: number, taskProjection?: TaskMessageProjection) {
+  let content: unknown = message.content;
+  let contentChanged = false;
+  if (Array.isArray(message.content)) {
+    const resourceId = typeof message.id === 'string' && VALID_ENTRY_ID_RE.test(message.id)
+      ? message.id : String(index);
+    content = message.content.map((value: unknown, blockIndex: number) => {
+      const block = asRecord(value);
+      if (block.type === 'image' && typeof block.data === 'string' && block.data) {
+        contentChanged = true;
+        const { data: _data, ...metadata } = block;
+        return {
+          ...metadata,
+          mimeType: block.mimeType || 'image/png',
+          url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/images/${blockIndex}`,
+        };
+      }
+      if (block.type === 'video' && typeof block.data === 'string' && block.data) {
+        contentChanged = true;
+        const { data: _data, ...metadata } = block;
+        return {
+          ...metadata,
+          mimeType: isVideoMimeType(block.mimeType) ? block.mimeType : 'video/mp4',
+          url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/media/${blockIndex}`,
+        };
+      }
+      if (taskProjection && block.type === 'toolCall' && block.name === 'task' && typeof block.id === 'string') {
+        const subagents = taskProjection.byCallId.get(block.id);
+        if (subagents?.length) {
+          contentChanged = true;
+          return { ...block, taskSubagents: subagents };
+        }
+      }
+      return value;
+    });
+  }
+  let details: unknown = message.details;
+  let detailsChanged = false;
+  if (taskProjection && message.role === 'toolResult' && message.toolName === 'task') {
+    const subagents = (typeof message.toolCallId === 'string' ? taskProjection.byCallId.get(message.toolCallId) : undefined)
+      ?? extractTaskSubagents(message.details, taskProjection.resolve);
+    if (subagents.length) {
+      detailsChanged = true;
+      details = { ...(isRecord(message.details) ? message.details : {}), subagents };
     }
-    if (block.type === 'video' && typeof block.data === 'string' && block.data) {
-      changed = true;
-      const { data: _data, ...metadata } = block;
-      return {
-        ...metadata,
-        mimeType: isVideoMimeType(block.mimeType) ? block.mimeType : 'video/mp4',
-        url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/media/${blockIndex}`,
-      };
-    }
-    return value;
-  });
-  return { ...message, ...(changed ? { content } : {}), index };
+  }
+  return {
+    ...message,
+    ...(contentChanged ? { content } : {}),
+    ...(detailsChanged ? { details } : {}),
+    index,
+  };
 }
 
 function imageBlockBytes(session: SessionSource, data: string): Buffer | null {
@@ -316,7 +347,26 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
         firstIndex: null, lastIndex: null, hasMore: startIdx > 0 && totalMessages > 0 });
       return;
     }
-    const slice = all.slice(startIdx, endIdx + 1).map((m, i) => messageForClient(routeId, m, startIdx + i));
+    const pageMessages = all.slice(startIdx, endIdx + 1);
+    const descriptor = getHarness(source.harnessId);
+    let taskProjection: TaskMessageProjection | undefined;
+    if (descriptor?.nestedSubsessions && source.file.endsWith('.jsonl')) {
+      const hasTaskInPage = pageMessages.some(m =>
+        (m.role === 'toolResult' && m.toolName === 'task')
+        || (m.role === 'assistant' && Array.isArray(m.content)
+          && m.content.some(block => isRecord(block) && block.type === 'toolCall' && block.name === 'task')));
+      if (hasTaskInPage) {
+        const resolve = (agentId: string) => resolveNestedSubsessionRouteId(source.file, agentId, { descriptor });
+        const byCallId = new Map<string, readonly TaskSubagentProjection[]>();
+        for (const msg of all) {
+          if (msg.role !== 'toolResult' || msg.toolName !== 'task' || typeof msg.toolCallId !== 'string' || !msg.toolCallId) continue;
+          const subagents = extractTaskSubagents(msg.details, resolve);
+          if (subagents.length) byCallId.set(msg.toolCallId, subagents);
+        }
+        taskProjection = { byCallId, resolve };
+      }
+    }
+    const slice = pageMessages.map((m, i) => messageForClient(routeId, m, startIdx + i, taskProjection));
     res.json({ messages: slice, session: { ...identity, isActive, ...info }, totalMessages,
       firstIndex: startIdx, lastIndex: endIdx, hasMore: startIdx > 0 });
   };

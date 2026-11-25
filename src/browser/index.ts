@@ -148,7 +148,7 @@ export {
 export { decodeRenderMessage, decodeMessageContent, decodeMessageUsage } from './message-data';
 export { createMessageRenderer } from './message-render';
 export { shortDisplayRef, parseUserSourceEntries, parseInjectedBotMessage, parseCodemodeResult, formatCodemodeOutput, formatJsonToolOutput, formatBotChangeLineHtml, botToolCallBodyHtml } from './bot-display';
-export { decodeToolDetails, toolCallBodyHtml, codemodeResultChipsHtml } from './tool-format';
+export { decodeToolDetails, decodeTaskSubagents, toolCallBodyHtml, codemodeResultChipsHtml, renderTaskSubagentLinkHtml, taskHeaderLinkHtml, taskSubagentBarHtml, taskSubagentCountLabel } from './tool-format';
 export { createResponseDetails } from './response-details';
 export { groupToolActivity, updateToolGroupSummary } from './message-groups';
 
