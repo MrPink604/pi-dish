@@ -418,6 +418,7 @@ test/browser/cu-viewer.spec.js linguist-generated=true
 test/browser/directories.spec.js linguist-generated=true
 test/browser/display.spec.js linguist-generated=true
 test/browser/drawer-swipe.spec.js linguist-generated=true
+test/browser/edge-handle.spec.js linguist-generated=true
 test/browser/extension-dialogs.spec.js linguist-generated=true
 test/browser/extension-ui.spec.js linguist-generated=true
 test/browser/feature-ownership.spec.js linguist-generated=true

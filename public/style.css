@@ -126,7 +126,7 @@ body {
   color: var(--text);
   line-height: 1.5;
   height: 100%;
-  overscroll-behavior: none;
+  overscroll-behavior-x: none;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -4349,6 +4349,76 @@ pre.tool-code code.hljs {
   display: block;
 }
 
+/* Mobile sidebar edge handle (created from JS in src/browser/edge-handle.ts).
+   Hidden above mobile drawer widths; outer container tracks the swipe touch
+   zone with pointer-events: none so underlying content stays tappable, while
+   the slim inner pill is the visible cue and tap target when enabled. */
+.edge-handle {
+  display: none;
+  position: fixed;
+  left: env(safe-area-inset-left, 0px);
+  z-index: 80;
+  pointer-events: none;
+  box-sizing: border-box;
+  --edge-handle-pill-width: 6px;
+  --edge-handle-bg: color-mix(in srgb, var(--accent) 78%, var(--text-bright));
+  --edge-handle-border: color-mix(in srgb, var(--text-bright) 28%, transparent);
+  --edge-handle-radius: 0 5px 5px 0;
+  --edge-handle-preview-bg: color-mix(in srgb, var(--accent) 16%, transparent);
+  --edge-handle-preview-border: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+.edge-handle-pill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--edge-handle-pill-width);
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: var(--edge-handle-radius);
+  background: var(--edge-handle-bg);
+  box-shadow: inset -1px 0 0 var(--edge-handle-border), 0 1px 6px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+  transition: width 0.12s ease;
+}
+
+.edge-handle-pill:active {
+  --edge-handle-pill-width: 8px;
+}
+
+.edge-handle-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.edge-handle.edge-handle-preview {
+  z-index: 150;
+  background: var(--edge-handle-preview-bg);
+  border-right: 1px dashed var(--edge-handle-preview-border);
+  border-radius: 0 6px 6px 0;
+}
+
+@media (min-width: 769px) {
+  .edge-handle {
+    display: none !important;
+  }
+}
+
+body.sidebar-open .edge-handle:not(.edge-handle-preview) {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edge-handle-pill {
+    transition: none;
+  }
+}
+
 /* Mobile Responsive */
 @media (max-width: 768px) {
   :root {
@@ -6586,6 +6656,19 @@ img.msg-image {
 .preference-row small, .settings-body > small { color: var(--text-muted); }
 .preference-row select, .preference-row input { color: var(--text); background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
 .budget-save { display: flex; gap: 6px; }
+/* Device-local mobile sidebar edge handle controls inside #settingsModal. */
+.edge-handle-settings { flex-direction: column; align-items: stretch; gap: 12px; }
+.edge-handle-settings-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; width: 100%; }
+.edge-handle-settings-head > label { flex: 1; min-width: 180px; }
+.edge-handle-controls { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.edge-handle-settings .edge-handle-toggle { flex-direction: row; align-items: center; gap: 10px; cursor: pointer; min-height: 36px; font-size: 13px; color: var(--text); }
+.edge-handle-settings input[type="checkbox"] { width: 18px; height: 18px; margin: 0; padding: 0; border: 0; background: transparent; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.edge-handle-slider-row { display: flex; flex-direction: column; gap: 4px; }
+.edge-handle-slider-row[hidden] { display: none; }
+.edge-handle-slider-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 12.5px; }
+.edge-handle-settings .edge-handle-slider-head label { flex-direction: row; color: var(--text); }
+.edge-handle-value { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+.edge-handle-settings input[type="range"] { width: 100%; min-height: 32px; margin: 0; padding: 6px 0; border: 0; background: transparent; accent-color: var(--accent); cursor: pointer; }
 /* Notifications: controls beside the label, per-host registration below. */
 .push-row { flex-wrap: wrap; }
 .push-row > .push-hosts, .push-row > #pushStatus { flex-basis: 100%; align-self: stretch; }
@@ -6903,6 +6986,7 @@ img.msg-image {
   .global-settings-btn { display: inline-flex; }
   .settings-modal { width: 100vw; max-width: none; max-height: 95dvh; }
   .preference-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .edge-handle-settings { align-items: stretch; }
   .toggle-row { flex-direction: row; }
   .prompt-history-panel { left: 8px; right: 8px; width: auto; max-height: 60dvh; }
   .sent-prompts-row > .sent-prompts-list { align-self: stretch; }

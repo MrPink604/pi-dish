@@ -132,7 +132,18 @@ export { createSidebarControls } from './sidebar-controls';
 export { createSidebarActivity } from './sidebar-activity';
 export { createSidebarLists } from './sidebar-lists';
 export { createSidebarQuery } from './sidebar-query';
-export { createDrawerSwipe } from './drawer-swipe';
+export { createDrawerSwipe, isDrawerOpenBlocked } from './drawer-swipe';
+export {
+  createEdgeHandle,
+  decodeEdgeHandleSettings,
+  readEdgeHandleSettings,
+  writeEdgeHandleSettings,
+  computeEdgeHandleZone,
+  isDefaultEdgeHandleSettings,
+  DEFAULT_EDGE_HANDLE_SETTINGS,
+  EDGE_HANDLE_LIMITS,
+  EDGE_HANDLE_STORAGE_KEY,
+} from './edge-handle';
 
 export { decodeRenderMessage, decodeMessageContent, decodeMessageUsage } from './message-data';
 export { createMessageRenderer } from './message-render';

@@ -17,7 +17,8 @@ import { createAgentRefResolver } from './agent-ref';
 import { createComposerAutocomplete } from './composer-autocomplete';
 import { createSidebarActivity } from './sidebar-activity';
 import { createSidebarQuery } from './sidebar-query';
-import { createDrawerSwipe } from './drawer-swipe';
+import { createEdgeHandle } from './edge-handle';
+import { createDrawerSwipe, isDrawerOpenBlocked } from './drawer-swipe';
 import { createSidebarLists } from './sidebar-lists';
 import { createSidebarControls } from './sidebar-controls';
 import { createBots } from './bots';
@@ -652,10 +653,18 @@ const sidebarQuery: ReturnType<typeof createSidebarQuery> = createSidebarQuery({
   prompt: (label, initial) => window.prompt(label, initial), alert: message => alert(message),
 });
 sidebarQuery.mount();
+const edgeHandle: ReturnType<typeof createEdgeHandle> = createEdgeHandle({
+  document,
+  storage: localStorage,
+  open: () => sidebarQuery.open(),
+  canOpen: () => !drawerSwipe.dragging && !isDrawerOpenBlocked(document),
+});
+edgeHandle.mount();
 const drawerSwipe: ReturnType<typeof createDrawerSwipe> = createDrawerSwipe({
   document,
   open: () => sidebarQuery.open(),
   close: () => sidebarQuery.close(),
+  edgeHandle,
 });
 drawerSwipe.mount();
 const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
@@ -794,6 +803,7 @@ const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDi
   filters: () => sidebarQuery.filters, setFilters: value => sidebarQuery.setFilters(value),
   persistFilters: (value, host) => sidebarQuery.persistFilters([...value], host),
   metadataChanged: () => responseDetailsController.update(), contextChanged: () => renderSessions(), alert: message => alert(message),
+  edgeHandle: (container, signal) => edgeHandle.renderSettings(container, signal),
   notifications: (container, signal) => pushNotifications.renderSettings(container, signal),
   sentPrompts: (container, signal) => promptHistory.renderSettings(container, signal),
   privateSessions: (container, signal) => privateSessions.renderSettings(container, signal),

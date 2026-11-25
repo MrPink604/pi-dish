@@ -17,6 +17,7 @@ export function createDisplayPreferences(options: {
   filters: () => readonly SavedFilter[]; setFilters: (filters: readonly SavedFilter[]) => void;
   persistFilters: (filters: readonly SavedFilter[], host: Readonly<HostEndpoint>) => Promise<unknown>;
   metadataChanged: () => void; contextChanged: () => void; alert: (message: string) => void;
+  edgeHandle?: (container: HTMLElement, signal: AbortSignal) => void;
   notifications: (container: HTMLElement, signal: AbortSignal) => void; sentPrompts: (container: HTMLElement, signal: AbortSignal) => void;
   privateSessions: (container: HTMLElement, signal: AbortSignal) => void;
 }) {
@@ -45,6 +46,7 @@ export function createDisplayPreferences(options: {
     <select id="sidebarContextMetric"><option value="percent">Percent of context</option><option value="tokens">Token count</option></select></div>
     <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
+    <div id="settingsEdgeHandle"></div>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
     <div id="settingsNotifications"></div>
     <div id="settingsPrivateSessions"></div>
@@ -62,6 +64,7 @@ export function createDisplayPreferences(options: {
     metric.addEventListener('change', () => {
       if (!owns()) return; context = metric.value === 'tokens' ? 'tokens' : 'percent'; storage.setItem(CONTEXT_METRIC_KEY, context); options.contextChanged();
     }, listener);
+    options.edgeHandle?.(body.querySelector<HTMLElement>('#settingsEdgeHandle')!, events.signal);
     options.notifications(body.querySelector<HTMLElement>('#settingsNotifications')!, events.signal);
     options.privateSessions(body.querySelector<HTMLElement>('#settingsPrivateSessions')!, events.signal);
     options.sentPrompts(body.querySelector<HTMLElement>('#settingsSentPrompts')!, events.signal);

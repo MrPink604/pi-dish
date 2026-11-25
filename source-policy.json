@@ -181,6 +181,7 @@
     "test/browser/search-view.spec.ts",
     "test/browser/usage-view.spec.ts",
     "test/browser/display.spec.ts",
+    "test/browser/edge-handle.spec.ts",
     "test/browser/terminal-ownership.spec.ts",
     "test/browser/routines.spec.ts",
     "test/browser/session-info.spec.ts",

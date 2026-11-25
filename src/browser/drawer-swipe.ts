@@ -13,10 +13,13 @@
  * zone remains reachable in both modes, and touchcancel always resets cleanly.
  */
 
+import type { EdgeHandleController } from './edge-handle';
+
 export interface DrawerSwipeOptions {
   document: Document;
   open: () => void;
   close: () => void;
+  edgeHandle?: Pick<EdgeHandleController, 'zone' | 'suppressClick' | 'sync'>;
   now?: () => number;
 }
 
@@ -122,6 +125,12 @@ function hasTextSelection(win: Window): boolean {
   return !!selection && !selection.isCollapsed && selection.toString().length > 0;
 }
 
+export function isDrawerOpenBlocked(document: Document): boolean {
+  const win = document.defaultView;
+  if (!win) return true;
+  return (win.visualViewport?.scale ?? 1) > 1.05 || hasTextSelection(win) || hasBlockingOverlay(document, win);
+}
+
 function hasTouchActionNone(target: Element, win: Window): boolean {
   const root = target.ownerDocument.documentElement;
   for (let el: Element | null = target; el && el !== root; el = el.parentElement) {
@@ -221,6 +230,7 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
       overlay.style.transition = 'none';
       overlay.style.opacity = clamped.toFixed(3);
     }
+    options.edgeHandle?.sync();
   }
 
   function clearDragVisual() {
@@ -238,6 +248,7 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
       overlay.style.transition = '';
       overlay.style.opacity = '';
     }
+    options.edgeHandle?.sync();
   }
 
   function cancelGesture() {
@@ -245,7 +256,10 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
     const gesture = active;
     active = null;
     gesture.events.abort();
-    if (gesture.locked) clearDragVisual();
+    if (gesture.locked) {
+      options.edgeHandle?.suppressClick();
+      clearDragVisual();
+    }
   }
 
   function recordSample(gesture: ActiveGesture, x: number, t: number) {
@@ -323,6 +337,7 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
     active = null;
     gesture.events.abort();
     if (!gesture.locked) return;
+    options.edgeHandle?.suppressClick();
 
     const endX = touch.clientX;
     const endT = now();
@@ -373,10 +388,16 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
 
     let mode: 'open' | 'close';
     if (!isOpen) {
-      const appRect = document.querySelector('.app')?.getBoundingClientRect();
-      const edgeOrigin = appRect ? Math.max(0, appRect.left) : 0;
-      const offsetFromEdge = touch.clientX - edgeOrigin;
-      if (offsetFromEdge < 0 || offsetFromEdge > EDGE_ZONE_PX) return;
+      const configuredZone = options.edgeHandle?.zone();
+      if (configuredZone) {
+        if (touch.clientX < 0 || touch.clientX > configuredZone.right) return;
+        if (touch.clientY < configuredZone.top || touch.clientY > configuredZone.bottom) return;
+      } else {
+        const appRect = document.querySelector('.app')?.getBoundingClientRect();
+        const edgeOrigin = appRect ? Math.max(0, appRect.left) : 0;
+        const offsetFromEdge = touch.clientX - edgeOrigin;
+        if (offsetFromEdge < 0 || offsetFromEdge > EDGE_ZONE_PX) return;
+      }
       if (target && (target.closest(OPEN_EXCLUDED_SELECTOR) || canScrollHorizontally(target, 'open', win))) return;
       mode = 'open';
     } else {
