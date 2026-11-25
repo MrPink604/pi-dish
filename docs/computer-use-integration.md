@@ -551,8 +551,18 @@ What Slice 1 implemented on the `pi-dish` side (leaving Slice 2 session-spawn le
 - **Request-byte caps on raw Spaces streaming POSTs** (round-1 #12 remainder): enforce per-RPC streaming byte limits on raw `/api/cu/spaces/*` POST request bodies.
 - **Orderly shutdown ordering** (round-1 #13): track public broker SSE streams and pending handshakes alongside active media sockets and tear them down before waiting for HTTP listener drain on shutdown.
 
+#### Step A — Session Desktop Panel & Session-List Cue (`feat/cu-session-panel`)
+
+- **View-only in-session panel (`src/browser/cu-session-panel.ts`):** For sessions on a host advertising `capabilities.computerUse` over a supported transport (`""` or canonical `/hosts/<name>` with no bearer token), `#sessionView` dynamically mounts a collapsible **Desktop** panel (closed by default, open/closed persisted per session in `sessionStorage`, stacked above `.input-area` on phone width and side-by-side on desktop). The panel is **strictly view-only** in Step A: it never acquires, heartbeats, or releases a lease and renders no Hand Back control. Clicking **Take Over** opens the existing standalone Desktop pane (`#cuViewerView`, Slice-1 control flow) and hides the panel iframe without touching leases; all human control lives in the standalone pane.
+- **Shared display-only per-host SSE stream & session-list cue:** Sidebar seat cues (`desktop: agent`, `desktop: waiting`, `desktop: human`, `desktop: you`) and the view-only session panel share one `/api/cu/stream` subscription per CU host while that host has emitted visible sidebar rows (`visibleHostIds` derived from emitted rows in `src/browser/sidebar-render.ts`) or an open panel. The standalone Desktop pane keeps its own Slice-1 stream and lease lifecycle untouched (`src/browser/cu-viewer.ts`). On SSE disconnect (`onerror`), display state and seat cues clear to unknown/stale and restore on a fresh snapshot or authoritative reconnect `hello` (which also reissues a discarded view-only panel viewer ticket if the panel still needs one).
+
 #### Deferred Follow-ups (Step A — Session Desktop Panel)
 
-- **Fresh viewer ticket on panel ↔ main-pane handoff** (step-A #5): mint a fresh viewer ticket for the existing mode and lease on same-host handoff instead of replaying the prior ticket URL across iframe remount.
+- **In-panel human control (deferred pending lease-owner rework):** Interactive Take Over / Hand Back directly inside the collapsible session panel is deferred out of Step A so the browser can never hold a human lease behind a hidden Hand Back control. Any future lease-owner rework supporting interactive control across collapsible/occludable surfaces must address all four race findings observed during Step A round-2 review:
+  1. A failed automatic release (e.g. `503`) dropping the only lease token while Hand Back is hidden, stranding the seat until TTL expiry.
+  2. A delayed initial status `GET` returning `null`/error deleting a valid takeover grant.
+  3. A reconnect `hello` arriving after a newer takeover grant erasing the grant.
+  4. A late release reply arriving after a host entry was torn down and recreated (same `connGen = 1`) erasing a different, newer lease.
+- **Host removal retiring the standalone pane:** Pre-existing Slice-1 behavior; retiring `#cuViewerView` when its host disappears from `/api/hosts` is tracked separately from Step A.
 - **Mobile swipe gutter over desktop viewer iframe** (step-A #8): reserve a narrow parent-owned swipe gutter over the configured edge-handle zone so left-edge drawer swipes work over the embedded viewer iframe without intercepting the rest of the desktop.
 - **Keep session panel open on same-session transcript reload** (step-A #9): distinguish a forced same-session transcript reload (`forceTranscriptReload`) from explicit collapse/close so the stored open preference is reapplied on reload.

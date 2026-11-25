@@ -81,7 +81,6 @@ async function setupCuSandboxFixture(page, fleet, opts = {}) {
         heartbeatCount: 0,
         takeoverPayload: null,
         releasePayload: null,
-        releaseUrls: [],
         selfCuCalls: 0,
         peerCuCalls: 0,
         expiresAgent,
@@ -171,7 +170,7 @@ async function setupCuSandboxFixture(page, fleet, opts = {}) {
         if (held) {
             const custom = await held;
             if (custom)
-                return route.fulfill({ json: custom });
+                return route.fulfill({ status: custom.status ?? 200, json: custom.json });
         }
         if (state.seatState === 'idle') {
             return route.fulfill({ json: { ok: true, state: 'idle', epoch: state.epoch, lease: null, preempted: null } });
@@ -210,8 +209,11 @@ async function setupCuSandboxFixture(page, fleet, opts = {}) {
             },
         });
     });
-    await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/viewer/ticket`, route => {
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/viewer/ticket`, async (route) => {
         state.ticketCount += 1;
+        const gate = opts.holdTicket?.();
+        if (gate)
+            await gate;
         const body = route.request().postDataJSON();
         const mode = body?.mode === 'interactive' ? 'interactive' : 'view-only';
         const ticket = `${mode}-${state.ticketCount}`;
@@ -226,10 +228,7 @@ async function setupCuSandboxFixture(page, fleet, opts = {}) {
             },
         });
     });
-    await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/takeover`, async (route) => {
-        const gate = opts.holdTakeover?.();
-        if (gate)
-            await gate;
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/takeover`, route => {
         state.takeoverCount += 1;
         const leaseId = `h${state.takeoverCount}`;
         const leaseToken = `tok-human-${state.takeoverCount}`;
@@ -245,7 +244,7 @@ async function setupCuSandboxFixture(page, fleet, opts = {}) {
                 leaseToken,
                 lease: { leaseId, holderKind: 'human', label: 'pi-dish', expiresAt: expiresHuman },
                 preempted: { sessionId: fixtures_js_1.ROOT, label: 'omp-browsing' },
-                heartbeatIntervalSec: opts.heartbeatIntervalSec ?? 60,
+                heartbeatIntervalSec: 60,
                 viewer: {
                     mode: 'interactive',
                     ticket: `interactive-${state.takeoverCount}`,
@@ -257,8 +256,11 @@ async function setupCuSandboxFixture(page, fleet, opts = {}) {
     });
     await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/release`, route => {
         state.releaseCount += 1;
-        state.releaseUrls.push(new URL(route.request().url()).pathname);
         state.releasePayload = route.request().postDataJSON();
+        const status = opts.releaseStatus ? opts.releaseStatus() : 200;
+        if (status !== 200) {
+            return route.fulfill({ status, json: { error: 'broker unavailable' } });
+        }
         state.seatState = 'agent';
         state.epoch += 1;
         return route.fulfill({
@@ -278,16 +280,16 @@ async function setupCuSandboxFixture(page, fleet, opts = {}) {
     }));
     return state;
 }
-for (const { name, viewport, isPhone } of [
-    { name: 'phone (390x844)', viewport: PHONE_VIEWPORT, isPhone: true },
-    { name: 'desktop (1280x800)', viewport: DESKTOP_VIEWPORT, isPhone: false },
+for (const [label, viewport] of [
+    ['phone (390x844)', PHONE_VIEWPORT],
+    ['desktop (1280x800)', DESKTOP_VIEWPORT],
 ]) {
-    (0, fixtures_js_1.test)(`session Desktop panel lifecycle, handoff, teardown, and list cue at ${name}`, async ({ page, fleet }) => {
+    (0, fixtures_js_1.test)(`view-only session Desktop panel, Take Over handoff to standalone pane, Hand Back in pane, and list cue at ${label}`, async ({ page, fleet }) => {
         await installTrackedCuEventSource(page);
         const fx = await setupCuSandboxFixture(page, fleet);
         await page.setViewportSize(viewport);
         await page.reload();
-        if (isPhone) {
+        if (viewport.width < 900) {
             await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
         }
         await page.locator('#tabAll').click();
@@ -295,60 +297,31 @@ for (const { name, viewport, isPhone } of [
         const rowTwo = page.locator(`.session-item[data-id="${fixtures_js_1.CHILD}"][data-host="${RELAY_HOST_ID}"]`);
         await (0, fixtures_js_1.expect)(rowOne).toBeVisible();
         await (0, fixtures_js_1.expect)(rowTwo).toBeVisible();
-        // 1. Session-list cue appears for both rows on the CU host via ONE host-level SSE subscription.
+        // Host-level list cue appears on CU host rows ONLY, using a SINGLE shared SSE stream for the CU host.
         await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
         await (0, fixtures_js_1.expect)(rowTwo.locator('.cu-seat-cue')).toHaveText('desktop: agent');
-        await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveAttribute('data-holder', 'agent');
         await (0, fixtures_js_1.expect)(fleet.row(fleet.self).locator('.cu-seat-cue')).toHaveCount(0);
         await (0, fixtures_js_1.expect)(fleet.row(fleet.peer).locator('.cu-seat-cue')).toHaveCount(0);
-        const streamUrlsAfterList = await page.evaluate(() => Reflect.get(window, '__cuPanelStreamUrls'));
-        (0, fixtures_js_1.expect)(streamUrlsAfterList).toEqual([`${RELAY_BASE}/api/cu/stream`]);
-        (0, fixtures_js_1.expect)(fx.selfCuCalls).toBe(0);
+        const streamCountAfterList = await page.evaluate(() => Reflect.get(window, '__cuPanelStreams').length);
+        (0, fixtures_js_1.expect)(streamCountAfterList).toBe(1);
+        // Unsupported direct cross-origin peer never gets a session panel even when claiming computerUse.
+        await fleet.row(fleet.peer).click();
+        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('peer root transcript');
+        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toHaveCount(0);
         (0, fixtures_js_1.expect)(fx.peerCuCalls).toBe(0);
-        // SSE seat_idle hides the cue; SSE lease_changed (human) re-shows it; SSE agent restores it.
-        await page.evaluate(() => {
-            const stream = Reflect.get(window, '__cuPanelStreams').at(-1);
-            stream.dispatchEvent(new MessageEvent('seat_idle', {
-                data: JSON.stringify({ state: 'idle', epoch: 5, lease: null, preempted: null }),
-            }));
-        });
-        await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveCount(0);
-        await (0, fixtures_js_1.expect)(rowTwo.locator('.cu-seat-cue')).toHaveCount(0);
-        await page.evaluate(expiresHuman => {
-            const stream = Reflect.get(window, '__cuPanelStreams').at(-1);
-            stream.dispatchEvent(new MessageEvent('lease_changed', {
-                data: JSON.stringify({
-                    state: 'human',
-                    epoch: 6,
-                    lease: { leaseId: 'other-human', holderKind: 'human', label: 'ssh-viewer', expiresAt: expiresHuman },
-                    preempted: null,
-                }),
-            }));
-        }, fx.expiresHuman);
-        await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: human');
-        await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveAttribute('data-holder', 'human');
-        fx.epoch = 7;
-        await page.evaluate(expiresAgent => {
-            const stream = Reflect.get(window, '__cuPanelStreams').at(-1);
-            stream.dispatchEvent(new MessageEvent('lease_changed', {
-                data: JSON.stringify({
-                    state: 'agent',
-                    epoch: 7,
-                    lease: { leaseId: 'a1', sessionId: 's', holderKind: 'agent', label: 'omp-browsing', expiresAt: expiresAgent },
-                    preempted: null,
-                }),
-            }));
-        }, fx.expiresAgent);
-        await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
-        // 2. Select sandbox-one: panel is present and CLOSED by default (zero iframes).
+        (0, fixtures_js_1.expect)(fx.selfCuCalls).toBe(0);
+        // Select CU host session -> panel appears CLOSED by default with host-level seat summary.
+        if (viewport.width < 900) {
+            await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
+        }
         await rowOne.click();
         await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('sandbox one transcript');
         await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeVisible();
         await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'false');
         await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelBody')).toBeHidden();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelSummary')).toHaveText('Agent');
+        await (0, fixtures_js_1.expect)(page.locator('#cuPanelSummary')).toHaveText('desktop: agent');
         await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-        // 3. Open the panel: shows view-only viewer, holder, remaining time, Take Over, and no duplicate SSE.
+        // Open the session panel -> strictly view-only, zero Hand Back button, reuses the shared SSE stream.
         await page.locator('#cuSessionPanelToggle').click();
         await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'true');
         await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelBody')).toBeVisible();
@@ -357,349 +330,127 @@ for (const { name, viewport, isPhone } of [
         await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatDetail')).toContainText('Agent: omp-browsing');
         await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatDetail')).toContainText('left');
         await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeHidden();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveAttribute('src', /\/hosts\/cu-sandbox\/api\/cu\/spaces\/viewer\/#ticket=view-only-1/);
-        await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(1);
-        (0, fixtures_js_1.expect)(await page.evaluate(() => Reflect.get(window, '__cuPanelStreamUrls').length)).toBe(1);
-        // Verify layout geometry & zero horizontal overflow at this viewport width.
+        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toHaveCount(0);
+        await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveAttribute('src', `${RELAY_BASE}/api/cu/spaces/viewer/#ticket=view-only-1`);
+        const streamCountAfterPanelOpen = await page.evaluate(() => Reflect.get(window, '__cuPanelStreams').length);
+        (0, fixtures_js_1.expect)(streamCountAfterPanelOpen).toBe(1);
+        (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(0);
+        (0, fixtures_js_1.expect)(fx.heartbeatCount).toBe(0);
+        (0, fixtures_js_1.expect)(fx.releaseCount).toBe(0);
+        // Verify layout geometry at each width and zero horizontal overflow.
         const layout = await page.evaluate(() => {
             const panel = document.getElementById('cuSessionPanel').getBoundingClientRect();
-            const messages = document.getElementById('messages').getBoundingClientRect();
             const input = document.querySelector('.input-area').getBoundingClientRect();
+            const messages = document.getElementById('messages').getBoundingClientRect();
             return {
                 overflow: document.documentElement.scrollWidth - window.innerWidth,
-                panel: { left: panel.left, right: panel.right, top: panel.top, bottom: panel.bottom, width: panel.width, height: panel.height },
-                messages: { left: messages.left, right: messages.right, top: messages.top, bottom: messages.bottom },
-                input: { top: input.top, bottom: input.bottom },
+                panelAboveInput: panel.bottom <= input.top + 2,
+                panelBesideMessages: panel.left >= messages.right - 2,
             };
         });
         (0, fixtures_js_1.expect)(layout.overflow).toBeLessThanOrEqual(0);
-        if (isPhone) {
-            // Phone: collapsible block pinned directly above the composer.
-            (0, fixtures_js_1.expect)(layout.panel.bottom).toBeLessThanOrEqual(layout.input.top + 2);
-            (0, fixtures_js_1.expect)(layout.panel.top).toBeGreaterThanOrEqual(layout.messages.top);
-            (0, fixtures_js_1.expect)(layout.panel.height).toBeGreaterThanOrEqual(180);
+        if (viewport.width < 900) {
+            (0, fixtures_js_1.expect)(layout.panelAboveInput).toBe(true);
         }
         else {
-            // Desktop: right-hand side panel beside the transcript.
-            (0, fixtures_js_1.expect)(layout.panel.left).toBeGreaterThanOrEqual(layout.messages.right - 2);
-            (0, fixtures_js_1.expect)(layout.panel.width).toBeGreaterThanOrEqual(360);
-            (0, fixtures_js_1.expect)(layout.panel.height).toBeGreaterThanOrEqual(400);
+            (0, fixtures_js_1.expect)(layout.panelBesideMessages).toBe(true);
         }
-        // 4. Take Over inside the panel.
-        await page.locator('#cuPanelTakeoverBtn').click();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('You have control');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('Interactive');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeHidden();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveAttribute('src', /\/hosts\/cu-sandbox\/api\/cu\/spaces\/viewer\/#ticket=interactive-1/);
-        (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(1);
-        (0, fixtures_js_1.expect)(fx.takeoverPayload).toEqual({ label: 'pi-dish', ttlSec: 600 });
-        // 5. Opening the main-pane Desktop viewer for the SAME host hands off the single controller (exempt from release; no duplicate takeover, iframe, or SSE).
-        await page.locator('#sessionDesktopChip').click();
-        await (0, fixtures_js_1.expect)(page.locator('.main')).toHaveClass(/cu-viewer-open/);
-        await (0, fixtures_js_1.expect)(page.locator('#cuViewerView')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuSeatBadge')).toHaveText('You have control');
-        await (0, fixtures_js_1.expect)(page.locator('#cuViewerModePill')).toHaveText('Interactive');
-        await (0, fixtures_js_1.expect)(page.locator('#cuHandBackBtn')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuViewerStage iframe.cu-viewer-frame')).toHaveAttribute('src', /\/hosts\/cu-sandbox\/api\/cu\/spaces\/viewer\/#ticket=interactive-1/);
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(0);
-        await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(1);
-        (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(1);
-        (0, fixtures_js_1.expect)(fx.releaseCount).toBe(0);
-        (0, fixtures_js_1.expect)(fx.seatState).toBe('human');
-        (0, fixtures_js_1.expect)(await page.evaluate(() => Reflect.get(window, '__cuPanelStreamUrls').length)).toBe(1);
-        // Close main-pane viewer (last controlling surface) -> hands back immediately; broker returns to agent; re-opening panel starts view-only.
-        await page.locator('#cuViewerCloseBtn').click();
-        await (0, fixtures_js_1.expect)(page.locator('.main')).not.toHaveClass(/cu-viewer-open/);
-        await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-        await fixtures_js_1.expect.poll(() => fx.releaseCount).toBe(1);
-        (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-        (0, fixtures_js_1.expect)(fx.releasePayload).toEqual({ leaseId: 'h1', leaseToken: 'tok-human-1', handBack: true });
-        await page.locator('#cuSessionPanelToggle').click();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Agent');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('View only');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeHidden();
-        // 6. Take Over -> explicit Hand Back inside the panel -> returns to view-only and sends handBack: true.
-        await page.locator('#cuPanelTakeoverBtn').click();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('You have control');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('Interactive');
-        (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(2);
-        (0, fixtures_js_1.expect)(fx.seatState).toBe('human');
-        await page.locator('#cuPanelHandBackBtn').click();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Agent');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('View only');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeHidden();
-        (0, fixtures_js_1.expect)(fx.releaseCount).toBe(2);
-        (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-        (0, fixtures_js_1.expect)(fx.releasePayload).toEqual({ leaseId: 'h2', leaseToken: 'tok-human-2', handBack: true });
-        // 7. Switching to sandbox-two (closed by default) tears down the iframe cleanly; switching back restores open state from sessionStorage.
-        if (isPhone)
-            await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
-        await rowTwo.click();
-        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('sandbox two transcript');
-        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'false');
-        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelBody')).toBeHidden();
-        await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-        if (isPhone)
-            await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
-        await rowOne.click();
+        // Open/closed state is remembered per session in sessionStorage across reload (still view-only).
+        await page.reload();
         await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('sandbox one transcript');
         await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'true');
         await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
-        // Collapsing clears iframe and remembers closed in sessionStorage.
-        await page.locator('#cuSessionPanelToggle').click();
-        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'false');
+        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toHaveCount(0);
+        (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(0);
+        (0, fixtures_js_1.expect)(fx.heartbeatCount).toBe(0);
+        (0, fixtures_js_1.expect)(fx.releaseCount).toBe(0);
+        // Clicking "Take Over" inside the panel opens the standalone Desktop pane and NEVER calls takeover/heartbeat/release itself.
+        await page.locator('#cuPanelTakeoverBtn').click();
+        await (0, fixtures_js_1.expect)(page.locator('.main')).toHaveClass(/cu-viewer-open/);
+        await (0, fixtures_js_1.expect)(page.locator('#cuViewerView')).toBeVisible();
+        await (0, fixtures_js_1.expect)(page.locator('#cuViewerModePill')).toHaveText('View only');
+        await (0, fixtures_js_1.expect)(page.locator('#cuSeatBadge')).toHaveText('Agent');
+        await (0, fixtures_js_1.expect)(page.locator('#cuTakeoverBtn')).toBeVisible();
+        await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(0);
+        await (0, fixtures_js_1.expect)(page.locator('#cuViewerStage iframe.cu-viewer-frame')).toHaveCount(1);
+        await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(1);
+        (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(0);
+        (0, fixtures_js_1.expect)(fx.heartbeatCount).toBe(0);
+        (0, fixtures_js_1.expect)(fx.releaseCount).toBe(0);
+        (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
+        // Take Over inside the standalone pane uses the slice-1 control flow and updates the sidebar cue.
+        await page.locator('#cuTakeoverBtn').click();
+        await (0, fixtures_js_1.expect)(page.locator('#cuSeatBadge')).toHaveText('You have control');
+        await (0, fixtures_js_1.expect)(page.locator('#cuViewerModePill')).toHaveText('Interactive');
+        await (0, fixtures_js_1.expect)(page.locator('#cuHandBackBtn')).toBeVisible();
+        (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(1);
+        (0, fixtures_js_1.expect)(fx.takeoverPayload).toEqual({ label: 'pi-dish', ttlSec: 600 });
+        (0, fixtures_js_1.expect)(fx.seatState).toBe('human');
+        if (viewport.width >= 900) {
+            await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: you');
+        }
+        // Hand Back inside the standalone pane returns the broker to agent.
+        await page.locator('#cuHandBackBtn').click();
+        await (0, fixtures_js_1.expect)(page.locator('#cuSeatBadge')).toHaveText('Agent');
+        await (0, fixtures_js_1.expect)(page.locator('#cuViewerModePill')).toHaveText('View only');
+        await (0, fixtures_js_1.expect)(page.locator('#cuTakeoverBtn')).toBeVisible();
+        await (0, fixtures_js_1.expect)(page.locator('#cuHandBackBtn')).toBeHidden();
+        (0, fixtures_js_1.expect)(fx.releaseCount).toBe(1);
+        (0, fixtures_js_1.expect)(fx.releasePayload).toEqual({ leaseId: 'h1', leaseToken: 'tok-human-1', handBack: true });
+        (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
+        if (viewport.width >= 900) {
+            await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
+        }
+        // Closing the standalone pane returns cleanly to the session view with no iframe.
+        await page.locator('#cuViewerCloseBtn').click();
+        await (0, fixtures_js_1.expect)(page.locator('.main')).not.toHaveClass(/cu-viewer-open/);
         await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-        // Re-open on sandbox-one, then switch to non-CU self session -> panel hides and tears down cleanly.
+        // Re-expand panel (view-only), then collapse tears down its iframe with zero lease calls.
         await page.locator('#cuSessionPanelToggle').click();
         await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
-        if (isPhone)
+        await page.locator('#cuSessionPanelToggle').click();
+        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'false');
+        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelBody')).toBeHidden();
+        await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
+        // Switching to another CU session keeps it closed by default (sessionStorage is per session).
+        if (viewport.width < 900) {
             await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
+        }
+        await page.locator('#tabAll').click();
+        await rowTwo.click();
+        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('sandbox two transcript');
+        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'false');
+        // Open on session two, then switch to non-CU self session -> panel hides and iframe tears down cleanly.
+        await page.locator('#cuSessionPanelToggle').click();
+        await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
+        if (viewport.width < 900) {
+            await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
+        }
         await fleet.row(fleet.self).click();
         await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self root transcript');
         await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeHidden();
         await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-        // Direct cross-origin peer claiming computerUse also shows NO panel.
-        if (isPhone)
+        // Verify list cue disappears when broker transitions to idle via SSE.
+        if (viewport.width < 900) {
             await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
-        await fleet.row(fleet.peer).click();
-        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('peer root transcript');
-        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeHidden();
-        await (0, fixtures_js_1.expect)(page.locator('#sessionDesktopChip')).toBeHidden();
-        (0, fixtures_js_1.expect)(fx.peerCuCalls).toBe(0);
+        }
+        await page.evaluate(() => {
+            const streams = Reflect.get(window, '__cuPanelStreams');
+            const open = [...streams].reverse().find(s => s.readyState === 1);
+            open.dispatchEvent(new MessageEvent('seat_idle', {
+                data: JSON.stringify({ state: 'idle', epoch: 9, lease: null, preempted: null }),
+            }));
+        });
+        await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveCount(0);
+        await (0, fixtures_js_1.expect)(rowTwo.locator('.cu-seat-cue')).toHaveCount(0);
+        (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(1);
+        (0, fixtures_js_1.expect)(fx.releaseCount).toBe(1);
+        (0, fixtures_js_1.expect)(fx.heartbeatCount).toBe(0);
         (0, fixtures_js_1.expect)(fx.selfCuCalls).toBe(0);
+        (0, fixtures_js_1.expect)(fx.peerCuCalls).toBe(0);
     });
 }
-(0, fixtures_js_1.test)('closes the CU host SSE stream when its sessions leave the visible list, and tears down SSE on panel collapse and session switch', async ({ page, fleet }) => {
-    await installTrackedCuEventSource(page);
-    await setupCuSandboxFixture(page, fleet);
-    await page.setViewportSize(DESKTOP_VIEWPORT);
-    await page.reload();
-    await page.locator('#tabAll').click();
-    const rowOne = page.locator(`.session-item[data-id="${fixtures_js_1.ROOT}"][data-host="${RELAY_HOST_ID}"]`);
-    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => {
-        const streams = Reflect.get(window, '__cuPanelStreams');
-        return streams.map(s => s.readyState);
-    })).toEqual([1]);
-    // Select sandbox-one (panel closed by default), then filter sidebar to "self root" so cu-sandbox has zero visible sessions -> SSE closes immediately.
-    await rowOne.click();
-    await page.locator('#filterInput').fill('self root');
-    await (0, fixtures_js_1.expect)(rowOne).toHaveCount(0);
-    await (0, fixtures_js_1.expect)(fleet.row(fleet.self)).toBeVisible();
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => {
-        const streams = Reflect.get(window, '__cuPanelStreams');
-        return streams.map(s => s.readyState);
-    })).toEqual([2]);
-    // With cu-sandbox absent from the sidebar, opening the panel opens a dedicated SSE stream + iframe; collapsing tears down BOTH.
-    await page.locator('#cuSessionPanelToggle').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => {
-        const streams = Reflect.get(window, '__cuPanelStreams');
-        return streams.map(s => s.readyState);
-    })).toEqual([2, 1]);
-    await page.locator('#cuSessionPanelToggle').click();
-    await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => {
-        const streams = Reflect.get(window, '__cuPanelStreams');
-        return streams.map(s => s.readyState);
-    })).toEqual([2, 2]);
-    // Re-open the panel, then switch to self -> tears down BOTH iframe and SSE immediately.
-    await page.locator('#cuSessionPanelToggle').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => {
-        const streams = Reflect.get(window, '__cuPanelStreams');
-        return streams.map(s => s.readyState);
-    })).toEqual([2, 2, 1]);
-    await fleet.row(fleet.self).click();
-    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self root transcript');
-    await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeHidden();
-    await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => {
-        const streams = Reflect.get(window, '__cuPanelStreams');
-        return streams.map(s => s.readyState);
-    })).toEqual([2, 2, 2]);
-});
-(0, fixtures_js_1.test)('hands back the seat on collapse, session switch, and late takeover reply against the original endpoint', async ({ page, fleet }) => {
-    await installTrackedCuEventSource(page);
-    const takeoverGateControl = { release: null };
-    let takeoverGate = null;
-    const fx = await setupCuSandboxFixture(page, fleet, {
-        holdTakeover: () => takeoverGate,
-    });
-    await page.setViewportSize(PHONE_VIEWPORT);
-    await page.reload();
-    await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
-    await page.locator('#tabAll').click();
-    const rowOne = page.locator(`.session-item[data-id="${fixtures_js_1.ROOT}"][data-host="${RELAY_HOST_ID}"]`);
-    const rowTwo = page.locator(`.session-item[data-id="${fixtures_js_1.CHILD}"][data-host="${RELAY_HOST_ID}"]`);
-    await rowOne.click();
-    // 1. Take Over -> collapse hands back immediately; fake broker returns to agent.
-    await page.locator('#cuSessionPanelToggle').click();
-    await page.locator('#cuPanelTakeoverBtn').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('You have control');
-    (0, fixtures_js_1.expect)(fx.seatState).toBe('human');
-    await page.locator('#cuSessionPanelToggle').click();
-    await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-    await fixtures_js_1.expect.poll(() => fx.releaseCount).toBe(1);
-    (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-    (0, fixtures_js_1.expect)(fx.releasePayload).toEqual({ leaseId: 'h1', leaseToken: 'tok-human-1', handBack: true });
-    (0, fixtures_js_1.expect)(fx.releaseUrls.at(-1)).toBe(`${RELAY_BASE}/api/cu/release`);
-    // 2. Take Over -> session switch hands back immediately; fake broker returns to agent.
-    await page.locator('#cuSessionPanelToggle').click();
-    await page.locator('#cuPanelTakeoverBtn').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('You have control');
-    (0, fixtures_js_1.expect)(fx.seatState).toBe('human');
-    await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
-    await rowTwo.click();
-    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('sandbox two transcript');
-    await fixtures_js_1.expect.poll(() => fx.releaseCount).toBe(2);
-    (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-    (0, fixtures_js_1.expect)(fx.releasePayload).toEqual({ leaseId: 'h2', leaseToken: 'tok-human-2', handBack: true });
-    // 3. Pending Take Over -> switch away before reply arrives -> late grant is released against original endpoint.
-    await page.locator('#cuSessionPanelToggle').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeVisible();
-    takeoverGate = new Promise(resolve => { takeoverGateControl.release = resolve; });
-    await page.locator('#cuPanelTakeoverBtn').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeDisabled();
-    await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
-    await fleet.row(fleet.self).click();
-    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self root transcript');
-    await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeHidden();
-    takeoverGate = null;
-    takeoverGateControl.release?.();
-    await fixtures_js_1.expect.poll(() => fx.releaseCount).toBe(3);
-    (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-    (0, fixtures_js_1.expect)(fx.releasePayload).toEqual({ leaseId: 'h3', leaseToken: 'tok-human-3', handBack: true });
-    (0, fixtures_js_1.expect)(fx.releaseUrls.at(-1)).toBe(`${RELAY_BASE}/api/cu/release`);
-});
-(0, fixtures_js_1.test)('File and Diff panes hand back control, emit zero heartbeats while hidden, and restore view-only on return', async ({ page, fleet }) => {
-    await installTrackedCuEventSource(page);
-    const fx = await setupCuSandboxFixture(page, fleet, { heartbeatIntervalSec: 5 });
-    await page.setViewportSize(DESKTOP_VIEWPORT);
-    await page.reload();
-    await page.locator('#tabAll').click();
-    const rowOne = page.locator(`.session-item[data-id="${fixtures_js_1.ROOT}"][data-host="${RELAY_HOST_ID}"]`);
-    await rowOne.click();
-    await page.locator('#cuSessionPanelToggle').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
-    await page.clock.install();
-    for (const kind of ['diff', 'file']) {
-        await page.locator('#cuPanelTakeoverBtn').click();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('You have control');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeVisible();
-        (0, fixtures_js_1.expect)(fx.seatState).toBe('human');
-        const releasesBefore = fx.releaseCount;
-        const heartbeatsBefore = fx.heartbeatCount;
-        await page.evaluate(view => {
-            if (view === 'diff')
-                void fixtureApp.features.fileViews.openDiff();
-            else
-                void fixtureApp.features.fileViews.openFile('a.txt');
-        }, kind);
-        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeHidden();
-        await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-        await fixtures_js_1.expect.poll(() => fx.releaseCount).toBe(releasesBefore + 1);
-        (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-        // Advance past multiple heartbeat intervals while occluded: zero heartbeats may fire.
-        await page.clock.runFor(15_000);
-        (0, fixtures_js_1.expect)(fx.heartbeatCount).toBe(heartbeatsBefore);
-        (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-        // Closing Diff/File restores the panel in view-only mode (no hidden control).
-        await page.evaluate(view => {
-            if (view === 'diff')
-                fixtureApp.features.fileViews.closeDiff();
-            else
-                fixtureApp.features.fileViews.closeFile();
-        }, kind);
-        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelBody')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('View only');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Agent');
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeVisible();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeHidden();
-        await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
-    }
-});
-(0, fixtures_js_1.test)('broker restart epoch-0 hello resets connection generation so Take Over and Hand Back work, and disconnect marks seat cue stale', async ({ page, fleet }) => {
-    await installTrackedCuEventSource(page);
-    const staleStatusControl = { release: null };
-    let staleStatusGate = null;
-    const fx = await setupCuSandboxFixture(page, fleet, {
-        holdStatus: () => staleStatusGate,
-    });
-    await page.setViewportSize(DESKTOP_VIEWPORT);
-    await page.reload();
-    await page.locator('#tabAll').click();
-    const rowOne = page.locator(`.session-item[data-id="${fixtures_js_1.ROOT}"][data-host="${RELAY_HOST_ID}"]`);
-    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
-    await rowOne.click();
-    await page.locator('#cuSessionPanelToggle').click();
-    await page.locator('#cuPanelTakeoverBtn').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('You have control');
-    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: you');
-    // Start a pre-restart status refresh that will resolve AFTER the broker restarts with a higher stale epoch (99).
-    const statusCallsBefore = fx.statusCount;
-    staleStatusGate = new Promise(resolve => { staleStatusControl.release = resolve; });
-    await page.evaluate(() => { void fixtureApp.features.cuViewerController.refresh(); });
-    await fixtures_js_1.expect.poll(() => fx.statusCount).toBe(statusCallsBefore + 1);
-    // Disconnect: sidebar seat cue must clear (stale/unknown), while panel keeps Hand Back visible (release credentials stay separate).
-    const streamsBefore = await page.evaluate(() => Reflect.get(window, '__cuPanelStreams').length);
-    await page.evaluate(() => {
-        const stream = Reflect.get(window, '__cuPanelStreams').at(-1);
-        stream.onerror?.(new Event('error'));
-    });
-    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveCount(0);
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Reconnecting…');
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeVisible();
-    // Wait for reconnect EventSource, then deliver authoritative epoch-0 hello from restarted broker.
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').length)).toBeGreaterThan(streamsBefore);
-    fx.epoch = 0;
-    fx.seatState = 'idle';
-    await page.evaluate(() => {
-        const stream = Reflect.get(window, '__cuPanelStreams').at(-1);
-        stream.dispatchEvent(new MessageEvent('hello', {
-            data: JSON.stringify({ state: 'idle', epoch: 0, lease: null, preempted: null }),
-        }));
-    });
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Idle');
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('View only');
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeVisible();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeHidden();
-    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveCount(0);
-    // Release the stale pre-restart status response (epoch 99 from previous connGen): MUST be rejected!
-    staleStatusGate = null;
-    staleStatusControl.release?.({
-        ok: true,
-        state: 'agent',
-        epoch: 99,
-        lease: { leaseId: 'stale-agent', sessionId: fixtures_js_1.ROOT, holderKind: 'agent', label: 'stale-pre-restart' },
-        preempted: null,
-    });
-    await page.waitForTimeout(100);
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Idle');
-    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveCount(0);
-    // Take Over on the restarted broker (epoch 1 < pre-restart epoch 5) MUST succeed with visible Hand Back!
-    await page.locator('#cuPanelTakeoverBtn').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('You have control');
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('Interactive');
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeVisible();
-    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: you');
-    (0, fixtures_js_1.expect)(fx.seatState).toBe('human');
-    (0, fixtures_js_1.expect)(fx.epoch).toBe(1);
-    // Hand Back on the restarted broker MUST succeed and return broker to agent.
-    await page.locator('#cuPanelHandBackBtn').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Agent');
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('View only');
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelTakeoverBtn')).toBeVisible();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toBeHidden();
-    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
-    (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-});
-(0, fixtures_js_1.test)('collapsing the CU host section drops its sidebar SSE stream, and relay endpoint change retires the panel and releases old endpoint', async ({ page, fleet }) => {
+(0, fixtures_js_1.test)('drops shared SSE when CU host collapses or filters out, tears down on panel collapse/switch, and retires on relay change', async ({ page, fleet }) => {
     await installTrackedCuEventSource(page);
     let activeRelayBase = RELAY_BASE;
     const fx = await setupCuSandboxFixture(page, fleet, { relayBase: () => activeRelayBase });
@@ -710,20 +461,39 @@ for (const { name, viewport, isPhone } of [
     const cuHostHeader = page.locator('.host-section-header').filter({ hasText: 'cu-sandbox' });
     await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
     await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').map(s => s.readyState))).toEqual([1]);
-    // Collapse CU host section -> no CU rows emitted -> SSE stream closes immediately.
+    // Collapsing the CU host section hides emitted rows -> shared SSE stream closes immediately.
     await cuHostHeader.click();
     await (0, fixtures_js_1.expect)(rowOne).toHaveCount(0);
     await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').map(s => s.readyState))).toEqual([2]);
-    // Expand CU host section -> stream reconnects and cue returns.
+    // Expanding restores the stream and cue.
     await cuHostHeader.click();
     await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
     await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').map(s => s.readyState))).toEqual([2, 1]);
-    // Open panel, Take Over, then change relay base for the same hostId -> panel retires and releases lease against ORIGINAL base.
+    // Open panel, filter CU rows out of sidebar -> panel keeps stream alive until collapse tears down both iframe and SSE.
     await rowOne.click();
     await page.locator('#cuSessionPanelToggle').click();
-    await page.locator('#cuPanelTakeoverBtn').click();
-    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('You have control');
-    (0, fixtures_js_1.expect)(fx.seatState).toBe('human');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
+    await page.locator('#filterInput').fill('self root');
+    await (0, fixtures_js_1.expect)(rowOne).toHaveCount(0);
+    await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').map(s => s.readyState))).toEqual([2, 1]);
+    await page.locator('#cuSessionPanelToggle').click();
+    await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
+    await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').map(s => s.readyState))).toEqual([2, 2]);
+    // Reopen panel while filtered, then switch to self -> tears down both iframe and SSE.
+    await page.locator('#cuSessionPanelToggle').click();
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
+    await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').map(s => s.readyState))).toEqual([2, 2, 1]);
+    await fleet.row(fleet.self).click();
+    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self root transcript');
+    await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeHidden();
+    await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
+    await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').map(s => s.readyState))).toEqual([2, 2, 2]);
+    // Clear filter, re-select rowOne (panel auto-restores open from sessionStorage), change relay base for same hostId -> panel retires cleanly with zero lease calls.
+    await page.locator('#filterInput').fill('');
+    await (0, fixtures_js_1.expect)(rowOne).toBeVisible();
+    await rowOne.click();
+    await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'true');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
     activeRelayBase = '/hosts/cu-sandbox-v2';
     await page.route(`${fleet.self.base}/hosts/cu-sandbox-v2/api/cu/status`, route => route.fulfill({
         json: { ok: true, state: 'idle', epoch: 1, lease: null, preempted: null },
@@ -731,9 +501,124 @@ for (const { name, viewport, isPhone } of [
     await page.evaluate(() => fixtureApp.features.hostDiscovery.loadFleet());
     await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'false');
     await (0, fixtures_js_1.expect)(page.locator('iframe.cu-viewer-frame')).toHaveCount(0);
-    await fixtures_js_1.expect.poll(() => fx.releaseCount).toBe(1);
+    (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(0);
+    (0, fixtures_js_1.expect)(fx.heartbeatCount).toBe(0);
+    (0, fixtures_js_1.expect)(fx.releaseCount).toBe(0);
+});
+(0, fixtures_js_1.test)('Astra round-2 probes cannot produce a human lease from the view-only panel, and reconnect restores stale cue & reissues discarded viewer ticket', async ({ page, fleet }) => {
+    await installTrackedCuEventSource(page);
+    let releaseStatusCode = 503;
+    const statusGateControl = { release: null };
+    let statusGate = null;
+    const ticketGateControl = { release: null };
+    let ticketGate = null;
+    const fx = await setupCuSandboxFixture(page, fleet, {
+        releaseStatus: () => releaseStatusCode,
+        holdStatus: () => statusGate,
+        holdTicket: () => ticketGate,
+    });
+    await page.setViewportSize(DESKTOP_VIEWPORT);
+    await page.reload();
+    await page.locator('#tabAll').click();
+    const rowOne = page.locator(`.session-item[data-id="${fixtures_js_1.ROOT}"][data-host="${RELAY_HOST_ID}"]`);
+    const cuHostHeader = page.locator('.host-section-header').filter({ hasText: 'cu-sandbox' });
+    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
+    await rowOne.click();
+    // Probe 1 (503 on release + Diff/File occlusion + collapse): view-only panel never calls takeover, heartbeat, or release.
+    await page.locator('#cuSessionPanelToggle').click();
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toHaveCount(0);
+    await page.evaluate(() => void fixtureApp.features.fileViews.openDiff());
+    await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeHidden();
+    await page.evaluate(() => fixtureApp.features.fileViews.closeDiff());
+    await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeVisible();
+    await page.evaluate(() => void fixtureApp.features.fileViews.openFile('a.txt'));
+    await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeHidden();
+    await page.evaluate(() => fixtureApp.features.fileViews.closeFile());
+    await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanel')).toBeVisible();
+    await page.locator('#cuSessionPanelToggle').click();
+    (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(0);
+    (0, fixtures_js_1.expect)(fx.heartbeatCount).toBe(0);
+    (0, fixtures_js_1.expect)(fx.releaseCount).toBe(0);
     (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
-    (0, fixtures_js_1.expect)(fx.releaseUrls.at(-1)).toBe(`${RELAY_BASE}/api/cu/release`);
+    // Probe 2 (delayed status GET returning null/error) + Probe 3 (disconnect stale cue + reconnect epoch-0 hello + discarded viewer ticket reissue):
+    // Hold the panel's view-only viewer ticket across a disconnect + reconnect so connGen bumps while it is in flight.
+    releaseStatusCode = 200;
+    ticketGate = new Promise(resolve => { ticketGateControl.release = resolve; });
+    await page.locator('#cuSessionPanelToggle').click();
+    await fixtures_js_1.expect.poll(() => fx.ticketCount).toBe(2);
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(0);
+    // Also queue a delayed pre-restart status refresh (will resolve later with stale epoch 99).
+    const statusCallsBefore = fx.statusCount;
+    statusGate = new Promise(resolve => { statusGateControl.release = resolve; });
+    await page.evaluate(() => { void fixtureApp.features.cuViewerController.refreshPanel(); });
+    await fixtures_js_1.expect.poll(() => fx.statusCount).toBe(statusCallsBefore + 1);
+    // Disconnect SSE -> sidebar cue clears (stale/unknown), panel shows Connecting…, still zero Hand Back or lease calls.
+    const streamsBefore = await page.evaluate(() => Reflect.get(window, '__cuPanelStreams').length);
+    await page.evaluate(() => {
+        const stream = Reflect.get(window, '__cuPanelStreams').at(-1);
+        stream.onerror?.(new Event('error'));
+    });
+    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Connecting…');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toHaveCount(0);
+    // Release the old-connGen in-flight ticket while disconnected -> discarded cleanly without mounting stale iframe.
+    ticketGate = null;
+    ticketGateControl.release?.();
+    await page.waitForTimeout(80);
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(0);
+    // Wait for reconnect EventSource and deliver authoritative epoch-0 hello ->
+    // (a) restores display state even with epoch 0 < prior epoch 4,
+    // (b) reissues the discarded view-only viewer ticket automatically so the panel iframe mounts!
+    await fixtures_js_1.expect.poll(() => page.evaluate(() => Reflect.get(window, '__cuPanelStreams').length)).toBeGreaterThan(streamsBefore);
+    fx.epoch = 0;
+    fx.seatState = 'agent';
+    await page.evaluate(() => {
+        const stream = Reflect.get(window, '__cuPanelStreams').at(-1);
+        stream.dispatchEvent(new MessageEvent('hello', {
+            data: JSON.stringify({
+                state: 'agent',
+                epoch: 0,
+                lease: { leaseId: 'a-restarted', sessionId: 's', holderKind: 'agent', label: 'restarted-agent' },
+                preempted: null,
+            }),
+        }));
+    });
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Agent');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatDetail')).toContainText('Agent: restarted-agent');
+    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
+    (0, fixtures_js_1.expect)(fx.ticketCount).toBeGreaterThanOrEqual(3);
+    // Release delayed pre-restart status GET (epoch 99 / error) -> rejected by connGen without touching display or leases.
+    statusGate = null;
+    statusGateControl.release?.({
+        status: 200,
+        json: {
+            ok: true,
+            state: 'human',
+            epoch: 99,
+            lease: { leaseId: 'stale-human', holderKind: 'human', label: 'stale-pre-restart' },
+            preempted: null,
+        },
+    });
+    await page.waitForTimeout(80);
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Agent');
+    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
+    // Probe 4 (host entry destroyed & recreated at same connGen = 1): collapse panel + host section, then expand again.
+    await page.locator('#cuSessionPanelToggle').click();
+    await cuHostHeader.click();
+    await (0, fixtures_js_1.expect)(rowOne).toHaveCount(0);
+    await cuHostHeader.click();
+    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('desktop: agent');
+    await page.locator('#cuSessionPanelToggle').click();
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelModePill')).toHaveText('View only');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toHaveCount(0);
+    // Across all four probes: zero takeover, heartbeat, or release requests from the session panel.
+    (0, fixtures_js_1.expect)(fx.takeoverCount).toBe(0);
+    (0, fixtures_js_1.expect)(fx.heartbeatCount).toBe(0);
+    (0, fixtures_js_1.expect)(fx.releaseCount).toBe(0);
+    (0, fixtures_js_1.expect)(fx.seatState).toBe('agent');
 });
 fixtures_js_1.test.describe('session Desktop panel version skew', () => {
     (0, fixtures_js_1.test)('new JS against old peers without computerUse shows no panel or cue and makes zero /api/cu requests', async ({ page, fleet }) => {
@@ -801,6 +686,7 @@ fixtures_js_1.test.describe('session Desktop panel version skew', () => {
         await (0, fixtures_js_1.expect)(page.locator('#cuSessionPanelToggle')).toHaveAttribute('aria-expanded', 'false');
         await page.locator('#cuSessionPanelToggle').click();
         await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Idle');
+        await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toHaveCount(0);
         await (0, fixtures_js_1.expect)(page.locator('#cuPanelStage iframe.cu-viewer-frame')).toHaveAttribute('src', '/api/cu/spaces/viewer/#ticket=panel-skew-1');
         (0, fixtures_js_1.expect)(errors).toEqual([]);
     });

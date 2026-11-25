@@ -1,6 +1,6 @@
 import fs = require('node:fs');
 import path = require('node:path');
-import type { Page, Route } from '@playwright/test';
+import type { Route } from '@playwright/test';
 import { injectFetchCredsScript, validateOpenMediaRequest } from '../../lib/cu-handlers';
 import { test, expect, ROOT } from './fixtures.js';
 
@@ -13,57 +13,6 @@ const FAKE_VIEWER_HTML = `<!doctype html><html><body style="margin:0;background:
 
 const RELAY_HOST_ID = '00000000-0000-4000-8000-00000000c0de';
 const RELAY_BASE = '/hosts/cu-sandbox';
-
-function installCuStreamStubInWindow(): void {
-  if (Reflect.get(window, '__cuFakeEventSourceInstalled')) return;
-  Reflect.set(window, '__cuFakeEventSourceInstalled', true);
-  const NativeEventSource = window.EventSource;
-  const urls: string[] = [];
-  const streams: EventSource[] = [];
-  Reflect.set(window, '__cuStreamUrls', urls);
-  Reflect.set(window, '__cuStreams', streams);
-  class FakeCuEventSource extends EventTarget {
-    readonly url: string;
-    readyState = 1;
-    onmessage: ((ev: MessageEvent) => void) | null = null;
-    onopen: ((ev: Event) => void) | null = null;
-    onerror: ((ev: Event) => void) | null = null;
-    static readonly CONNECTING = 0;
-    static readonly OPEN = 1;
-    static readonly CLOSED = 2;
-    readonly CONNECTING = 0;
-    readonly OPEN = 1;
-    readonly CLOSED = 2;
-    constructor(url: string) {
-      super();
-      this.url = url;
-      urls.push(url);
-      streams.push(this as unknown as EventSource);
-      queueMicrotask(() => {
-        if (this.readyState === 1) this.onopen?.(new Event('open'));
-      });
-    }
-    close() { this.readyState = 2; }
-  }
-  class TrackedEventSource extends NativeEventSource {
-    constructor(url: string | URL, init?: EventSourceInit) {
-      const text = String(url);
-      if (text.includes('/api/cu/stream')) {
-        return new FakeCuEventSource(text) as unknown as TrackedEventSource;
-      }
-      super(url, init);
-    }
-  }
-  window.EventSource = TrackedEventSource;
-}
-
-// Playwright route.fulfill closes HTTP response bodies immediately, which makes
-// real EventSource fire onerror (EOF) right after connect. Keep CU SSE streams
-// open in tests that are not simulating a server disconnect.
-async function installFakeCuEventSource(page: Page): Promise<void> {
-  await page.addInitScript(installCuStreamStubInWindow);
-  await page.evaluate(installCuStreamStubInWindow).catch(() => {});
-}
 
 function corsHeaders(origin: string): Record<string, string> {
   return {
@@ -82,7 +31,6 @@ function fulfillPeerJson(route: Route, origin: string, json: unknown, status = 2
 
 test.describe('computer-use desktop viewer at phone width (390x844)', () => {
   test('withholds Desktop on unsupported direct cross-origin peers and works via same-origin hub relay without cut controls', async ({ page, fleet }) => {
-    await installFakeCuEventSource(page);
     await page.setViewportSize(PHONE_VIEWPORT);
     const expiresAgent = new Date(Date.now() + 90_000).toISOString();
     const expiresHuman = new Date(Date.now() + 600_000).toISOString();
@@ -299,7 +247,45 @@ test.describe('computer-use desktop viewer at phone width (390x844)', () => {
       });
     });
 
-    await installFakeCuEventSource(page);
+    await page.addInitScript(() => {
+      const NativeEventSource = window.EventSource;
+      const urls: string[] = [];
+      Reflect.set(window, '__cuStreamUrls', urls);
+      Reflect.set(window, '__cuStreams', [] as EventSource[]);
+      class FakeCuEventSource extends EventTarget {
+        readonly url: string;
+        readyState = 1;
+        onmessage: ((ev: MessageEvent) => void) | null = null;
+        onopen: ((ev: Event) => void) | null = null;
+        onerror: ((ev: Event) => void) | null = null;
+        static readonly CONNECTING = 0;
+        static readonly OPEN = 1;
+        static readonly CLOSED = 2;
+        readonly CONNECTING = 0;
+        readonly OPEN = 1;
+        readonly CLOSED = 2;
+        constructor(url: string) {
+          super();
+          this.url = url;
+          urls.push(url);
+          (Reflect.get(window, '__cuStreams') as EventSource[]).push(this as unknown as EventSource);
+          queueMicrotask(() => {
+            if (this.readyState === 1) this.onopen?.(new Event('open'));
+          });
+        }
+        close() { this.readyState = 2; }
+      }
+      class TrackedEventSource extends NativeEventSource {
+        constructor(url: string | URL, init?: EventSourceInit) {
+          const text = String(url);
+          if (text.includes('/api/cu/stream')) {
+            return new FakeCuEventSource(text) as unknown as TrackedEventSource;
+          }
+          super(url, init);
+        }
+      }
+      window.EventSource = TrackedEventSource;
+    });
     await page.reload();
     await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
     await page.locator('#tabAll').click();
@@ -517,7 +503,6 @@ test.describe('computer-use desktop viewer at phone width (390x844)', () => {
         },
       });
     });
-    await installFakeCuEventSource(page);
     await page.reload();
 
     await page.route(`${fleet.self.base}/api/cu/status`, async route => {
@@ -660,7 +645,6 @@ test.describe('computer-use desktop viewer at phone width (390x844)', () => {
 
 test.describe('HTML/JS version skew safety', () => {
   test('new JS boots cleanly on older cached HTML missing #cuViewerView and #sessionDesktopChip', async ({ page, fleet }) => {
-    await installFakeCuEventSource(page);
     await page.setViewportSize(PHONE_VIEWPORT);
     const errors: string[] = [];
     page.on('pageerror', err => errors.push(err.message));

@@ -12,57 +12,6 @@ const FAKE_VIEWER_HTML = `<!doctype html><html><body style="margin:0;background:
 </body></html>`;
 const RELAY_HOST_ID = '00000000-0000-4000-8000-00000000c0de';
 const RELAY_BASE = '/hosts/cu-sandbox';
-function installCuStreamStubInWindow() {
-    if (Reflect.get(window, '__cuFakeEventSourceInstalled'))
-        return;
-    Reflect.set(window, '__cuFakeEventSourceInstalled', true);
-    const NativeEventSource = window.EventSource;
-    const urls = [];
-    const streams = [];
-    Reflect.set(window, '__cuStreamUrls', urls);
-    Reflect.set(window, '__cuStreams', streams);
-    class FakeCuEventSource extends EventTarget {
-        url;
-        readyState = 1;
-        onmessage = null;
-        onopen = null;
-        onerror = null;
-        static CONNECTING = 0;
-        static OPEN = 1;
-        static CLOSED = 2;
-        CONNECTING = 0;
-        OPEN = 1;
-        CLOSED = 2;
-        constructor(url) {
-            super();
-            this.url = url;
-            urls.push(url);
-            streams.push(this);
-            queueMicrotask(() => {
-                if (this.readyState === 1)
-                    this.onopen?.(new Event('open'));
-            });
-        }
-        close() { this.readyState = 2; }
-    }
-    class TrackedEventSource extends NativeEventSource {
-        constructor(url, init) {
-            const text = String(url);
-            if (text.includes('/api/cu/stream')) {
-                return new FakeCuEventSource(text);
-            }
-            super(url, init);
-        }
-    }
-    window.EventSource = TrackedEventSource;
-}
-// Playwright route.fulfill closes HTTP response bodies immediately, which makes
-// real EventSource fire onerror (EOF) right after connect. Keep CU SSE streams
-// open in tests that are not simulating a server disconnect.
-async function installFakeCuEventSource(page) {
-    await page.addInitScript(installCuStreamStubInWindow);
-    await page.evaluate(installCuStreamStubInWindow).catch(() => { });
-}
 function corsHeaders(origin) {
     return {
         'access-control-allow-origin': origin,
@@ -78,7 +27,6 @@ function fulfillPeerJson(route, origin, json, status = 200) {
 }
 fixtures_js_1.test.describe('computer-use desktop viewer at phone width (390x844)', () => {
     (0, fixtures_js_1.test)('withholds Desktop on unsupported direct cross-origin peers and works via same-origin hub relay without cut controls', async ({ page, fleet }) => {
-        await installFakeCuEventSource(page);
         await page.setViewportSize(PHONE_VIEWPORT);
         const expiresAgent = new Date(Date.now() + 90_000).toISOString();
         const expiresHuman = new Date(Date.now() + 600_000).toISOString();
@@ -283,7 +231,46 @@ fixtures_js_1.test.describe('computer-use desktop viewer at phone width (390x844
                 },
             });
         });
-        await installFakeCuEventSource(page);
+        await page.addInitScript(() => {
+            const NativeEventSource = window.EventSource;
+            const urls = [];
+            Reflect.set(window, '__cuStreamUrls', urls);
+            Reflect.set(window, '__cuStreams', []);
+            class FakeCuEventSource extends EventTarget {
+                url;
+                readyState = 1;
+                onmessage = null;
+                onopen = null;
+                onerror = null;
+                static CONNECTING = 0;
+                static OPEN = 1;
+                static CLOSED = 2;
+                CONNECTING = 0;
+                OPEN = 1;
+                CLOSED = 2;
+                constructor(url) {
+                    super();
+                    this.url = url;
+                    urls.push(url);
+                    Reflect.get(window, '__cuStreams').push(this);
+                    queueMicrotask(() => {
+                        if (this.readyState === 1)
+                            this.onopen?.(new Event('open'));
+                    });
+                }
+                close() { this.readyState = 2; }
+            }
+            class TrackedEventSource extends NativeEventSource {
+                constructor(url, init) {
+                    const text = String(url);
+                    if (text.includes('/api/cu/stream')) {
+                        return new FakeCuEventSource(text);
+                    }
+                    super(url, init);
+                }
+            }
+            window.EventSource = TrackedEventSource;
+        });
         await page.reload();
         await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
         await page.locator('#tabAll').click();
@@ -489,7 +476,6 @@ fixtures_js_1.test.describe('computer-use desktop viewer at phone width (390x844
                 },
             });
         });
-        await installFakeCuEventSource(page);
         await page.reload();
         await page.route(`${fleet.self.base}/api/cu/status`, async (route) => {
             statusCalls += 1;
@@ -616,7 +602,6 @@ fixtures_js_1.test.describe('computer-use desktop viewer at phone width (390x844
 });
 fixtures_js_1.test.describe('HTML/JS version skew safety', () => {
     (0, fixtures_js_1.test)('new JS boots cleanly on older cached HTML missing #cuViewerView and #sessionDesktopChip', async ({ page, fleet }) => {
-        await installFakeCuEventSource(page);
         await page.setViewportSize(PHONE_VIEWPORT);
         const errors = [];
         page.on('pageerror', err => errors.push(err.message));

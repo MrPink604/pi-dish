@@ -287,15 +287,6 @@ export function cuSeatPresentation(
   nowMs: number,
 ): CuSeatPresentation {
   if (!status) {
-    if (localLease) {
-      const remaining = formatExpiryRemaining(localLease.expiresAt, nowMs);
-      return {
-        tone: 'self',
-        badge: 'Reconnecting…',
-        detail: [remaining, 'connection interrupted'].filter(Boolean).join(' · '),
-        ownControl: true,
-      };
-    }
     return { tone: 'idle', badge: 'Connecting…', detail: 'Checking seat status', ownControl: false };
   }
   const ownControl = isOwnHumanLease(status, localLease);

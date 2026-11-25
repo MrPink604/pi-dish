@@ -910,7 +910,6 @@ const cuViewerController: ReturnType<typeof createCuViewer> = createCuViewer({
   hosts: effectiveHosts,
   host: hostEntryFor,
   currentSession: () => sessionState.currentSession,
-  selectionGeneration: () => sessionState.selectionGeneration,
   supports: host => hostSupportsCapability(host, 'computerUse', appConfig) && supportsComputerUseTransport(host),
   dot: hostId => hostPresentation.dotHtml(hostId, 'fleet-host-dot'),
   ticket: host => mintHostTicket(host, 'stream'),
@@ -960,7 +959,6 @@ const fileViews: ReturnType<typeof createFileViews> = createFileViews({
   status: setStatus, refreshArtifacts: owner => sessionInfo.refreshArtifacts(owner),
   closeComments: () => anchoredCommentController.close(), clearComments: () => anchoredCommentController.set([]),
   refreshComments: () => anchoredCommentController.refresh(), markComments: () => anchoredCommentController.applyMarks(),
-  onOverlayChange: occluded => cuViewerController.setOccluded(occluded),
 });
 
 const anchoredCommentController: ReturnType<typeof createAnchoredComments> = createAnchoredComments({
