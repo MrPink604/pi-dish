@@ -52,9 +52,13 @@ jobs:
         run: node scripts/report-ci-failure.js "$RUNNER_TEMP/backend.log"
 
   browser:
-    name: Browser (Node 24)
+    name: Browser (Node 24, shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -69,9 +73,14 @@ jobs:
           sudo apt-get install -y tmux zsh build-essential python3
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser 2>&1 | tee "$RUNNER_TEMP/browser.log"
-      - run: npm run test:ui:scenarios 2>&1 | tee -a "$RUNNER_TEMP/browser.log"
-      - run: npm run test:ui 2>&1 | tee -a "$RUNNER_TEMP/browser.log"
+      - name: Browser Playwright tests (shard ${{ matrix.shard }}/2)
+        run: npm run test:browser -- --shard=${{ matrix.shard }}/2 2>&1 | tee "$RUNNER_TEMP/browser.log"
+      - name: UI scenario tests
+        if: matrix.shard == 1
+        run: npm run test:ui:scenarios 2>&1 | tee -a "$RUNNER_TEMP/browser.log"
+      - name: UI smoke tests
+        if: matrix.shard == 2
+        run: npm run test:ui 2>&1 | tee -a "$RUNNER_TEMP/browser.log"
       - name: Browser failure details
         if: failure()
         run: node scripts/report-ci-failure.js "$RUNNER_TEMP/browser.log"
@@ -79,7 +88,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: browser-failures
+          name: browser-failures-shard-${{ matrix.shard }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
