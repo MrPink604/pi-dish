@@ -2207,6 +2207,11 @@ test('unit: P1-9 quarantine retry never kills an unrelated pane after tmux serve
     assert.equal(launchCalls, 1);
     // 2. Restart the tmux server at the EXACT SAME socket -> new server S2, unrelated shell U1 now occupies `%0`!
     (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, 'kill-server'], { timeout: 10_000 });
+    await waitFor(() => !processIdentityAlive(server1) && !processIdentityAlive(pane1), 'original tmux server S1 and pane P1 exited');
+    try {
+        fs.unlinkSync(sock);
+    }
+    catch { }
     const reusedPaneId = (0, node_child_process_1.execFileSync)('tmux', ['-S', sock, '-f', '/dev/null', 'new-session', '-d', '-s', 'work', '-P', '-F', '#{pane_id}', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)'], { encoding: 'utf8', timeout: 10_000 }).trim();
     assert.equal(reusedPaneId, origPaneId, 'restarted server reused the same pane id (%0)');
     const server2 = (0, test_types_js_1.present)(await tmux.serverIdentity(sock));
