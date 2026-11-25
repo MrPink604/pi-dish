@@ -69,6 +69,58 @@ const HUB_CU_WS_HEADERS: readonly string[] = [
   'sec-websocket-protocol',
 ];
 
+type CuResponseKind = 'json' | 'sse' | 'grpc-web';
+
+const HUB_CU_RESPONSE_HEADERS: Readonly<Record<CuResponseKind, readonly string[]>> = {
+  json: ['content-type', 'content-length', 'cache-control'],
+  sse: ['content-type', 'content-length', 'cache-control', 'x-accel-buffering'],
+  'grpc-web': ['content-type', 'content-length', 'cache-control', 'grpc-status', 'grpc-message', 'grpc-encoding', 'grpc-status-details-bin'],
+};
+
+const HUB_CU_WS_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
+  'upgrade',
+  'connection',
+  'sec-websocket-accept',
+  'sec-websocket-protocol',
+]);
+
+function mimeEssence(header: string | string[] | undefined): string {
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (typeof raw !== 'string') return '';
+  return raw.split(';')[0].trim().toLowerCase();
+}
+
+function isAllowedCuResponse(kind: CuResponseKind, status: number, contentType: string | string[] | undefined): boolean {
+  if (!Number.isInteger(status) || status < 200 || status >= 600) return false;
+  if (status >= 300 && status < 400) return false;
+  const mime = mimeEssence(contentType);
+  if (kind === 'json') return mime === 'application/json';
+  if (kind === 'sse') {
+    if (status === 200) return mime === 'text/event-stream';
+    return status >= 400 && mime === 'application/json';
+  }
+  const isGrpcWeb = mime === 'application/grpc-web'
+    || mime === 'application/grpc-web+proto'
+    || mime === 'application/grpc-web-text'
+    || mime === 'application/grpc-web-text+proto';
+  if (status === 200) return isGrpcWeb;
+  return status >= 400 && (isGrpcWeb || mime === 'application/json');
+}
+
+function copyAllowlistedCuResponseHeaders(
+  peerRes: IncomingMessage,
+  res: TransportResponse,
+  kind: CuResponseKind,
+): void {
+  const nominated = connectionNominatedHeaders(peerRes.headers.connection);
+  for (const name of HUB_CU_RESPONSE_HEADERS[kind]) {
+    if (nominated.has(name)) continue;
+    const value = peerRes.headers[name];
+    if (value !== undefined) res.setHeader(name, value);
+  }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
 function allowlistHeaders(
   incoming: IncomingMessage['headers'],
   allowed: readonly string[],
@@ -379,6 +431,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
         path: `/api/cu/spaces${safe.pathname}${safe.search}`,
         headers,
         timeoutMs: cuProxyResponseTimeoutMs,
+        cuResponseKind: 'grpc-web',
       });
       return;
     }
@@ -393,6 +446,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
         path: `/api${rawPath}${search}`,
         headers,
         timeoutMs: cuProxyResponseTimeoutMs,
+        cuResponseKind: rawPath === '/cu/stream' ? 'sse' : 'json',
       });
       return;
     }
@@ -441,13 +495,14 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
           res.status(400).json({ error: 'Expected a JSON object body' });
           return;
         }
-        const payload = JSON.stringify(parsed);
+        // Forward the already-validated JSON text directly with its UTF-8 byte
+        // length (no second JSON.stringify, avoiding recursion throws in callbacks).
         const nominated = connectionNominatedHeaders(req.headers.connection);
         const headers: OutgoingHttpHeaders = {
           accept: 'application/json',
           'accept-encoding': 'identity',
           'content-type': 'application/json',
-          'content-length': String(Buffer.byteLength(payload)),
+          'content-length': String(Buffer.byteLength(text, 'utf8')),
         };
         if (!nominated.has('user-agent') && req.headers['user-agent'] !== undefined) {
           headers['user-agent'] = req.headers['user-agent'];
@@ -456,7 +511,8 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
           path: `/api${rawPath}${search}`,
           headers,
           timeoutMs: cuProxyResponseTimeoutMs,
-          bodyPayload: payload,
+          bodyPayload: text,
+          cuResponseKind: 'json',
         });
       });
       return;
@@ -475,6 +531,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       headers?: OutgoingHttpHeaders;
       timeoutMs?: number;
       bodyPayload?: string;
+      cuResponseKind?: CuResponseKind;
     } = {},
   ) {
     const unreachable = (reason: unknown) => {
@@ -502,6 +559,22 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
         }
       },
       (peerRes) => {
+          if (override.cuResponseKind) {
+            const statusCode = peerRes.statusCode ?? 0;
+            if (!isAllowedCuResponse(override.cuResponseKind, statusCode, peerRes.headers['content-type'])) {
+              peerRes.resume();
+              try { peerRes.destroy(); } catch {}
+              res.setHeader('X-Content-Type-Options', 'nosniff');
+              res.status(502).json({ error: 'Unexpected response type or redirect from computer-use host' });
+              return;
+            }
+            res.status(statusCode);
+            copyAllowlistedCuResponseHeaders(peerRes, res, override.cuResponseKind);
+            if (override.cuResponseKind === 'sse' && statusCode === 200) res.flushHeaders();
+            peerRes.pipe(res);
+            res.on('close', () => { try { peerRes.destroy(); } catch {} });
+            return;
+          }
           res.status(peerRes.statusCode!);
           copyRelayResponseHeaders(peerRes, res);
           if (hook && String(peerRes.headers['content-type'] || '').includes('application/json')) {
@@ -1004,7 +1077,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       socket.destroy();
       return true;
     }
-    let cuUpgradeOverride: { headers: OutgoingHttpHeaders; peerPath: string } | undefined;
+    let cuUpgradeOverride: { headers: OutgoingHttpHeaders; peerPath: string; cuWs: true } | undefined;
     if (cuSpacesMatch) {
       const rawPrefix = `/hosts/${hostName}/api/cu/spaces`;
       const rawUrl = req.url || '';
@@ -1029,6 +1102,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       cuUpgradeOverride = {
         headers: buildHubCuWsHeaders(req.headers),
         peerPath: `/api/cu/spaces${safe.pathname}${safe.search}`,
+        cuWs: true,
       };
     }
     // This host's gate, applied by hand; the peer's own credential is attached
@@ -1048,7 +1122,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     socket: Duplex,
     head: Buffer,
     url: URL,
-    override?: { headers: OutgoingHttpHeaders; peerPath: string },
+    override?: { headers: OutgoingHttpHeaders; peerPath: string; cuWs?: true },
   ) {
     const teardown = () => { try { socket.destroy(); } catch {} };
     const peerPath = override?.peerPath ?? (url.pathname.slice(`/hosts/${remote.name}`.length) + url.search);
@@ -1061,9 +1135,20 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
         // A client hanging up mid-handshake must not leave a half-open peer request.
         socket.once('close', () => { try { upstream.destroy(); } catch {} });
         upstream.on('upgrade', (peerRes, peerSocket, peerHead) => {
+          if (override?.cuWs && peerRes.statusCode !== 101) {
+            try { peerSocket.destroy(); } catch {}
+            socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+            teardown();
+            return;
+          }
           const lines = [`HTTP/1.1 ${peerRes.statusCode} ${peerRes.statusMessage || 'Switching Protocols'}`];
           for (const [key, value] of Object.entries(peerRes.headers)) {
-            for (const one of Array.isArray(value) ? value : [value]) lines.push(`${key}: ${one}`);
+            if (override?.cuWs && !HUB_CU_WS_RESPONSE_HEADERS.has(key.toLowerCase())) continue;
+            for (const one of Array.isArray(value) ? value : [value]) {
+              if (one === undefined) continue;
+              if (override?.cuWs && /[\r\n]/.test(one)) continue;
+              lines.push(`${key}: ${one}`);
+            }
           }
           socket.write(`${lines.join('\r\n')}\r\n\r\n`);
           if (peerHead && peerHead.length) socket.write(peerHead);
@@ -1077,7 +1162,12 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
         // Peer refused the handshake: relay its status, not a dead socket.
         upstream.on('response', (peerRes) => {
           peerRes.resume();
-          socket.write(`HTTP/1.1 ${peerRes.statusCode} ${peerRes.statusMessage || ''}\r\n\r\n`);
+          const status = peerRes.statusCode ?? 502;
+          if (override?.cuWs && status >= 300 && status < 400) {
+            socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+          } else {
+            socket.write(`HTTP/1.1 ${status} ${peerRes.statusMessage || ''}\r\n\r\n`);
+          }
           socket.destroy();
         });
         upstream.end();

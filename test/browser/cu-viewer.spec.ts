@@ -474,6 +474,105 @@ test.describe('computer-use desktop viewer at phone width (390x844)', () => {
     expect(reminted.openedUrls[0]).toContain('?ticket=remint-ticket-1');
     expect(reminted.openedUrls[1]).toContain('?ticket=remint-ticket-2');
   });
+
+  test('late initial status reply arriving after Take Over keeps control and Hand Back visible', async ({ page, fleet }) => {
+    await page.setViewportSize(PHONE_VIEWPORT);
+    const expiresAgent = new Date(Date.now() + 90_000).toISOString();
+    const expiresHuman = new Date(Date.now() + 600_000).toISOString();
+    let releaseInitialStatus!: () => void;
+    const initialStatusGate = new Promise<void>(resolve => { releaseInitialStatus = resolve; });
+    let statusCalls = 0;
+
+    await page.route(`${fleet.self.base}/api/host`, async route => {
+      const response = await route.fetch();
+      const json = (await response.json()) as Record<string, unknown>;
+      const caps = (json.capabilities as Record<string, unknown>) || {};
+      await route.fulfill({ json: { ...json, capabilities: { ...caps, computerUse: true } } });
+    });
+    await page.route(`${fleet.self.base}/api/hosts`, async route => {
+      const response = await route.fetch();
+      const json = (await response.json()) as { hosts: Array<Record<string, unknown>> };
+      await route.fulfill({
+        json: {
+          hosts: json.hosts.map(host => host.self
+            ? { ...host, capabilities: { ...(host.capabilities as Record<string, unknown> || {}), computerUse: true } }
+            : host),
+        },
+      });
+    });
+    await page.reload();
+
+    await page.route(`${fleet.self.base}/api/cu/status`, async route => {
+      statusCalls += 1;
+      if (statusCalls === 1) {
+        // Hold the initial status reply until AFTER Take Over succeeds.
+        await initialStatusGate;
+      }
+      await route.fulfill({
+        json: {
+          ok: true,
+          state: 'agent',
+          epoch: 4,
+          lease: { leaseId: 'a1', sessionId: ROOT, holderKind: 'agent', label: 'omp-worker', expiresAt: expiresAgent },
+          preempted: null,
+        },
+      });
+    });
+    await page.route(`${fleet.self.base}/api/cu/stream*`, route => route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: ': keepalive\n\n',
+    }));
+    await page.route(`${fleet.self.base}/api/cu/viewer/ticket`, route => route.fulfill({
+      json: { ok: true, epoch: 4, mode: 'view-only', ticket: 'late-view-only', path: '//evil/ignored', spacesPath: '/api/cu/spaces/../../ignored' },
+    }));
+    await page.route(`${fleet.self.base}/api/cu/takeover`, route => route.fulfill({
+      json: {
+        ok: true,
+        state: 'human',
+        epoch: 5,
+        leaseId: 'h-late-1',
+        leaseToken: 'tok-late-1',
+        lease: { leaseId: 'h-late-1', holderKind: 'human', label: 'pi-dish', expiresAt: expiresHuman },
+        preempted: { sessionId: ROOT, label: 'omp-worker' },
+        heartbeatIntervalSec: 60,
+        viewer: {
+          mode: 'interactive',
+          ticket: 'interactive-epoch-5',
+          path: '//evil/ignored',
+          spacesPath: '/api/cu/spaces/../../ignored',
+        },
+      },
+    }));
+    await page.route(`${fleet.self.base}/api/cu/spaces/viewer/*`, route => route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: FAKE_VIEWER_HTML,
+    }));
+
+    // Open viewer (initial GET /api/cu/status is held in flight), then immediately click Take Over.
+    await page.evaluate(hostId => fixtureApp.features.cuViewerController.open(hostId), fleet.self.hostId);
+    await expect(page.locator('#cuTakeoverBtn')).toBeVisible();
+    await page.locator('#cuTakeoverBtn').click();
+
+    await expect(page.locator('#cuSeatBadge')).toHaveText('You have control');
+    await expect(page.locator('#cuViewerModePill')).toHaveText('Interactive');
+    await expect(page.locator('#cuHandBackBtn')).toBeVisible();
+    await expect(page.locator('#cuTakeoverBtn')).toBeHidden();
+    // Iframe URL ignores hostile guest path/spacesPath and pins /api/cu/spaces/viewer/#ticket=...
+    await expect(page.locator('iframe.cu-viewer-frame')).toHaveAttribute('src', '/api/cu/spaces/viewer/#ticket=interactive-epoch-5');
+
+    // Now deliver the delayed initial status reply (epoch 4, agent).
+    releaseInitialStatus();
+    await page.waitForTimeout(150);
+
+    // Accepted takeover state, Hand Back button, and interactive iframe must stay intact!
+    await expect(page.locator('#cuSeatBadge')).toHaveText('You have control');
+    await expect(page.locator('#cuViewerModePill')).toHaveText('Interactive');
+    await expect(page.locator('#cuHandBackBtn')).toBeVisible();
+    await expect(page.locator('#cuTakeoverBtn')).toBeHidden();
+    await expect(page.locator('iframe.cu-viewer-frame')).toHaveAttribute('src', '/api/cu/spaces/viewer/#ticket=interactive-epoch-5');
+  });
 });
 
 test.describe('HTML/JS version skew safety', () => {

@@ -90,6 +90,7 @@ export interface CuSeatPresentation {
 }
 
 const VALID_STATES = new Set<CuSeatState>(['idle', 'agent', 'waiting_for_human', 'human']);
+const CANONICAL_RELAY_BASE_RE = /^\/hosts\/[a-z0-9][a-z0-9-]{0,31}$/;
 
 function str(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -102,16 +103,16 @@ function parseSeatState(value: unknown): CuSeatState {
 /**
  * Viewer iframes navigate with the page's own same-origin transport (Cloudflare
  * Access cookie or trusted LAN) and cannot attach a dish bearer header or
- * satisfy `frame-ancestors 'self'` across origins. Offer Desktop only for
- * same-origin hosts (self `""` or `/hosts/<name>` hub relay) without a
- * client-held bearer token. Never place a bearer token in a URL.
+ * satisfy `frame-ancestors 'self'` across origins. Offer Desktop only for self
+ * (`""`) or a canonical hub relay (`/hosts/<name>`) without a client-held
+ * bearer token. Rejects cross-origin and network-path URLs like `//evil`.
  */
 export function supportsComputerUseTransport(
   host: { readonly base?: string | null; readonly token?: string | null } | null | undefined,
 ): boolean {
   if (!host || typeof host.base !== 'string') return false;
   if (host.token) return false;
-  return host.base === '' || host.base.startsWith('/');
+  return host.base === '' || CANONICAL_RELAY_BASE_RE.test(host.base);
 }
 
 export function decodeCuLease(value: unknown): CuLeaseInfo | null {
@@ -169,15 +170,13 @@ export function decodeCuTicket(value: unknown): CuTicketResult | null {
   const ticket = str(value.ticket);
   if (!ticket) return null;
   const mode = value.mode === 'interactive' ? 'interactive' : 'view-only';
-  const path = str(value.path) ?? `/viewer/#ticket=${encodeURIComponent(ticket)}`;
-  const spacesPath = str(value.spacesPath)
-    ?? (path.startsWith('/api/cu/spaces') ? path : `/api/cu/spaces${path.startsWith('/') ? '' : '/'}${path}`);
+  const encodedTicket = encodeURIComponent(ticket);
   return {
     mode,
     epoch: finite(value.epoch) ? Math.trunc(value.epoch) : null,
     ticket,
-    path,
-    spacesPath,
+    path: `/viewer/#ticket=${encodedTicket}`,
+    spacesPath: `/api/cu/spaces/viewer/#ticket=${encodedTicket}`,
     ttlSec: finite(value.ttlSec) ? Math.max(0, Math.round(value.ttlSec)) : null,
     expiresAt: str(value.expiresAt),
   };
@@ -328,10 +327,7 @@ export function formatBusyMessage(busy: CuBusyInfo, nowMs: number): string {
   return `Busy — ${busy.message}`;
 }
 
-export function cuSpacesViewerUrl(base: string, ticket: Pick<CuTicketResult, 'path' | 'spacesPath' | 'ticket'>): string {
+export function cuSpacesViewerUrl(base: string, ticket: Pick<CuTicketResult, 'ticket'>): string {
   const cleanBase = base.replace(/\/+$/, '');
-  const suffix = ticket.spacesPath.startsWith('/api/cu/spaces')
-    ? ticket.spacesPath
-    : `/api/cu/spaces${ticket.path.startsWith('/') ? '' : '/'}${ticket.path}`;
-  return `${cleanBase}${suffix}`;
+  return `${cleanBase}/api/cu/spaces/viewer/#ticket=${encodeURIComponent(ticket.ticket)}`;
 }

@@ -52,11 +52,11 @@ export const CU_FETCH_CREDS_JS = `(() => {
 const FETCH_CREDS_SCRIPT_TAG = '<script src="./cu-fetch-creds.js"></script>';
 
 // Strict CSP matching cua-spacesd-html5 v0.17.7 with frame-ancestors narrowed
-// to 'self' and loopback recorder hosts omitted.
+// to 'self' and connect-src limited to same-origin (including same-origin ws/wss).
 export const CU_VIEWER_CSP =
   "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' blob: data:; media-src 'self' blob:; worker-src 'self' blob:; " +
-  "connect-src 'self' ws: wss:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
+  "connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
 
 const VENDOR_VIEWER_DIR = path.resolve(__dirname, '..', 'vendor', 'cua-viewer');
 
@@ -1021,11 +1021,11 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     upstream.on('timeout', () => {
       cleanupRequest();
       try { upstream.destroy(); } catch {}
-      if (!res.headersSent) res.status(504).type('text/plain').send('Upstream timeout');
+      if (!res.headersSent) res.status(504).json({ error: 'Upstream timeout' });
     });
     upstream.on('error', () => {
       cleanupRequest();
-      if (!res.headersSent) res.status(502).type('text/plain').send('Computer-use viewer upstream unavailable');
+      if (!res.headersSent) res.status(502).json({ error: 'Computer-use viewer upstream unavailable' });
     });
     req.on('aborted', () => {
       cleanupRequest();

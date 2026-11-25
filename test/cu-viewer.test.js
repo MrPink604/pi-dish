@@ -1224,3 +1224,270 @@ test('SSE error body and watcher event buffer are bounded', async (t) => {
     }
     assert.equal(await closedOnOverflow, 4001);
 });
+test('hub CU relay enforces route Content-Type, rejects redirects/HTML, allowlists HTTP & 101 headers, and forwards validated JSON verbatim without throwing', async (t) => {
+    let receivedMutationBody = '';
+    const roguePeer = http.createServer((req, res) => {
+        const url = req.url || '/';
+        if (url === '/api/cu/status?mode=html') {
+            res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'evil=1' });
+            res.end('<html><script>alert(1)</script></html>');
+            return;
+        }
+        if (url === '/api/cu/status?mode=redirect') {
+            res.writeHead(302, { location: 'https://evil.example/', 'content-type': 'application/json' });
+            res.end('{}');
+            return;
+        }
+        if (url === '/api/cu/audit?mode=svg') {
+            res.writeHead(200, { 'content-type': 'image/svg+xml' });
+            res.end('<svg onload="alert(1)"/>');
+            return;
+        }
+        if (url === '/api/cu/stream?mode=html') {
+            res.writeHead(200, { 'content-type': 'text/html' });
+            res.end('<html>bad</html>');
+            return;
+        }
+        if (url === '/api/cu/spaces/cua.env.v1.SystemService/GetCapabilities?mode=html') {
+            res.writeHead(200, { 'content-type': 'text/html' });
+            res.end('<html>bad</html>');
+            return;
+        }
+        if (url === '/api/cu/spaces/cua.env.v1.SystemService/GetCapabilities?mode=redirect') {
+            res.writeHead(307, { location: 'https://evil.example/' });
+            res.end();
+            return;
+        }
+        if (url === '/api/cu/status?mode=headers') {
+            res.writeHead(200, {
+                'content-type': 'application/json; charset=utf-8',
+                'cache-control': 'no-store',
+                'set-cookie': 'guest-cookie=evil',
+                'x-rogue-header': 'drop-me',
+                'content-disposition': 'attachment; filename=x.html',
+            });
+            res.end(JSON.stringify({ ok: true, state: 'idle', epoch: 1 }));
+            return;
+        }
+        if (url === '/api/cu/takeover') {
+            const chunks = [];
+            req.on('data', (c) => chunks.push(c));
+            req.on('end', () => {
+                receivedMutationBody = Buffer.concat(chunks).toString('utf8');
+                res.writeHead(200, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({ ok: true, state: 'human', epoch: 2 }));
+            });
+            return;
+        }
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{"error":"not found"}');
+    });
+    // 101 Switching Protocols with extra rogue headers that hub must strip.
+    const rogueUpgradeSockets = new Set();
+    roguePeer.on('upgrade', (req, socket) => {
+        rogueUpgradeSockets.add(socket);
+        socket.on('close', () => rogueUpgradeSockets.delete(socket));
+        const key = req.headers['sec-websocket-key'];
+        const crypto = require('node:crypto');
+        const accept = crypto.createHash('sha1')
+            .update(`${String(key)}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest('base64');
+        socket.write('HTTP/1.1 101 Switching Protocols\r\n' +
+            'Upgrade: websocket\r\n' +
+            'Connection: Upgrade\r\n' +
+            `Sec-WebSocket-Accept: ${accept}\r\n` +
+            'Sec-WebSocket-Protocol: rcdp.v2\r\n' +
+            'Set-Cookie: ws-evil=1; Path=/\r\n' +
+            'X-Rogue-Ws: should-not-pass\r\n\r\n');
+        socket.resume();
+        socket.on('end', () => { try {
+            socket.destroy();
+        }
+        catch { } });
+        socket.on('error', () => { });
+    });
+    const peerPort = await listenTcp(t, roguePeer, () => {
+        for (const s of rogueUpgradeSockets) {
+            try {
+                s.destroy();
+            }
+            catch { }
+        }
+        rogueUpgradeSockets.clear();
+    });
+    const remote = { name: 'cu-sandbox', kind: 'direct', origin: `http://127.0.0.1:${peerPort}`, token: null };
+    t.mock.method(remoteHosts, 'getRemote', (candidate) => (candidate === 'cu-sandbox' ? remote : null));
+    t.mock.method(remoteHosts, 'reachability', () => null);
+    const hubAccess = (0, access_handlers_1.createAccessHandlers)({
+        version: '1.0.0',
+        readDishSettings: () => ({}),
+        sttAvailable: () => false,
+        usageLimitsAvailable: () => false,
+        botsAvailable: () => false,
+        knowledgeAvailable: () => false,
+    });
+    const relay = (0, relay_handlers_1.createRelayHandlers)({
+        fleetArtifacts,
+        localPageExists: () => false,
+        publicBaseUrl: () => undefined,
+        hostDescriptor: hubAccess.hostDescriptor,
+        upgradeAuthorized: () => true,
+        checkCuMutationIngress: hubAccess.checkCuMutationIngress,
+    });
+    const hubApp = express();
+    hubApp.use('/hosts/:name/api', relay.rawApi);
+    const hubServer = http.createServer(hubApp);
+    hubServer.on('upgrade', (req, socket, head) => {
+        const url = new URL(req.url || '/', 'http://localhost');
+        if (!relay.upgrade(req, socket, head, url))
+            socket.destroy();
+    });
+    const hubPort = await listenTcp(t, hubServer);
+    const hubBase = `http://127.0.0.1:${hubPort}/hosts/cu-sandbox`;
+    // HTML, SVG, and redirects from guest CU routes are rejected with 502 + nosniff.
+    for (const badPath of [
+        '/api/cu/status?mode=html',
+        '/api/cu/status?mode=redirect',
+        '/api/cu/audit?mode=svg',
+        '/api/cu/stream?mode=html',
+    ]) {
+        const res = await fetch(`${hubBase}${badPath}`, { redirect: 'manual' });
+        assert.equal(res.status, 502, `expected 502 for ${badPath}`);
+        assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+        assert.equal(res.headers.get('set-cookie'), null);
+    }
+    for (const badGrpc of [
+        '/api/cu/spaces/cua.env.v1.SystemService/GetCapabilities?mode=html',
+        '/api/cu/spaces/cua.env.v1.SystemService/GetCapabilities?mode=redirect',
+    ]) {
+        const res = await fetch(`${hubBase}${badGrpc}`, { method: 'POST', redirect: 'manual', body: Buffer.from([0]) });
+        assert.equal(res.status, 502, `expected 502 for ${badGrpc}`);
+        assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+    }
+    // Valid JSON status carries nosniff and strips non-allowlisted response headers.
+    const okRes = await fetch(`${hubBase}/api/cu/status?mode=headers`);
+    assert.equal(okRes.status, 200);
+    assert.equal(okRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(okRes.headers.get('set-cookie'), null);
+    assert.equal(okRes.headers.get('x-rogue-header'), null);
+    assert.equal(okRes.headers.get('content-disposition'), null);
+    // 101 Switching Protocols allowlists WS handshake headers only (strips Set-Cookie / X-Rogue-Ws).
+    const validKey = Buffer.from('0123456789abcdef').toString('base64');
+    const upgradeHeaders = await new Promise((resolve, reject) => {
+        const req = http.request({
+            host: '127.0.0.1',
+            port: hubPort,
+            path: '/hosts/cu-sandbox/api/cu/spaces/media?ticket=t1',
+            headers: {
+                Connection: 'Upgrade',
+                Upgrade: 'websocket',
+                'Sec-WebSocket-Version': '13',
+                'Sec-WebSocket-Key': validKey,
+                'Sec-WebSocket-Protocol': 'rcdp.v2',
+            },
+        });
+        req.once('upgrade', (res, sock) => { sock.destroy(); resolve(res.headers); });
+        req.once('response', (res) => { res.resume(); reject(new Error(`unexpected status ${res.statusCode}`)); });
+        req.once('error', reject);
+        req.end();
+    });
+    assert.equal(upgradeHeaders['sec-websocket-protocol'], 'rcdp.v2');
+    assert.equal(upgradeHeaders['set-cookie'], undefined, '101 must strip Set-Cookie');
+    assert.equal(upgradeHeaders['x-rogue-ws'], undefined, '101 must strip non-allowlisted headers');
+    // Fix (6): validated JSON text is forwarded verbatim (no second JSON.stringify) and deep nesting never crashes hub.
+    const rawMutation = '{  "label" : "verbatim" , "ttlSec" : 600  }';
+    const verbRes = await fetch(`${hubBase}/api/cu/takeover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: rawMutation,
+    });
+    assert.equal(verbRes.status, 200);
+    assert.equal(receivedMutationBody, rawMutation);
+    const deepJson = `${'{"a":'.repeat(6000)}1${'}'.repeat(6000)}`;
+    const deepRes = await fetch(`${hubBase}/api/cu/takeover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: deepJson,
+    });
+    assert.ok(deepRes.status === 200 || deepRes.status === 400, `deep JSON must settle cleanly without crashing (got ${deepRes.status})`);
+});
+test('vendored viewer.js validates principal.color before innerHTML, constrains wsPath to exact /media, CSP limits connect-src to self, and transport/URL helpers reject unsafe inputs', () => {
+    // Fix (4): CSP connect-src is strictly 'self' (no ws:/wss: wildcard hosts).
+    assert.match(cu_handlers_1.CU_VIEWER_CSP, /connect-src 'self';/);
+    assert.doesNotMatch(cu_handlers_1.CU_VIEWER_CSP, /connect-src[^;]*(?:ws:|wss:)/);
+    // Extract and execute the patched fs() and Cc() definitions from vendor/cua-viewer/viewer.js.
+    const viewerSrc = fs.readFileSync(path.resolve(__dirname, '..', 'vendor', 'cua-viewer', 'viewer.js'), 'utf8');
+    assert.match(viewerSrc, /\/\* pi-dish-patch:validate-color \*\//);
+    assert.match(viewerSrc, /\/\* pi-dish-patch:validate-principal-color \*\//);
+    assert.match(viewerSrc, /\/\* pi-dish-patch:constrain-media-wspath \*\//);
+    const fsStart = viewerSrc.indexOf('function fs(t,e,n,s){');
+    const fsEnd = viewerSrc.indexOf('function ms(', fsStart);
+    assert.ok(fsStart > 0 && fsEnd > fsStart);
+    const fsCode = viewerSrc.slice(fsStart, fsEnd);
+    const ccStart = viewerSrc.indexOf('function Cc(t,e){');
+    const ccEnd = viewerSrc.indexOf('function Wc(', ccStart);
+    assert.ok(ccStart > 0 && ccEnd > ccStart);
+    const ccCode = viewerSrc.slice(ccStart, ccEnd);
+    const fakeEl = { dataset: {}, innerHTML: '' };
+    const ctx = vm.createContext({
+        URL,
+        q: 24,
+        Di: () => ({ hotspot: [0, 0] }),
+        Bl: (_shape, color) => `<svg fill="${color}"></svg>`,
+        Gl: () => '#000000',
+        fakeEl,
+    });
+    vm.runInContext(`${fsCode}\n${ccCode}`, ctx);
+    // Hostile principal.color must be replaced with default #60a5fa before SVG/HTML interpolation.
+    vm.runInContext(`fs(fakeEl, 'arrow', '"><img src=x onerror=alert(1)>', 'Mallory');`, ctx);
+    assert.match(fakeEl.innerHTML, /fill="#60a5fa"/);
+    assert.match(fakeEl.innerHTML, /background:#60a5fa/);
+    assert.doesNotMatch(fakeEl.innerHTML, /<img|onerror=/i);
+    // Valid hex color passes through.
+    vm.runInContext(`fs(fakeEl, 'arrow', '#22c55e', 'Alice');`, ctx);
+    assert.match(fakeEl.innerHTML, /fill="#22c55e"/);
+    assert.match(fakeEl.innerHTML, /background:#22c55e/);
+    // Cc (mediaSocketUrl) accepts only exact <baseUrl>/media on same origin.
+    const relayBase = 'https://dish.example/hosts/cu-sandbox/api/cu/spaces/';
+    assert.equal(vm.runInContext(`Cc(${JSON.stringify(relayBase)}, '/media?ticket=t_123')`, ctx), 'wss://dish.example/hosts/cu-sandbox/api/cu/spaces/media?ticket=t_123');
+    for (const badWsPath of [
+        'https://evil.example/media?ticket=x',
+        'wss://evil.example/media?ticket=x',
+        '//evil.example/media?ticket=x',
+        '/../sessions/1/terminal',
+        '/files?ticket=x',
+        'media/../../other',
+    ]) {
+        assert.throws(() => vm.runInContext(`Cc(${JSON.stringify(relayBase)}, ${JSON.stringify(badWsPath)})`, ctx), /Invalid media wsPath/, `should reject wsPath ${badWsPath}`);
+    }
+    // Fix (3) & (9a): browser cuSpacesViewerUrl & supportsComputerUseTransport.
+    const browserBundle = fs.readFileSync(path.resolve(__dirname, '..', 'public', 'browser.js'), 'utf8');
+    const browserCtx = vm.createContext({ URL, URLSearchParams });
+    vm.runInContext(browserBundle, browserCtx);
+    const helpers = browserCtx.PiDishBrowser;
+    // Hostile guest-supplied path / spacesPath is completely ignored when building iframe URL.
+    const decoded = helpers.decodeCuTicket({
+        mode: 'view-only',
+        ticket: 'tok+1/2',
+        path: '//evil.example/viewer/#ticket=x',
+        spacesPath: '/api/cu/spaces/../../evil.html',
+    });
+    assert.ok(decoded);
+    assert.equal(helpers.cuSpacesViewerUrl('/hosts/cu-sandbox', decoded), '/hosts/cu-sandbox/api/cu/spaces/viewer/#ticket=tok%2B1%2F2');
+    // supportsComputerUseTransport accepts only "" and canonical /hosts/<name>; rejects //evil & non-canonical paths.
+    assert.equal(helpers.supportsComputerUseTransport({ base: '', token: null }), true);
+    assert.equal(helpers.supportsComputerUseTransport({ base: '/hosts/cu-sandbox', token: null }), true);
+    for (const badHost of [
+        { base: '//evil.example', token: null },
+        { base: '//evil.example/hosts/cu-sandbox', token: null },
+        { base: '/hosts/cu-sandbox/extra', token: null },
+        { base: '/hosts/..', token: null },
+        { base: '/hosts/BAD_NAME', token: null },
+        { base: '/other', token: null },
+        { base: 'https://evil.example', token: null },
+        { base: '/hosts/cu-sandbox', token: 'secret-token' },
+        { base: '', token: 'secret-token' },
+    ]) {
+        assert.equal(helpers.supportsComputerUseTransport(badHost), false, `should reject host ${JSON.stringify(badHost)}`);
+    }
+});

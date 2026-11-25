@@ -181,6 +181,10 @@ export function createCuViewer(options: CuViewerOptions) {
     }
   }
 
+  function isInteractiveMounted(): boolean {
+    return mode === 'interactive' && iframeUrl !== null;
+  }
+
   function currentLocalLease(): CuLocalHumanLease | null {
     return activeHostKey ? (localLeases.get(activeHostKey) ?? null) : null;
   }
@@ -433,7 +437,7 @@ export function createCuViewer(options: CuViewerOptions) {
       }
       const decoded = decodeCuStatus(data);
       if (decoded) applyStatusUpdate(decoded, ownerGen, ownerHostKey, endpoint);
-      return decoded;
+      return status;
     } catch (error) {
       if (!owns(ownerGen, ownerHostKey)) return null;
       notice = { kind: 'error', text: `Could not reach computer-use broker: ${errorMessage(error)}` };
@@ -702,10 +706,10 @@ export function createCuViewer(options: CuViewerOptions) {
     const endpoint = Object.freeze({ ...activeHost });
     notice = null;
     renderHeaderAndControls();
-    const latest = await loadStatus(ownerGen, ownerHostKey, endpoint);
+    await loadStatus(ownerGen, ownerHostKey, endpoint);
     if (!owns(ownerGen, ownerHostKey)) return;
     const localLease = localLeases.get(ownerHostKey) ?? null;
-    const own = isOwnHumanLease(latest ?? status, localLease);
+    const own = isOwnHumanLease(status, localLease);
     await loadViewerTicket(ownerGen, ownerHostKey, endpoint, own ? 'interactive' : 'view-only');
   }
 
@@ -747,12 +751,16 @@ export function createCuViewer(options: CuViewerOptions) {
 
     void connectStream(ownerGen, hostKey, endpoint);
     void (async () => {
-      const latest = await loadStatus(ownerGen, hostKey, endpoint);
+      await loadStatus(ownerGen, hostKey, endpoint);
       if (!owns(ownerGen, hostKey)) return;
+      // Decide from the controller's accepted status and current lease so a
+      // delayed initial status reply can never discard a newer Take Over.
       const localLease = localLeases.get(hostKey) ?? null;
-      if (localLease && isOwnHumanLease(latest, localLease)) {
+      if (localLease && isOwnHumanLease(status, localLease)) {
         startHeartbeat(ownerGen, hostKey, endpoint, localLease.heartbeatIntervalSec);
-        await loadViewerTicket(ownerGen, hostKey, endpoint, 'interactive');
+        if (!isInteractiveMounted()) {
+          await loadViewerTicket(ownerGen, hostKey, endpoint, 'interactive');
+        }
       } else {
         if (localLease) localLeases.delete(hostKey);
         await loadViewerTicket(ownerGen, hostKey, endpoint, 'view-only');

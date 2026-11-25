@@ -8,6 +8,11 @@ SHA-256 checksums:
 394023b2176ae770796fee3b43f0eda61c23d0effbe4f6a0cfcae050a72cb70c  LICENSE
 6373b22307c629bbb6811e3baaf046bcdcd0074fb87245a6ef79f5d3f0913228  index.html
 e4753e6ac86c2142a1912b79823c5edb2149dde8a69272d899df2b7713da921b  index.css
-160f5247885089f9ab45a46982394b7ea4385add316a374633d8bbd8f0d9f46b  viewer.js
+693e5e0d83505ed57e52fbee19e44c4354bbd98ef54a2d42a8d873e2c0e6fddb  viewer.js
 427569b615fe24104fcd5ca8a8f71269d24faa9155a0767ef1f0234a23c6befc  audioWorklet.js
 9cdafdbe7bb59622a9d0cdd63bfd4d9e87644c65210a9b7050e80aef2c4062b0  captureWorklet.js
+
+Local patches applied to viewer.js (markers: /* pi-dish-patch:... */):
+- Upstream unmodified viewer.js SHA-256: 160f5247885089f9ab45a46982394b7ea4385add316a374633d8bbd8f0d9f46b
+- validate-color / validate-principal-color: validate principal.color against /^#[0-9a-f]{3,8}$/i (fallback #60a5fa) before any innerHTML interpolation.
+- constrain-media-wspath: require Cc(baseUrl, wsPath) to resolve to baseUrl origin and exact <baseUrl>/media pathname.
