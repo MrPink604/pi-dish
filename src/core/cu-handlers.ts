@@ -10,6 +10,7 @@ import type { IncomingMessage, OutgoingHttpHeaders } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type * as WS from 'ws';
 import { createCuBrokerClient, TAKEOVER_BROKER_TIMEOUT_MS, type CuBrokerClient } from './cu-broker';
+import type { CuBrokerEvent } from './cu-agent-leases';
 import type { TransportHandler, TransportRequest, TransportResponse } from './access-handlers';
 import { errorMessage, errorStatus, requestBody } from './http-boundary';
 import { record as isRecord } from './helper-values';
@@ -754,8 +755,14 @@ function withSpacesViewerPath(viewer: unknown): Record<string, unknown> | null {
 
 export interface CuHandlersPorts {
   upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+  /** Optional shared broker client (created internally when omitted). */
+  broker?: CuBrokerClient;
   /** Optional test seam for the broker socket path. */
   socketPath?: () => string | null;
+  /** Optional listener for parsed broker SSE events (preemption, hand_back, hello, etc.). */
+  onBrokerEvent?: (event: CuBrokerEvent) => void;
+  /** Optional public-payload normalizer (e.g. projecting bound session labels, stripping secrets). */
+  normalizePublicPayload?: <T>(payload: T) => T;
   /** Optional test seam for the loopback cua-spacesd port (host is always 127.0.0.1). */
   spacesPort?: number;
   /** Optional test seam for the WebSocket keepalive ping interval. */
@@ -780,11 +787,14 @@ export interface CuHandlers {
   audit: TransportHandler;
   spacesProxy: TransportHandler;
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;
+  /** Pushes a normalized SSE event frame to all currently open `/api/cu/stream` clients. */
+  broadcastEvent(eventName: string, payload: unknown): void;
   stop(): void;
 }
 
 export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
-  const broker: CuBrokerClient = createCuBrokerClient({ socketPath: ports.socketPath });
+  const broker: CuBrokerClient = ports.broker ?? createCuBrokerClient({ socketPath: ports.socketPath });
+  const normalizePublic = <T>(payload: T): T => (ports.normalizePublicPayload ? ports.normalizePublicPayload(payload) : payload);
   const spacesPort = Number.isInteger(ports.spacesPort) && ports.spacesPort! > 0 && ports.spacesPort! <= 65535
     ? ports.spacesPort!
     : DEFAULT_SPACES_PORT;
@@ -822,6 +832,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   const activeMediaSockets = new Set<(reason: string) => void>();
   const pendingMediaUpgrades = new Set<(statusLine: string) => void>();
   const activeSpacesRequests = new Set<(reason: string) => void>();
+  const activeBrokerStreams = new Set<TransportResponse>();
 
   let stopped = false;
   let watcherReq: http.ClientRequest | null = null;
@@ -991,6 +1002,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       return;
     }
     let buffer = '';
+    let eventName = '';
     let dataLines: string[] = [];
     let eventBytes = 0;
     let sawFirstEvent = false;
@@ -1010,6 +1022,8 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     };
 
     const flushEvent = () => {
+      const currentEventName = eventName;
+      eventName = '';
       if (!dataLines.length) return;
       const payload = dataLines.join('\n');
       dataLines = [];
@@ -1023,6 +1037,11 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       const authoritativeHello = !sawFirstEvent;
       sawFirstEvent = true;
       applyBrokerSnapshot(state, epoch, { authoritativeHello });
+      ports.onBrokerEvent?.({
+        eventName: currentEventName || (authoritativeHello ? 'hello' : 'message'),
+        authoritativeHello,
+        payload: parsed,
+      });
     };
 
     const req = broker.openEvents(
@@ -1049,6 +1068,8 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
             buffer = buffer.slice(nl + 1);
             if (line === '') {
               flushEvent();
+            } else if (line.startsWith('event:')) {
+              eventName = line.slice(6).trim();
             } else if (line.startsWith('data:')) {
               const value = line.slice(5).replace(/^ /, '');
               eventBytes += Buffer.byteLength(value, 'utf8');
@@ -1107,13 +1128,40 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     return false;
   }
 
+  function stripAgentSecrets<T>(value: T): T {
+    const normalized = normalizePublic(value);
+    if (!isRecord(normalized)) return normalized;
+    if (!('sessionSecret' in normalized) && !('tokenHash' in normalized)) return normalized;
+    const copy = { ...normalized };
+    delete copy.sessionSecret;
+    delete copy.tokenHash;
+    return copy as T;
+  }
+
   function sendBrokerReply(res: TransportResponse, status: number, body: unknown): void {
-    res.status(status).json(normalizeBrokerErrorBody(status, body));
+    res.status(status).json(stripAgentSecrets(normalizeBrokerErrorBody(status, body)));
   }
 
   function sendBrokerFailure(res: TransportResponse, error: unknown): void {
     if (res.headersSent) return;
     res.status(errorStatus(error, 502)).json({ error: errorMessage(error) });
+  }
+
+  function broadcastEvent(eventName: string, payload: unknown): void {
+    if (stopped || activeBrokerStreams.size === 0) return;
+    const frame = `event: ${eventName}\ndata: ${JSON.stringify(stripAgentSecrets(payload))}\n\n`;
+    for (const client of [...activeBrokerStreams]) {
+      if (client.writableEnded || client.destroyed) {
+        activeBrokerStreams.delete(client);
+        continue;
+      }
+      try {
+        client.write(frame);
+        client.flush?.();
+      } catch {
+        activeBrokerStreams.delete(client);
+      }
+    }
   }
 
   const status: TransportHandler = async (_req, res) => {
@@ -1172,9 +1220,72 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('X-Accel-Buffering', 'no');
         res.flushHeaders();
-        brokerRes.pipe(res);
-        brokerRes.on('error', () => { try { res.end(); } catch {} });
-        res.on('close', () => { closed = true; try { brokerRes.destroy(); } catch {} });
+        activeBrokerStreams.add(res);
+        let sseBuffer = '';
+        let sseDataLines: string[] = [];
+        let sseEventBytes = 0;
+        const closeClient = () => {
+          closed = true;
+          activeBrokerStreams.delete(res);
+          try { brokerRes.destroy(); } catch {}
+          if (!res.writableEnded) {
+            try { res.end(); } catch {}
+          }
+        };
+        const writeOut = (chunk: string) => {
+          if (closed || res.writableEnded || res.destroyed) return;
+          res.write(chunk);
+        };
+        const flushDataBlock = () => {
+          if (!sseDataLines.length) return;
+          const rawData = sseDataLines.join('\n');
+          sseDataLines = [];
+          sseEventBytes = 0;
+          let parsed: unknown;
+          try { parsed = JSON.parse(rawData); } catch {
+            writeOut(`data: ${rawData.replace(/\n/g, '\ndata: ')}\n`);
+            return;
+          }
+          const normalized = stripAgentSecrets(parsed);
+          writeOut(`data: ${JSON.stringify(normalized)}\n`);
+        };
+        brokerRes.setEncoding('utf8');
+        brokerRes.on('data', (chunk: string) => {
+          if (closed) return;
+          sseBuffer += chunk;
+          if (sseBuffer.length > maxSseEventBytes) {
+            closeClient();
+            return;
+          }
+          for (;;) {
+            const nl = sseBuffer.indexOf('\n');
+            if (nl < 0) break;
+            const line = sseBuffer.slice(0, nl).replace(/\r$/, '');
+            sseBuffer = sseBuffer.slice(nl + 1);
+            if (line === '') {
+              flushDataBlock();
+              writeOut('\n');
+              res.flush?.();
+            } else if (line.startsWith('data:')) {
+              const value = line.slice(5).replace(/^ /, '');
+              sseEventBytes += Buffer.byteLength(value, 'utf8');
+              if (sseEventBytes > maxSseEventBytes) {
+                closeClient();
+                return;
+              }
+              sseDataLines.push(value);
+            } else {
+              writeOut(`${line}\n`);
+            }
+          }
+        });
+        brokerRes.on('end', closeClient);
+        brokerRes.on('error', closeClient);
+        res.on('close', () => {
+          closed = true;
+          activeBrokerStreams.delete(res);
+          try { brokerRes.destroy(); } catch {}
+        });
       },
       (error) => {
         if (closed) return;
@@ -1258,7 +1369,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
           });
         }
         const out = viewer ? { ...reply.body, viewer } : reply.body;
-        res.status(200).json(out);
+        res.status(200).json(stripAgentSecrets(out));
         return;
       }
       sendBrokerReply(res, reply.status, reply.body);
@@ -1954,6 +2065,10 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     brokerState = null;
     viewerTickets.clear();
     mediaTickets.clear();
+    for (const client of [...activeBrokerStreams]) {
+      try { client.end(); } catch {}
+    }
+    activeBrokerStreams.clear();
     stopEpochWatcher();
     resolveWatchSyncWaiters();
     revokeAllActive('Server shutting down');
@@ -1971,6 +2086,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     audit,
     spacesProxy,
     upgrade,
+    broadcastEvent,
     stop,
   };
 }

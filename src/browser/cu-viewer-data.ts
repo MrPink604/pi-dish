@@ -87,20 +87,33 @@ export interface CuSeatPresentation {
   readonly badge: string;
   readonly detail: string;
   readonly ownControl: boolean;
+  readonly owner?: 'this' | 'other';
+}
+
+export interface CuSeatSessionContext {
+  readonly sessionId?: string | null;
+  readonly waitingForDesktop?: boolean;
 }
 
 export interface CuSessionListCue {
   readonly state: Exclude<CuSeatState, 'idle'>;
   readonly holderKind: 'agent' | 'human';
   readonly tone: 'agent' | 'waiting' | 'human' | 'self';
+  readonly owner?: 'this' | 'other';
   readonly label: string;
   readonly title: string;
 }
 
 export const CU_PANEL_STORAGE_PREFIX = 'pi-dish-cu-panel:';
 
+const MAX_BROKER_LABEL_CHARS = 160;
 const VALID_STATES = new Set<CuSeatState>(['idle', 'agent', 'waiting_for_human', 'human']);
 const CANONICAL_RELAY_BASE_RE = /^\/hosts\/[a-z0-9][a-z0-9-]{0,31}$/;
+
+function leaseMatchesSession(label: string | null | undefined, sessionId: string | null | undefined): boolean {
+  if (!label || !sessionId) return false;
+  return label === sessionId.slice(0, MAX_BROKER_LABEL_CHARS);
+}
 
 function str(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -285,7 +298,19 @@ export function cuSeatPresentation(
   status: CuStatus | null,
   localLease: Pick<CuLocalHumanLease, 'leaseId' | 'epoch' | 'expiresAt'> | null,
   nowMs: number,
+  context?: CuSeatSessionContext,
 ): CuSeatPresentation {
+  const sessionId = str(context?.sessionId);
+  const waitingForDesktop = context?.waitingForDesktop === true;
+  if (waitingForDesktop && (!status || status.state === 'human')) {
+    const ownControl = status ? isOwnHumanLease(status, localLease) : false;
+    const expiresAt = status?.lease?.expiresAt ?? (ownControl ? localLease?.expiresAt ?? null : null);
+    const remaining = formatExpiryRemaining(expiresAt, nowMs);
+    const detail = status
+      ? ['Held by human — computer tools paused until released', remaining].filter(Boolean).join(' · ')
+      : 'Waiting for desktop — held by human';
+    return { tone: 'waiting', badge: 'waiting for desktop', detail, ownControl };
+  }
   if (!status) {
     return { tone: 'idle', badge: 'Connecting…', detail: 'Checking seat status', ownControl: false };
   }
@@ -315,9 +340,29 @@ export function cuSeatPresentation(
   if (status.state === 'waiting_for_human') {
     const holder = formatLeaseHolder(status.lease, 'agent');
     const parts = [holder, status.lease?.reason, remaining].filter(Boolean);
+    if (sessionId) {
+      const owner = leaseMatchesSession(status.lease?.label, sessionId) ? 'this' : 'other';
+      return {
+        tone: 'waiting',
+        badge: owner === 'this' ? 'agent: this session' : 'agent: other session',
+        detail: parts.join(' · '),
+        ownControl: false,
+        owner,
+      };
+    }
     return { tone: 'waiting', badge: 'Waiting for you', detail: parts.join(' · '), ownControl: false };
   }
   const holder = formatLeaseHolder(status.lease, 'agent');
+  if (sessionId) {
+    const owner = leaseMatchesSession(status.lease?.label, sessionId) ? 'this' : 'other';
+    return {
+      tone: 'agent',
+      badge: owner === 'this' ? 'agent: this session' : 'agent: other session',
+      detail: [holder, remaining].filter(Boolean).join(' · '),
+      ownControl: false,
+      owner,
+    };
+  }
   return {
     tone: 'agent',
     badge: 'Agent',
@@ -343,13 +388,25 @@ export function cuSpacesViewerUrl(base: string, ticket: Pick<CuTicketResult, 'ti
 }
 
 /**
- * Host-level session-list cue shown while a computer-use host's seat is held
- * (agent, waiting_for_human, or human). Returns null when unknown or idle.
+ * Computer-use seat cue shown on CU host session rows and in the session
+ * Desktop panel summary. When `sessionId` is supplied, agent leases distinguish
+ * exact ownership (`agent: this session` vs `agent: other session`).
  */
 export function cuSessionListCue(
   status: CuStatus | null,
   localLease: Pick<CuLocalHumanLease, 'leaseId' | 'epoch'> | null = null,
+  sessionId?: string | null,
+  options?: { readonly waitingForDesktop?: boolean },
 ): CuSessionListCue | null {
+  if (options?.waitingForDesktop === true && (!status || status.state === 'human')) {
+    return {
+      state: 'human',
+      holderKind: 'human',
+      tone: 'waiting',
+      label: 'waiting for desktop',
+      title: 'Waiting for desktop — held by human (computer tools blocked until released)',
+    };
+  }
   if (!status || status.state === 'idle') return null;
   if (status.state === 'human') {
     if (isOwnHumanLease(status, localLease)) {
@@ -370,8 +427,22 @@ export function cuSessionListCue(
       title: `Desktop seat held by ${holder} (host-level)`,
     };
   }
+  const cleanSessionId = str(sessionId);
   if (status.state === 'waiting_for_human') {
     const holder = formatLeaseHolder(status.lease, 'agent');
+    if (cleanSessionId) {
+      const owner = leaseMatchesSession(status.lease?.label, cleanSessionId) ? 'this' : 'other';
+      return {
+        state: 'waiting_for_human',
+        holderKind: 'agent',
+        tone: 'waiting',
+        owner,
+        label: owner === 'this' ? 'agent: this session' : 'agent: other session',
+        title: owner === 'this'
+          ? 'Desktop waiting for you (this session)'
+          : `Desktop waiting for you (other session: ${holder})`,
+      };
+    }
     return {
       state: 'waiting_for_human',
       holderKind: 'agent',
@@ -381,6 +452,19 @@ export function cuSessionListCue(
     };
   }
   const holder = formatLeaseHolder(status.lease, 'agent');
+  if (cleanSessionId) {
+    const owner = leaseMatchesSession(status.lease?.label, cleanSessionId) ? 'this' : 'other';
+    return {
+      state: 'agent',
+      holderKind: 'agent',
+      tone: 'agent',
+      owner,
+      label: owner === 'this' ? 'agent: this session' : 'agent: other session',
+      title: owner === 'this'
+        ? 'Desktop seat held by this session'
+        : `Desktop seat held by another session (${holder})`,
+    };
+  }
   return {
     state: 'agent',
     holderKind: 'agent',

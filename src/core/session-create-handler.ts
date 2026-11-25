@@ -1,5 +1,6 @@
 import { errorMessage, errorStatus, requestBody, type RouteHandler } from './http-boundary';
 import { getHarness } from './harnesses';
+import { CuSeatBusyError } from './cu-agent-leases';
 import sessionProvenance = require('./session-provenance');
 import type { HarnessLaunchTarget, SessionLaunch } from './session-launch';
 import type { SessionOperations } from './session-operations';
@@ -9,6 +10,8 @@ export interface SessionCreatePorts {
   sessionLaunch: SessionLaunch;
   /** Registered, running over RPC, or persisted on this host. */
   sessionKnown(id: string): boolean;
+  /** Non-secret computer-use seat disposition for a newly spawned session. */
+  cuSeatState?(id: string): 'waiting_for_desktop' | null;
 }
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -81,8 +84,24 @@ export function createSessionCreateHandlers(ports: SessionCreatePorts) {
       const id = await ports.sessionOperations.createSession(selected);
       const operationId = sourceSessionId
         ? ports.sessionOperations.recordSessionLaunch(id, sourceSessionId, undefined, sourceBasis) : null;
-      res.json({ success: true, id, ...(operationId ? { operationId } : {}) });
+      const cuSeat = ports.cuSeatState?.(id) ?? null;
+      res.json({
+        success: true,
+        id,
+        ...(operationId ? { operationId } : {}),
+        ...(cuSeat ? { cuSeat } : {}),
+      });
     } catch (error) {
+      if (error instanceof CuSeatBusyError) {
+        return res.status(409).json({
+          success: false,
+          code: error.code,
+          state: error.state,
+          epoch: error.epoch,
+          holder: error.holder,
+          error: error.message,
+        });
+      }
       console.error('Failed to create session:', error);
       res.status(errorStatus(error, 500)).json({ success: false, error: errorMessage(error) });
     }

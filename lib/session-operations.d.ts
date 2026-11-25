@@ -16,6 +16,8 @@ export interface SessionOperationObservations {
     getActiveSessions(): readonly ActiveSessionObservation[];
     readSessionCwd(source: SessionSource): unknown;
     recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string, sourceBasis?: string | null): void;
+    /** Invoked after a session is explicitly closed or hibernated so external leases release cleanly. */
+    onSessionStopped?(sessionId: string): Promise<void> | void;
 }
 export interface CreateSessionOptions {
     harness?: unknown;

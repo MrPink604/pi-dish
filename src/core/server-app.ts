@@ -20,6 +20,8 @@ import { knownWorkspaceCwds } from './skill-feature-handlers';
 import { getHarness, listHarnesses } from './harnesses';
 import { dishDir, readDishSettings, readStore, replaceFile } from './dish-store';
 import { createAccessHandlers } from './access-handlers';
+import { createCuBrokerClient } from './cu-broker';
+import { createCuAgentLeases, CuSeatBusyError } from './cu-agent-leases';
 import { createCuHandlers } from './cu-handlers';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';
@@ -31,7 +33,7 @@ import { createReviewHandlers } from './review-handlers';
 import { createFeatureHandlers } from './feature-handlers';
 import { harnessCommandAvailable, runHarnessModelCommand } from './harness-feature-commands';
 import { decodeLaunchParents } from './session-catalog';
-import { createSessionOwnership, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
+import { createSessionOwnership, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity, sessionSwitchRouteData } from './session-ownership';
 import { createSessionLaunch } from './session-launch';
 import { createSessionOperations } from './session-operations';
 import { createMessageHold } from './message-hold';
@@ -132,8 +134,37 @@ export function startServer(rootDirectory: string): Server {
     knowledgeAvailable: () => knowledge() !== null,
     computerUseAvailable: () => cuHandlers.available(),
   });
+  const cuBroker = createCuBrokerClient();
+  const cuAgentLeases = createCuAgentLeases({
+    broker: cuBroker,
+    abortSession: async sessionId => {
+      const live = await getLiveSession(sessionId);
+      if (!live || !liveSessionSupports(live, 'abort')) return;
+      await live.abort();
+    },
+    resumeSession: async (sessionId, nudgeText) => {
+      // Never wake a closed or hibernated session when the desktop is handed back.
+      const live = await getLiveSession(sessionId);
+      if (!live) return;
+      if (live instanceof BridgeSession) await live.waitForHello({ timeout: 2000 }).catch(() => {});
+      const followUp = liveSessionSupports(live, 'followUp');
+      const prompt = liveSessionSupports(live, 'prompt');
+      if (!followUp && !prompt) return;
+      const admission = 'promptOrFollowUp' in live ? live.promptOrFollowUp(nudgeText) : null;
+      if (admission) {
+        await admission;
+        return;
+      }
+      await live.prompt(nudgeText, prompt ? {} : { deliverAs: 'followUp' });
+    },
+    isLiveManagedSession: sessionId => routeIdentity(sessionId)?.harnessId === 'omp' && !!getRegisteredSession(sessionId),
+    onLabelBound: snapshot => cuHandlers.broadcastEvent('lease_changed', snapshot),
+  });
   const cuHandlers = createCuHandlers({
+    broker: cuBroker,
     upgradeAuthorized: req => accessHandlers.bearerUpgradeAuthorized(req),
+    onBrokerEvent: event => cuAgentLeases.handleBrokerEvent(event),
+    normalizePublicPayload: payload => cuAgentLeases.normalizePublicPayload(payload),
   });
   // Raw cua-spacesd viewer/gRPC-Web proxy: mounted before compression and
   // jsonBody so binary gRPC-Web payloads pass untouched, behind strict bearer auth.
@@ -202,7 +233,10 @@ export function startServer(rootDirectory: string): Server {
 
   const ownership = createSessionOwnership({
     onLive: session => lifecycleObserver(session),
-    onRetired: route => { fileHandlers.retireSession(route); },
+    onRetired: route => {
+      fileHandlers.retireSession(route);
+      cuAgentLeases.handleSessionRetired(route);
+    },
     readSessionTailEntry,
   });
   const {
@@ -315,7 +349,13 @@ export function startServer(rootDirectory: string): Server {
   const streamViewers = new Map<string, number>();
   const lifecycleObserver = createSessionLifecycleObserver({
     wakeSession: routeId => { messageHold.wake(routeId); },
-    adoptSessionSwitch: (session, data) => { adoptBridgeSessionSwitch(session, data); },
+    adoptSessionSwitch: (session, data) => {
+      const routed = sessionSwitchRouteData(session, data);
+      adoptBridgeSessionSwitch(session, data);
+      if (routed && routed.sessionId !== routed.previousSessionId) {
+        cuAgentLeases.adoptSessionSwitch(routed.previousSessionId, routed.sessionId);
+      }
+    },
   });
   const catalog = createCatalogRuntime({ ownership, onPrimeSession: lifecycleObserver });
 
@@ -405,13 +445,14 @@ export function startServer(rootDirectory: string): Server {
     sessionIsPrivate,
     privateRefused: privateSessions.refused,
   });
-  const sessionLaunch = createSessionLaunch({ runHarnessModelCommand });
+  const sessionLaunch = createSessionLaunch({ runHarnessModelCommand, cuLeases: cuAgentLeases });
   const sessionOperations = createSessionOperations({
     ownership,
     launch: sessionLaunch,
     getActiveSessions: catalog.getActiveSessions,
     readSessionCwd,
     recordLaunchProvenance: (id, sourceId, operationId, sourceBasis) => sessionProvenance.recordLaunch(id, sourceId, operationId, sourceBasis),
+    onSessionStopped: id => cuAgentLeases.releaseSession(id),
   });
   const featureHandlers = createFeatureHandlers({
     catalog, ownership, findSessionSource,
@@ -447,6 +488,7 @@ export function startServer(rootDirectory: string): Server {
     catalog,
     hibernated: () => hibernation.records(),
     privateUnlocked,
+    cuWaitingForDesktop: id => cuAgentLeases.isWaitingForDesktop(id),
   });
   const relationHandlers = createSessionRelationHandlers({ catalog, resolveSessionCandidate, privateUnlocked });
   const agySessionHandlers = createAgySessionHandlers({ ownership, findSessionSource });
@@ -713,20 +755,37 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/diff/patch', fileHandlers.diffPatch);
   app.get('/api/sessions/:id/diff', fileHandlers.diffSummary);
 
-  const createHandlers = createSessionCreateHandlers({ sessionOperations, sessionLaunch, sessionKnown });
+  const createHandlers = createSessionCreateHandlers({
+    sessionOperations,
+    sessionLaunch,
+    sessionKnown,
+    cuSeatState: id => cuAgentLeases.getSessionSeatState(id),
+  });
   app.post('/api/sessions/new', createHandlers.create);
   app.get('/api/session-spawns/:id', createHandlers.spawnStatus);
 
   app.post('/api/sessions/:id/resume', async (req: ApplicationRequest, res: ApplicationResponse) => {
     const body = requestBody(req);
     try {
-      res.json(await sessionOperations.resumeSessionById(req.params.id, {
+      const result = await sessionOperations.resumeSessionById(req.params.id, {
         model: body.model,
         target: body.target as HarnessLaunchTarget | null | undefined,
-      }));
+      });
+      const cuSeat = cuAgentLeases.getSessionSeatState(result.id);
+      res.json(cuSeat ? { ...result, cuSeat } : result);
       hibernation.forget(req.params.id);
       messageHold.wake(req.params.id);
     } catch (error) {
+      if (error instanceof CuSeatBusyError) {
+        return res.status(409).json({
+          success: false,
+          code: error.code,
+          state: error.state,
+          epoch: error.epoch,
+          holder: error.holder,
+          error: error.message,
+        });
+      }
       res.status(errorStatus(error, 500)).json({ error: errorMessage(error) });
     }
   });
@@ -1307,6 +1366,7 @@ export function startServer(rootDirectory: string): Server {
     // Detach from Prime's daemon: the poller and socket belong to this server.
     getPrimeDaemon().shutdown();
     if (shareServer) { try { shareServer.close(); } catch {} }
+    cuAgentLeases.stop();
     cuHandlers.stop();
     remoteHosts.shutdown();
     sessionBounces.stop();

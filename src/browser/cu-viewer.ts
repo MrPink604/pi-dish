@@ -30,7 +30,7 @@ export interface CuViewerOptions {
   request: ApiRequest;
   hosts: () => readonly CuViewerHost[];
   host: (id: string | null | undefined) => CuViewerHost | null;
-  currentSession: () => { id?: string | null; host?: string | null } | null;
+  currentSession: () => { id?: string | null; host?: string | null; cuWaitingForDesktop?: boolean } | null;
   supports: (host: CuViewerHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
   ticket: (host: HostEndpoint) => Promise<string>;

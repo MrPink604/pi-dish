@@ -34,6 +34,8 @@ export interface SessionOperationObservations {
   getActiveSessions(): readonly ActiveSessionObservation[];
   readSessionCwd(source: SessionSource): unknown;
   recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string, sourceBasis?: string | null): void;
+  /** Invoked after a session is explicitly closed or hibernated so external leases release cleanly. */
+  onSessionStopped?(sessionId: string): Promise<void> | void;
 }
 
 export interface CreateSessionOptions {
@@ -288,6 +290,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
         stopped = true;
         tmux.removeSpawn(routeId, spawn);
         pruneRegisteredSession(registry);
+        await observations.onSessionStopped?.(routeId);
         return { kind: 'stopped' };
       } catch (error) {
         return { kind: 'cleanup-failed', stopped, status: 500, error: `Failed to close the owned ${descriptor.label} pane: ${errorMessage(error)}`, cause: error };
@@ -606,7 +609,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
       // R/L is asymmetric: close never checks this file flight, and an already-active R may return above.
       if (closeFlights.has(sessionId)) throw new SessionOperationError(409, 'The session is being closed; retry after close completes.');
       const outcome = await launch.launchResumedSession({
-        descriptor, sessionFile, cwd, name: recovery?.name || null, target, model, thinking, expectedTmuxServer,
+        descriptor, sessionFile, sessionId, cwd, name: recovery?.name || null, target, model, thinking, expectedTmuxServer,
       });
       if (outcome.kind !== 'ready') {
         if (outcome.error instanceof tmux.TmuxServerLostError) {

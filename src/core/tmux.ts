@@ -120,11 +120,28 @@ function cleanupError(error: unknown, remainingProcesses: ProcessIdentity[]): Pa
   return Object.assign(error instanceof Error ? error : new Error(String(error)), { remainingProcesses });
 }
 
+const REDACTED_ENV_RE = /(\bCU_BROKER_(?:SESSION_)?SECRET=)[^\s'"\r\n]+/g;
+
+function redactSecrets(text: string): string {
+  return text.replace(REDACTED_ENV_RE, '$1[REDACTED]');
+}
+
+function scrubExecError(err: Error & { cmd?: unknown; stderr?: unknown }): void {
+  if (typeof err.message === 'string') err.message = redactSecrets(err.message);
+  if (typeof err.cmd === 'string') err.cmd = redactSecrets(err.cmd);
+  if (typeof err.stack === 'string') err.stack = redactSecrets(err.stack);
+  if (typeof err.stderr === 'string') err.stderr = redactSecrets(err.stderr);
+}
+
 function runFile(file: string, args: readonly unknown[], timeout: number, cwd?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     // No shell quoting: execFile owns argv coercion/rejection.
     execFile(file, args as readonly string[], { cwd, timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
-      if (err) { err.stderr = stderr; return reject(err); }
+      if (err) {
+        err.stderr = stderr;
+        scrubExecError(err);
+        return reject(err);
+      }
       resolve(stdout);
     });
   });
@@ -399,6 +416,18 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
       throw new TmuxServerLostError(`expected tmux server pid ${expectedServer.pid} was lost during launch`, false);
     }
     return { paneId };
+  }
+
+  if (
+    newTmuxSessionName
+    && env
+    && Object.hasOwn(env, 'CU_BROKER_SESSION_SECRET')
+    && isHeadlessSocket(socket)
+    && !(await tmuxServerRunning(socket))
+  ) {
+    // Start the headless tmux server with a clean argv first so the lease
+    // secret never lingers in the long-lived tmux server's /proc/pid/cmdline.
+    await runTmuxStartingServer(socket, ['start-server'], 5000);
   }
 
   const out = newTmuxSessionName

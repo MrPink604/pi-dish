@@ -8,6 +8,8 @@ export interface SessionBrowsePorts {
     hibernated(): ReadonlyMap<string, HibernationState>;
     /** The request carries a private-session unlock token. */
     privateUnlocked(req: IncomingMessage): boolean;
+    /** True while an active CU-host session awaits desktop release from a human. */
+    cuWaitingForDesktop?(sessionId: string): boolean;
 }
 /** Opt-in `/api/sessions` bounds for agent callers; the browser sends neither, so its payload is unchanged. */
 export interface CatalogBounds {

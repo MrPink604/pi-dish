@@ -27,7 +27,7 @@ export interface CuSessionPanelOptions {
   root: HTMLElement;
   request: ApiRequest;
   host: (id: string | null | undefined) => CuPanelHost | null;
-  currentSession: () => { id?: string | null; host?: string | null } | null;
+  currentSession: () => { id?: string | null; host?: string | null; cuWaitingForDesktop?: boolean } | null;
   supports: (host: CuPanelHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
   ticket: (host: HostEndpoint) => Promise<string>;
@@ -146,14 +146,15 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     } catch {}
   }
 
-  function cueFingerprint(cue: CuSessionListCue | null): string {
-    return cue ? `${cue.state}\0${cue.tone}\0${cue.label}\0${cue.title}` : '';
+  function statusCueFingerprint(status: CuStatus | null, leaseHint: CuReadOnlyLeaseHint | null): string {
+    const cue = cuSessionListCue(status, leaseHint);
+    if (!cue) return '';
+    return `${cue.state}\0${cue.tone}\0${cue.label}\0${cue.title}\0${status?.lease?.label ?? ''}\0${status?.preempted?.label ?? ''}`;
   }
 
   function notifySeatCueIfChanged(entry: DisplayHostEntry, nextStatus: CuStatus | null): void {
     const leaseHint = nextStatus ? options.paneLocalLease(entry.endpoint) : null;
-    const cue = cuSessionListCue(nextStatus, leaseHint);
-    const nextFp = cueFingerprint(cue);
+    const nextFp = statusCueFingerprint(nextStatus, leaseHint);
     const prevFp = lastCueFingerprints.get(entry.hostKey) ?? '';
     if (nextFp) lastCueFingerprints.set(entry.hostKey, nextFp);
     else lastCueFingerprints.delete(entry.hostKey);
@@ -293,22 +294,27 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     if (!session || !hostSupported(host)) {
       summaryEl.hidden = true;
       summaryEl.textContent = '';
+      delete summaryEl.dataset.owner;
       return;
     }
     const entry = displayHosts.get(keyOf(host));
-    if (!entry || entry.disconnected) {
-      summaryEl.hidden = true;
-      summaryEl.textContent = '';
-      return;
-    }
-    const cue = cuSessionListCue(entry.status, options.paneLocalLease(host));
+    const status = entry && !entry.disconnected ? entry.status : null;
+    const cue = cuSessionListCue(
+      status,
+      status ? options.paneLocalLease(host) : null,
+      session.id ?? null,
+      { waitingForDesktop: session.cuWaitingForDesktop === true },
+    );
     if (!cue) {
       summaryEl.hidden = true;
       summaryEl.textContent = '';
+      delete summaryEl.dataset.owner;
       return;
     }
     summaryEl.hidden = false;
     summaryEl.dataset.tone = cue.tone;
+    if (cue.owner) summaryEl.dataset.owner = cue.owner;
+    else delete summaryEl.dataset.owner;
     summaryEl.textContent = cue.label;
     summaryEl.title = cue.title;
   }
@@ -320,6 +326,14 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     return entry.status;
   }
 
+  function currentPanelSessionContext(): { sessionId: string | null; waitingForDesktop: boolean } {
+    const session = options.currentSession();
+    return {
+      sessionId: session?.id ?? null,
+      waitingForDesktop: session?.cuWaitingForDesktop === true,
+    };
+  }
+
   function renderPanelHeader(): void {
     if (!isPanelOpen() || !panelHost) return;
     const dotEl = doc.getElementById('cuPanelHostDot');
@@ -329,7 +343,7 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
 
     const status = currentPanelDisplayStatus();
     const leaseHint = status ? options.paneLocalLease(panelHost) : null;
-    const presentation = cuSeatPresentation(status, leaseHint, now());
+    const presentation = cuSeatPresentation(status, leaseHint, now(), currentPanelSessionContext());
 
     const modePill = doc.getElementById('cuPanelModePill');
     if (modePill) {
@@ -340,6 +354,8 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     if (badgeEl) {
       badgeEl.textContent = presentation.badge;
       badgeEl.dataset.tone = presentation.tone;
+      if (presentation.owner) badgeEl.dataset.owner = presentation.owner;
+      else delete badgeEl.dataset.owner;
     }
     const detailEl = doc.getElementById('cuPanelSeatDetail');
     if (detailEl) detailEl.textContent = presentation.detail;
@@ -366,7 +382,7 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     if (!isPanelOpen() || !panelHost) return;
     const status = currentPanelDisplayStatus();
     const leaseHint = status ? options.paneLocalLease(panelHost) : null;
-    const presentation = cuSeatPresentation(status, leaseHint, now());
+    const presentation = cuSeatPresentation(status, leaseHint, now(), currentPanelSessionContext());
     const detailEl = doc.getElementById('cuPanelSeatDetail');
     if (detailEl) detailEl.textContent = presentation.detail;
   }
@@ -771,7 +787,8 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
       teardownPanel();
     }
 
-    renderPanelSummary();
+    if (panelOpen && panelHostKey === nextHostKey) renderPanelHeader();
+    else renderPanelSummary();
 
     if (sKey && restoredPanelSessionKey !== sKey) {
       restoredPanelSessionKey = sKey;
@@ -827,13 +844,17 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     acceptDisplayStatus(entry, nextStatus, { connGen: entry.connGen });
   }
 
-  function seatCue(hostId?: string | null): CuSessionListCue | null {
+  function seatCue(
+    hostId?: string | null,
+    sessionId?: string | null,
+    cueOptions?: { readonly waitingForDesktop?: boolean },
+  ): CuSessionListCue | null {
     if (disposed) return null;
     const host = options.host(hostId ?? null);
     if (!hostSupported(host)) return null;
     const entry = displayHosts.get(keyOf(host));
-    if (!entry || entry.disconnected) return null;
-    return cuSessionListCue(entry.status, options.paneLocalLease(host));
+    const status = entry && !entry.disconnected ? entry.status : null;
+    return cuSessionListCue(status, status ? options.paneLocalLease(host) : null, sessionId ?? null, cueOptions);
   }
 
   function dispose(): void {

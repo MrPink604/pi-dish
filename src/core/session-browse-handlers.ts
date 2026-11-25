@@ -20,6 +20,8 @@ export interface SessionBrowsePorts {
   hibernated(): ReadonlyMap<string, HibernationState>;
   /** The request carries a private-session unlock token. */
   privateUnlocked(req: IncomingMessage): boolean;
+  /** True while an active CU-host session awaits desktop release from a human. */
+  cuWaitingForDesktop?(sessionId: string): boolean;
 }
 
 const SEARCH_RESULT_CAP = 100;
@@ -81,6 +83,13 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     await runtime.refreshPrimeRoster();
     const catalog = runtime.buildSessionCatalog({ activeOnly: req.query.active === '1', includePrivate: ports.privateUnlocked(req) });
+    const active = ports.cuWaitingForDesktop
+      ? catalog.active.map(session => (
+        ports.cuWaitingForDesktop!(session.id)
+          ? { ...session, cuWaitingForDesktop: true }
+          : session
+      ))
+      : catalog.active;
     const hibernated = ports.hibernated();
     const previous = hibernated.size
       ? catalog.previous.map(session => {
@@ -92,7 +101,7 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
       const filtered = query ? runtime.filterSessionsByQuery(rows, query) : rows;
       return req.query.view === 'client' ? filtered.map(session => sessionForClient(session)) : filtered;
     };
-    const groups = { active: projection(catalog.active), previous: projection(previous), children: projection(catalog.children) };
+    const groups = { active: projection(active), previous: projection(previous), children: projection(catalog.children) };
     res.json({
       ...boundCatalog(groups, bounds),
       indexing: catalog.indexing,

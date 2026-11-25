@@ -7,6 +7,8 @@ export interface SessionCreatePorts {
     sessionLaunch: SessionLaunch;
     /** Registered, running over RPC, or persisted on this host. */
     sessionKnown(id: string): boolean;
+    /** Non-secret computer-use seat disposition for a newly spawned session. */
+    cuSeatState?(id: string): 'waiting_for_desktop' | null;
 }
 export declare function createSessionCreateHandlers(ports: SessionCreatePorts): {
     create: RouteHandler;
