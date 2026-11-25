@@ -845,9 +845,9 @@ export class AcpSession extends TransportSession {
     this.emitEvent('message_update', { type: 'message_update', message: structuredClone(message) });
   }
 
-  private _ensureSegment(consumeStepStart = true): void {
+  private _ensureSegment(consumeStepStart = true, at?: number): void {
     if (this.segment) return;
-    const now = Date.now();
+    const now = at ?? Date.now();
     const startedAt = consumeStepStart && this.nextStepStartedAt !== null && this.nextStepStartedAt <= now
       ? this.nextStepStartedAt
       : now;
@@ -866,7 +866,7 @@ export class AcpSession extends TransportSession {
   }
 
   private _closeSegment(stopReason: string, usage: ProtocolRecord | null, errorMessage: string | null, resetTurn = false,
-    rawStopReason: string | null = null): void {
+    rawStopReason: string | null = null, at?: number): void {
     // A turn that ends right after a tool call, cancels early, hits a limit, or
     // fails/refuses before streaming any chunk has no open segment; open a shell
     // so usage, abort state, limits and errors reach the mirror and SSE.
@@ -874,7 +874,7 @@ export class AcpSession extends TransportSession {
       this._ensureSegment(true);
     }
     const message = this.segment;
-    const closedAt = Date.now();
+    const closedAt = at ?? Date.now();
     const firstOutputAt = this.segmentFirstOutputAt;
     this.segmentFirstOutputAt = null;
     if (!message) {
@@ -930,11 +930,13 @@ export class AcpSession extends TransportSession {
     const consumeStep = this.sawStepSignal;
     this.sawStepSignal = false;
     if (this.segment || this.turnInProgress) {
-      this._ensureSegment(consumeStep);
+      const hadSegment = this.segment !== null;
+      const siblingAt = !hadSegment && !consumeStep ? Date.now() : undefined;
+      this._ensureSegment(consumeStep, siblingAt);
       if (consumeStep) this.segmentFirstOutputAt ??= Date.now();
       (this.segment!.content as ProtocolRecord[]).push({ type: 'toolCall', id: toolCallId, name: call.toolName, arguments: call.args });
       // Pi needs the assistant message before its tool results; ACP interleaves them.
-      this._closeSegment('toolUse', null, null);
+      this._closeSegment('toolUse', null, null, false, null, siblingAt);
     }
     const startedAt = Date.now();
     const rawArgs: ProtocolRecord = {

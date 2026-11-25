@@ -5,10 +5,14 @@
  */
 import test = require('node:test');
 import assert = require('node:assert/strict');
+import crypto = require('node:crypto');
+import { EventEmitter } from 'node:events';
 import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
+import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-session-'));
 process.env.HOME = tmp;
@@ -970,34 +974,200 @@ test('normalises agy /usage JSON to Gemini-only windows and rejects error envelo
   );
 });
 
+/**
+ * In-process ACP child backed by PassThrough streams and a virtual `Date.now`
+ * clock so timing scenarios test exact millisecond spans without wall-clock or
+ * pipe scheduling jitter.
+ */
+async function startClockedAcpSession(t: test.TestContext, initialNow = 1_700_000_000_000) {
+  let now = initialNow;
+  t.mock.method(Date, 'now', () => now);
+  const { createJsonLineSplitter } = require('../lib/line-splitter.js') as typeof import('../lib/line-splitter.js');
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  let alive = true;
+  const proc = Object.assign(new EventEmitter(), {
+    pid: 424242,
+    stdin,
+    stdout,
+    stderr,
+    kill() {
+      if (!alive) return false;
+      alive = false;
+      proc.emit('exit', 0);
+      return true;
+    },
+  }) as unknown as ChildProcessWithoutNullStreams;
+
+  const sessionId = crypto.randomUUID();
+  const send = (frame: Record<string, unknown>): void => {
+    stdout.write(JSON.stringify(frame) + '\n');
+  };
+  let promptId: number | null = null;
+  stdin.on('data', createJsonLineSplitter((frame) => {
+    const id = frame.id;
+    switch (frame.method) {
+      case 'initialize':
+        send({
+          jsonrpc: '2.0',
+          id,
+          result: {
+            protocolVersion: 1,
+            agentInfo: { name: 'Antigravity ACP Server', version: '1.5.10' },
+            agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
+          },
+        });
+        return;
+      case 'session/new':
+        send({
+          jsonrpc: '2.0',
+          id,
+          result: {
+            sessionId,
+            configOptions: [{
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'gemini-4-carbon',
+              options: [{ value: 'gemini-4-carbon', name: 'Gemini 4 Carbon' }],
+            }],
+          },
+        });
+        return;
+      case 'session/prompt':
+        if (typeof id === 'number') promptId = id;
+        return;
+      case 'session/close':
+        send({ jsonrpc: '2.0', id, result: {} });
+        proc.kill();
+        return;
+      default:
+        return;
+    }
+  }));
+
+  const session = new acp.AcpSession(proc, workDir);
+  cleanup(t, session);
+  await session._start({ cwd: workDir });
+
+  return {
+    session,
+    advance(ms: number) { now += ms; },
+    update(update: Record<string, unknown>) {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } });
+    },
+    finishPrompt(stopReason = 'end_turn') {
+      assert.notEqual(promptId, null, 'session/prompt request was received');
+      const id = promptId;
+      promptId = null;
+      send({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          stopReason,
+          usage: {
+            inputTokens: 120,
+            outputTokens: 8,
+            cachedReadTokens: 0,
+            cachedWriteTokens: 0,
+            thoughtTokens: 2,
+            totalTokens: 130,
+          },
+        },
+      });
+    },
+  };
+}
+
+/** Replays the two-step timing turn (110ms TTFT + sibling tool + 140ms tool wait + 110ms TTFT + 10ms stream). */
+async function runTimingTurn(harness: Awaited<ReturnType<typeof startClockedAcpSession>>): Promise<void> {
+  const { session, advance, update, finishPrompt } = harness;
+  const file = path.join(workDir, 'README.md');
+  await session.prompt('measure generation speed');
+
+  // Step 1: 110ms TTFT -> usage_update -> two sibling tool calls in one batch.
+  advance(110);
+  update({ sessionUpdate: 'usage_update', used: 400, size: 1048576 });
+  update({
+    sessionUpdate: 'tool_call',
+    toolCallId: 'call-r1',
+    name: 'read_file',
+    args: { Path: file },
+    status: 'in_progress',
+    kind: 'read',
+    title: 'File README.md',
+    rawInput: { Path: file },
+  });
+  update({
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'call-r1',
+    name: 'read_file',
+    status: 'completed',
+    title: 'File README.md',
+    kind: 'read',
+  });
+  advance(5);
+  update({
+    sessionUpdate: 'tool_call',
+    toolCallId: 'call-r2',
+    name: 'run_command',
+    args: { CommandLine: 'sleep 0.14', WaitMsBeforeAsync: 5000 },
+    status: 'in_progress',
+    kind: 'execute',
+    title: 'sleep 0.14',
+    rawInput: { CommandLine: 'sleep 0.14', WaitMsBeforeAsync: 5000 },
+  });
+
+  // 140ms of synchronous tool execution (must NOT count toward LLM genMs).
+  advance(140);
+  update({
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'call-r2',
+    name: 'run_command',
+    status: 'completed',
+    title: 'sleep 0.14',
+    kind: 'execute',
+    content: [{ type: 'content', content: { type: 'text', text: 'done\n' } }],
+    rawOutput: { output: 'done\n', exit_code: 0 },
+  });
+
+  // Step 2: 110ms TTFT -> quick 10ms stream -> turn end.
+  advance(110);
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Measured ' } });
+  advance(10);
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'reply.' } });
+  update({ sessionUpdate: 'usage_update', used: 520, size: 1048576 });
+  finishPrompt('end_turn');
+}
+
 test('includes TTFT per LLM step, skips tool execution and sibling batch calls, and pairs turn usage with turnDurationMs', async (t) => {
   const sessionFiles: typeof import('../lib/session-files.js') = require('../lib/session-files.js');
-  const session = await launch('timing');
-  cleanup(t, session);
+  const harness = await startClockedAcpSession(t);
+  const { session } = harness;
   const events = capture(session);
 
-  await session.prompt('measure generation speed');
-  await until(() => events.some(event => event.event === 'turn_end'));
+  await runTimingTurn(harness);
+  assert.ok(events.some(event => event.event === 'turn_end'), 'turn completed');
 
   const parsed = sessionFiles.readSessionMessages(session.sessionFile);
   const assistants = parsed.filter(m => m.role === 'assistant');
   assert.equal(assistants.length, 3, 'two toolUse segments + final stop segment');
-  assert.ok((assistants[0].durationMs ?? 0) >= 90, `step 1 includes TTFT (${assistants[0].durationMs}ms)`);
-  assert.ok((assistants[0].ttftMs ?? 0) >= 90, `step 1 records TTFT (${assistants[0].ttftMs}ms)`);
+  assert.equal(assistants[0].durationMs, 110, `step 1 includes TTFT (${assistants[0].durationMs}ms)`);
+  assert.equal(assistants[0].ttftMs, 110, `step 1 records TTFT (${assistants[0].ttftMs}ms)`);
   assert.equal(assistants[1].durationMs, undefined, 'sibling tool call in the same LLM batch does not invent a second step');
   assert.equal(assistants[1].ttftMs, undefined);
-  assert.ok((assistants[2].durationMs ?? 0) >= 200,
-    `closing message durationMs covers both LLM steps including TTFT (${assistants[2].durationMs}ms), not just the 10ms streaming tail`);
-  assert.ok((assistants[2].durationMs ?? 0) < 350,
-    `closing message durationMs excludes the 140ms tool execution window (${assistants[2].durationMs}ms)`);
-  assert.ok((assistants[2].ttftMs ?? 0) >= 90, `closing step records its own TTFT (${assistants[2].ttftMs}ms)`);
-  assert.ok((assistants[2].streamMs ?? 0) > 0 && (assistants[2].streamMs ?? 0) < 100,
+  assert.equal(assistants[2].durationMs, 230,
+    `closing message durationMs covers both LLM steps including TTFT (${assistants[2].durationMs}ms) and excludes the 140ms tool execution window`);
+  assert.equal(assistants[2].ttftMs, 110, `closing step records its own TTFT (${assistants[2].ttftMs}ms)`);
+  assert.equal(assistants[2].streamMs, 10,
     `closing message streamMs isolates post-TTFT streaming (${assistants[2].streamMs}ms)`);
 
   const stats = sessionFiles.getSessionStats(session.sessionFile);
   assert.equal(stats.responseTiming.measured, 2, 'only the two real LLM calls count as measured responses');
   assert.equal(stats.ttftTiming.measured, 2, 'both real LLM calls report TTFT');
-  assert.ok((stats.ttftTiming.medianMs ?? 0) >= 90);
+  assert.equal(stats.ttftTiming.medianMs, 110);
   assert.equal(stats.genMs, assistants[2].durationMs, 'session genMs matches the turn LLM duration without double counting');
   assert.equal(stats.genOutput, 8);
   assert.equal(stats.streamOutput, 8);
@@ -1011,6 +1181,38 @@ test('includes TTFT per LLM step, skips tool execution and sibling batch calls, 
   assert.equal(indexed.total.genMs, stats.genMs);
   assert.equal(indexed.total.genOutput, 8);
   assert.deepEqual(indexed.models['google-antigravity/gemini-4-carbon'].apis, ['acp']);
+});
+
+test('sibling batch tool call keeps durationMs undefined when the clock ticks during message_start', async (t) => {
+  const sessionFiles: typeof import('../lib/session-files.js') = require('../lib/session-files.js');
+  const harness = await startClockedAcpSession(t);
+  const { session, advance } = harness;
+  let messageStarts = 0;
+  let tickedDuringSibling = false;
+  session.on('message_start', () => {
+    messageStarts++;
+    if (messageStarts === 2) {
+      // Simulate a 1ms wall-clock rollover while message_start listeners run
+      // between _ensureSegment(false) and _closeSegment('toolUse', ...).
+      advance(1);
+      tickedDuringSibling = true;
+    }
+  });
+
+  await runTimingTurn(harness);
+  assert.equal(tickedDuringSibling, true, 'clock advanced inside the sibling tool call message_start listener');
+
+  const parsed = sessionFiles.readSessionMessages(session.sessionFile);
+  const assistants = parsed.filter(m => m.role === 'assistant');
+  assert.equal(assistants.length, 3);
+  assert.equal(assistants[1].durationMs, undefined, 'sibling tool call stays unmeasured across a clock tick during message_start');
+  assert.equal(assistants[1].ttftMs, undefined);
+
+  const stats = sessionFiles.getSessionStats(session.sessionFile);
+  assert.equal(stats.responseTiming.measured, 2, 'sibling batch tool call does not increment measured responses');
+  const indexed = sessionFiles.buildIndexedUsageFromContent(fs.readFileSync(session.sessionFile, 'utf8'));
+  assert.equal(indexed.total.measured, 2, 'sibling batch tool call does not increment indexed measured count');
+  assert.equal(indexed.total.durationMs, stats.genMs);
 });
 
 test('plan widget clears on empty entries, tool results enrich from brain step output, and running bash streams task logs', async (t) => {
