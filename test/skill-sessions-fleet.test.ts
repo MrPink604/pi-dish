@@ -58,6 +58,45 @@ function freePort(): Promise<number> {
   });
 }
 
+/**
+ * Reserve an ephemeral loopback TCP port via bind() without listen() so no
+ * parallel test can reuse it while connect() still gets ECONNREFUSED. Falls
+ * back to freePort() only if python3 is unavailable (node:net cannot bind a
+ * TCP socket without calling listen()).
+ */
+function reserveRefusedPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const holder = spawn('python3', [
+      '-c',
+      'import socket, sys; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1], flush=True); sys.stdin.read()',
+    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+    holder.stdin.on('error', () => {});
+    holder.stderr.resume();
+    let stdout = '';
+    let settled = false;
+    const fallback = () => {
+      if (settled) return;
+      settled = true;
+      try { holder.kill('SIGKILL'); } catch {}
+      freePort().then(resolve, reject);
+    };
+    holder.once('error', fallback);
+    holder.once('exit', fallback);
+    holder.stdout.setEncoding('utf8');
+    holder.stdout.on('data', (chunk: string) => {
+      if (settled) return;
+      stdout += chunk;
+      const newline = stdout.indexOf('\n');
+      if (newline === -1) return;
+      const line = stdout.slice(0, newline).trim();
+      if (!/^\d+$/.test(line)) return fallback();
+      settled = true;
+      children.push(holder);
+      resolve(Number(line));
+    });
+  });
+}
+
 async function boot(home: string) {
   const port = await freePort();
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PORT: String(port) };
@@ -106,7 +145,7 @@ test.before(async () => {
   fs.writeFileSync(path.join(peerHome, '.pi', 'dish', 'settings.json'), JSON.stringify({ hostLabel: 'tycho' }));
   peer = await boot(peerHome);
 
-  downPort = await freePort();
+  downPort = await reserveRefusedPort();
 
   const hubHome = makeHome();
   fs.writeFileSync(path.join(hubHome, '.pi', 'dish', 'token'), `${HUB_TOKEN}\n`);
