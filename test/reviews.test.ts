@@ -752,7 +752,20 @@ test('CLI on a non-hub worker host resolves reviews whose session lives on anoth
     path.join(workerSessions, `${WORKER_SESSION_ID}.jsonl`),
     JSON.stringify({ type: 'session', cwd: workerHome, timestamp: '2026-11-23T10:05:00.000Z' }) + '\n',
   );
-  const downPort = await freePort();
+  // Hold the unreachable peer's port open and immediately reset connections so
+  // neither `framework` nor parallel test servers can reuse `downPort`.
+  const deadPeer = net.createServer(socket => {
+    socket.on('error', () => {});
+    socket.resetAndDestroy();
+  });
+  await new Promise<void>((resolve, reject) => {
+    deadPeer.once('error', reject);
+    deadPeer.listen(0, '127.0.0.1', () => resolve());
+  });
+  t.after(() => { deadPeer.close(); });
+  const deadAddress = deadPeer.address();
+  assert.ok(deadAddress && typeof deadAddress !== 'string');
+  const downPort = deadAddress.port;
   fs.mkdirSync(path.join(workerHome, '.pi', 'dish'), { recursive: true });
   fs.writeFileSync(path.join(workerHome, '.pi', 'dish', 'settings.json'), JSON.stringify({
     hostLabel: 'framework',
