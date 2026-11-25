@@ -114,6 +114,8 @@ async function startFakeBroker(t, fixedSocketPath) {
         eventsMode: 'normal',
         overrideStatusEpoch: null,
         overrideTicketEpoch: null,
+        dropWatchOnNextTakeover: false,
+        holdNextRelease: null,
         emitEvent(eventName, payload) {
             const frame = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
             for (const client of sseClients)
@@ -257,6 +259,15 @@ async function startFakeBroker(t, fixedSocketPath) {
                         upstream: 'http://127.0.0.1:3211',
                     },
                 };
+                if (broker.dropWatchOnNextTakeover) {
+                    broker.dropWatchOnNextTakeover = false;
+                    broker.dropWatchers();
+                    setTimeout(() => {
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify(reply));
+                    }, 25);
+                    return;
+                }
                 res.writeHead(200, { 'content-type': 'application/json' });
                 res.end(JSON.stringify(reply));
                 broker.emitEvent('lease_changed', { state: broker.state, epoch: broker.epoch, lease: broker.lease, preempted: broker.preempted });
@@ -285,6 +296,7 @@ async function startFakeBroker(t, fixedSocketPath) {
                 broker.epoch += 1;
                 const handedBack = body.handBack === true && broker.preempted ? broker.preempted : null;
                 broker.leaseToken = null;
+                let replyJson;
                 if (handedBack) {
                     broker.state = 'agent';
                     broker.lease = {
@@ -295,17 +307,29 @@ async function startFakeBroker(t, fixedSocketPath) {
                         expiresAt: new Date(Date.now() + 90_000).toISOString(),
                     };
                     broker.preempted = null;
-                    res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: true, state: 'agent', epoch: broker.epoch, lease: broker.lease, handedBackTo: handedBack }));
+                    replyJson = JSON.stringify({ ok: true, state: 'agent', epoch: broker.epoch, lease: broker.lease, handedBackTo: handedBack });
                     broker.emitEvent('hand_back', { state: 'agent', epoch: broker.epoch, lease: broker.lease, preempted: null });
                 }
                 else {
                     broker.state = 'idle';
                     broker.lease = null;
                     broker.preempted = null;
-                    res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: true, state: 'idle', epoch: broker.epoch, released: true, handedBackTo: null }));
+                    replyJson = JSON.stringify({ ok: true, state: 'idle', epoch: broker.epoch, released: true, handedBackTo: null });
                     broker.emitEvent('seat_idle', { state: 'idle', epoch: broker.epoch, lease: null, preempted: null });
+                }
+                const hold = broker.holdNextRelease;
+                broker.holdNextRelease = null;
+                if (hold) {
+                    void hold.then(() => {
+                        if (!res.writableEnded && !res.destroyed) {
+                            res.writeHead(200, { 'content-type': 'application/json' });
+                            res.end(replyJson);
+                        }
+                    });
+                }
+                else {
+                    res.writeHead(200, { 'content-type': 'application/json' });
+                    res.end(replyJson);
                 }
                 return;
             }
@@ -317,6 +341,86 @@ async function startFakeBroker(t, fixedSocketPath) {
         broker.dropWatchers();
     }, fixedSocketPath);
     return { socketPath, broker };
+}
+function encodeProtoVarint(value) {
+    let n = BigInt(value);
+    const bytes = [];
+    do {
+        let b = Number(n & 0x7fn);
+        n >>= 7n;
+        if (n > 0n)
+            b |= 0x80;
+        bytes.push(b);
+    } while (n > 0n);
+    return Buffer.from(bytes);
+}
+function encodeProtoFieldBytes(field, payload) {
+    return Buffer.concat([encodeProtoVarint((field << 3) | 2), encodeProtoVarint(payload.length), payload]);
+}
+function encodeProtoFieldString(field, value) {
+    return encodeProtoFieldBytes(field, Buffer.from(value, 'utf8'));
+}
+function encodeGrpcWebFrame(flags, payload) {
+    const header = Buffer.alloc(5);
+    header[0] = flags;
+    header.writeUInt32BE(payload.length, 1);
+    return Buffer.concat([header, payload]);
+}
+function encodeOpenMediaResponse(opts) {
+    const parts = [];
+    if (opts.mediaSessionId !== undefined)
+        parts.push(encodeProtoFieldString(1, opts.mediaSessionId));
+    if (opts.ticket !== undefined)
+        parts.push(encodeProtoFieldString(2, opts.ticket));
+    if (opts.expiresAtSec !== undefined) {
+        const tsPayload = Buffer.concat([encodeProtoVarint((1 << 3) | 0), encodeProtoVarint(opts.expiresAtSec)]);
+        parts.push(encodeProtoFieldBytes(3, tsPayload));
+    }
+    if (opts.wsPath !== undefined)
+        parts.push(encodeProtoFieldString(4, opts.wsPath));
+    const dataFrame = encodeGrpcWebFrame(opts.compressed ? 0x01 : 0x00, Buffer.concat(parts));
+    const frames = [dataFrame];
+    if (opts.grpcStatusTrailer !== undefined) {
+        frames.push(encodeGrpcWebFrame(0x80, Buffer.from(`grpc-status: ${opts.grpcStatusTrailer}\r\n`, 'ascii')));
+    }
+    const combined = Buffer.concat(frames);
+    return opts.textBase64 ? Buffer.from(combined.toString('base64'), 'ascii') : combined;
+}
+async function mintMediaViaOpenMedia(base, viewerTicket, extraHeaders = {}) {
+    const res = await fetch(`${base}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
+        method: 'POST',
+        headers: {
+            'content-type': 'application/grpc-web+proto',
+            'x-cua-env-authorization': `Bearer ${viewerTicket}`,
+            ...extraHeaders,
+        },
+        body: Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]),
+    });
+    assert.equal(res.status, 200, `OpenMedia should succeed (got ${res.status})`);
+    const body = Buffer.from(await res.arrayBuffer());
+    const parsed = (0, cu_handlers_1.parseOpenMediaResponse)(res.headers.get('content-type') ?? undefined, res.headers.get('grpc-status') ?? undefined, body);
+    assert.equal(parsed.kind, 'ok');
+    return { mediaTicket: parsed.ticket, wsPath: `/media?ticket=${encodeURIComponent(parsed.ticket)}` };
+}
+async function mintViewOnlyMedia(base, extraHeaders = {}) {
+    const ticketRes = await fetch(`${base}/api/cu/viewer/ticket`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...extraHeaders },
+        body: JSON.stringify({ mode: 'view-only' }),
+    });
+    assert.equal(ticketRes.status, 200, `view-only ticket should succeed (got ${ticketRes.status})`);
+    const ticketJson = (0, test_types_js_1.record)(await ticketRes.json());
+    const viewerTicket = ticketJson.ticket;
+    const { mediaTicket, wsPath } = await mintMediaViaOpenMedia(base, viewerTicket, extraHeaders);
+    return { viewerTicket, mediaTicket, wsPath };
+}
+function dialWsStatus(url, protocols = ['rcdp.v2']) {
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(url, protocols);
+        ws.once('open', () => { ws.close(); resolve(101); });
+        ws.once('unexpected-response', (_req, res) => { res.resume(); resolve(res.statusCode ?? 0); });
+        ws.once('error', (err) => reject(err));
+    });
 }
 async function startFakeSpaces(t) {
     const requests = [];
@@ -347,14 +451,23 @@ async function startFakeSpaces(t) {
             const body = Buffer.concat(chunks);
             requests.push({ method: req.method || 'GET', url: req.url || '/', headers: { ...req.headers }, body });
             if (req.url === '/cua.env.v1.StreamService/OpenMedia') {
-                // Real cua-spacesd mints a distinct media-session ticket returned in wsPath.
-                const mediaTicket = `distinct-media-ticket-${++mediaSeq}`;
+                // Real cua-spacesd v0.17.7 mints a distinct media-session ticket returned in
+                // OpenMediaResponse proto3 fields (2: ticket, 3: ticket_expires_at, 4: ws_path).
+                const seq = ++mediaSeq;
+                const mediaTicket = `distinct-media-ticket-${seq}`;
+                const wsPath = `/media?ticket=${mediaTicket}`;
+                const protoRes = encodeOpenMediaResponse({
+                    mediaSessionId: `media-sess-${seq}`,
+                    ticket: mediaTicket,
+                    expiresAtSec: Math.floor(Date.now() / 1000) + 600,
+                    wsPath,
+                    grpcStatusTrailer: '0',
+                });
                 res.writeHead(200, {
                     'content-type': 'application/grpc-web+proto',
-                    'grpc-status': '0',
-                    'x-test-media-ws-path': `/media?ticket=${mediaTicket}`,
+                    'content-length': String(protoRes.length),
                 });
-                res.end(body);
+                res.end(protoRes);
                 return;
             }
             if (req.url === '/cua.env.v1.ComputerService/SetClipboard' && fake.holdClipboardRequests) {
@@ -751,8 +864,9 @@ test('vendored viewer assets served from hub & guest without contacting spacesd;
     assert.equal(guestGrpc.headers['x-custom-hop'], undefined);
     assert.equal(guestGrpc.headers['x-cua-env-authorization'], 'Bearer view-only-ticket-1');
     // Hub WS header scrubbing: cookies and Cf-Access-* never reach guest; peer bearer attached separately.
+    const { wsPath: hubMediaWsPath } = await mintViewOnlyMedia(hubBase, { origin: `http://127.0.0.1:${hubPort}` });
     const ws = await new Promise((resolve, reject) => {
-        const sock = new WebSocket(`ws://127.0.0.1:${hubPort}/hosts/cu-sandbox/api/cu/spaces/media?ticket=m1`, ['rcdp.v2'], {
+        const sock = new WebSocket(`ws://127.0.0.1:${hubPort}/hosts/cu-sandbox/api/cu/spaces${hubMediaWsPath}`, ['rcdp.v2'], {
             headers: {
                 cookie: 'CF_Authorization=ws-cookie-secret',
                 'cf-access-jwt-assertion': 'ws-jwt-secret',
@@ -867,7 +981,7 @@ test('CSRF protection rejects cross-origin, Origin: null, bad Sec-Fetch-Site, no
     });
     assert.equal(okTake.status, 200);
 });
-test('fail-closed revocation: distinct viewer vs OpenMedia media tickets close on hand back, aborts in-flight interactive HTTP, and cuts force/detachDriver', async (t) => {
+test('authority + close-all revocation: distinct viewer vs OpenMedia tickets fail closed after hand back and restart, aborts in-flight interactive HTTP, and cuts force/detachDriver', async (t) => {
     const { socketPath, broker } = await startFakeBroker(t);
     const spaces = await startFakeSpaces(t);
     const access = (0, access_handlers_1.createAccessHandlers)({
@@ -901,16 +1015,23 @@ test('fail-closed revocation: distinct viewer vs OpenMedia media tickets close o
     });
     const port = await listenTcp(t, server);
     const base = `http://127.0.0.1:${port}`;
-    // Wait briefly for the initial broker hello snapshot, then verify interactive
-    // clipboard RPC is refused with 403 while the agent holds the seat.
+    // Wait briefly for the initial broker hello snapshot, then verify unknown
+    // OpenMedia/media tickets and interactive clipboard RPCs fail closed with 403.
     await new Promise(resolve => setTimeout(resolve, 30));
+    const unknownOpenMedia = await fetch(`${base}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/grpc-web+proto', 'x-cua-env-authorization': 'Bearer unminted-viewer-ticket' },
+        body: Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]),
+    });
+    assert.equal(unknownOpenMedia.status, 403);
+    assert.equal(await dialWsStatus(`ws://127.0.0.1:${port}/api/cu/spaces/media?ticket=unminted-media-ticket`), 403);
     const preClip = await fetch(`${base}/api/cu/spaces/cua.env.v1.ComputerService/SetClipboard`, {
         method: 'POST',
         headers: { 'content-type': 'application/grpc-web+proto' },
         body: Buffer.from([1, 2, 3]),
     });
     assert.equal(preClip.status, 403);
-    // Take Over — attempt to send cut fields force & detachDriver; verify server strips them.
+    // 1. Take Over — strip cut fields force & detachDriver — and obtain a DISTINCT interactive media ticket via OpenMedia.
     const takeRes = await fetch(`${base}/api/cu/takeover`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -922,20 +1043,10 @@ test('fail-closed revocation: distinct viewer vs OpenMedia media tickets close o
     const takeJson = (0, test_types_js_1.record)(await takeRes.json());
     const leaseId = takeJson.leaseId;
     const leaseToken = takeJson.leaseToken;
-    const viewerTicket = (0, test_types_js_1.record)(takeJson.viewer).ticket;
-    // Real cua-spacesd 0.17.7 flow: exchange viewerTicket at StreamService.OpenMedia for a DISTINCT media ticket!
-    const openMediaRes = await fetch(`${base}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
-        method: 'POST',
-        headers: {
-            'content-type': 'application/grpc-web+proto',
-            'x-cua-env-authorization': `Bearer ${viewerTicket}`,
-        },
-        body: Buffer.from([0x00, 0x01]),
-    });
-    assert.equal(openMediaRes.status, 200);
-    const wsPath = openMediaRes.headers.get('x-test-media-ws-path');
+    const interactiveViewerTicket = (0, test_types_js_1.record)(takeJson.viewer).ticket;
+    const { mediaTicket: interactiveMediaTicket, wsPath } = await mintMediaViaOpenMedia(base, interactiveViewerTicket);
     assert.match(wsPath, /^\/media\?ticket=distinct-media-ticket-/);
-    assert.equal(wsPath.includes(viewerTicket), false, 'media ticket must be distinct from viewer ticket');
+    assert.notEqual(interactiveMediaTicket, interactiveViewerTicket, 'media ticket must be distinct from viewer ticket');
     // Open the interactive /media WS independently of any iframe using the DISTINCT media ticket.
     const interactiveWs = await new Promise((resolve, reject) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces${wsPath}`, ['rcdp.v2']);
@@ -951,11 +1062,11 @@ test('fail-closed revocation: distinct viewer vs OpenMedia media tickets close o
     spaces.holdClipboardRequests = true;
     const inFlightClipPromise = fetch(`${base}/api/cu/spaces/cua.env.v1.ComputerService/SetClipboard`, {
         method: 'POST',
-        headers: { 'content-type': 'application/grpc-web+proto', 'x-cua-env-authorization': `Bearer ${viewerTicket}` },
+        headers: { 'content-type': 'application/grpc-web+proto', 'x-cua-env-authorization': `Bearer ${interactiveViewerTicket}` },
         body: Buffer.from([9, 9]),
     });
     await spaces.clipboardRequestSeen;
-    // Hand Back (even if client tries handBack: false or force: true, server always sends handBack: true and no force).
+    // 2. Hand Back (server always sends handBack: true and no force).
     const wsClosed = new Promise(resolve => interactiveWs.once('close', code => resolve(code)));
     const relRes = await fetch(`${base}/api/cu/release`, {
         method: 'POST',
@@ -965,13 +1076,27 @@ test('fail-closed revocation: distinct viewer vs OpenMedia media tickets close o
     assert.equal(relRes.status, 200);
     assert.equal(broker.lastReleaseBody?.handBack, true, 'Hand Back must always send handBack: true');
     assert.equal(broker.lastReleaseBody?.force, undefined, 'force must not be forwarded');
-    // Both the distinct-ticket /media WS AND the in-flight interactive HTTP request are terminated immediately!
+    // Both the distinct-ticket /media WS AND the in-flight interactive HTTP request are terminated immediately.
     assert.equal(await wsClosed, 4001);
     const inFlightClipRes = await inFlightClipPromise;
     assert.equal(inFlightClipRes.status, 403);
-    // View-only clients can cleanly reconnect /media after hand back, while interactive clipboard stays refused.
+    // 3. Redial /media with the OLD interactive media credential (?ticket= and cua.ticket.* subprotocol): REFUSED.
+    assert.equal(await dialWsStatus(`ws://127.0.0.1:${port}/api/cu/spaces${wsPath}`), 403, 'old interactive media ticket via ?ticket= must be refused after hand back');
+    assert.equal(await dialWsStatus(`ws://127.0.0.1:${port}/api/cu/spaces/media`, ['rcdp.v2', `cua.ticket.${interactiveMediaTicket}`]), 403, 'old interactive media ticket via cua.ticket.* subprotocol must be refused after hand back');
+    // 4. Call OpenMedia with the OLD interactive viewer ticket: REFUSED.
+    const staleOpenMediaRes = await fetch(`${base}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
+        method: 'POST',
+        headers: {
+            'content-type': 'application/grpc-web+proto',
+            'x-cua-env-authorization': `Bearer ${interactiveViewerTicket}`,
+        },
+        body: Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]),
+    });
+    assert.equal(staleOpenMediaRes.status, 403, 'OpenMedia with old interactive viewer ticket must be refused after hand back');
+    // 5. Fresh view-only ticket + OpenMedia + /media still works, while smuggling old interactive ticket fails closed.
+    const freshView = await mintViewOnlyMedia(base);
     const viewWs = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces/media?ticket=view-reconnect-1`, ['rcdp.v2']);
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces${freshView.wsPath}`, ['rcdp.v2']);
         ws.once('open', () => resolve(ws));
         ws.once('error', reject);
     });
@@ -980,13 +1105,58 @@ test('fail-closed revocation: distinct viewer vs OpenMedia media tickets close o
     }
     catch { } });
     assert.equal(viewWs.readyState, WebSocket.OPEN);
-    spaces.holdClipboardRequests = false;
-    const postClip = await fetch(`${base}/api/cu/spaces/cua.env.v1.ComputerService/SetClipboard`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/grpc-web+proto' },
-        body: Buffer.from([1]),
+    const viewEcho = await new Promise((resolve) => {
+        viewWs.once('message', data => resolve(data.toString()));
+        viewWs.send('view-ping');
     });
-    assert.equal(postClip.status, 403);
+    assert.equal(viewEcho, 'view-ping');
+    assert.equal(await dialWsStatus(`ws://127.0.0.1:${port}/api/cu/spaces${freshView.wsPath}`, ['rcdp.v2', `cua.ticket.${interactiveMediaTicket}`]), 403, 'smuggling revoked interactive ticket alongside valid view-only ticket must be refused');
+    spaces.holdClipboardRequests = false;
+    for (const clipTicket of [undefined, freshView.viewerTicket, interactiveViewerTicket]) {
+        const headers = { 'content-type': 'application/grpc-web+proto' };
+        if (clipTicket)
+            headers['x-cua-env-authorization'] = `Bearer ${clipTicket}`;
+        const postClip = await fetch(`${base}/api/cu/spaces/cua.env.v1.ComputerService/SetClipboard`, {
+            method: 'POST',
+            headers,
+            body: Buffer.from([1]),
+        });
+        assert.equal(postClip.status, 403);
+    }
+    // 6. Restart case: a fresh createCuHandlers instance refuses previously-minted viewer & media tickets (fail closed).
+    const cuRestarted = (0, cu_handlers_1.createCuHandlers)({
+        upgradeAuthorized: () => true,
+        socketPath: () => socketPath,
+        spacesPort: spaces.port,
+        wsPingIntervalMs: 0,
+    });
+    t.after(() => cuRestarted.stop());
+    const restartedApp = express();
+    restartedApp.use('/api/cu/spaces', cuRestarted.spacesProxy);
+    restartedApp.use(access.jsonBody);
+    restartedApp.post('/api/cu/viewer/ticket', access.cuMutationGuard, cuRestarted.viewerTicket);
+    const restartedServer = http.createServer(restartedApp);
+    restartedServer.on('upgrade', (req, socket, head) => {
+        const url = new URL(req.url || '/', 'http://localhost');
+        if (!cuRestarted.upgrade(req, socket, head, url))
+            socket.destroy();
+    });
+    const restartedPort = await listenTcp(t, restartedServer);
+    const restartedBase = `http://127.0.0.1:${restartedPort}`;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const restartOpenMedia = await fetch(`${restartedBase}/api/cu/spaces/cua.env.v1.StreamService/OpenMedia`, {
+        method: 'POST',
+        headers: {
+            'content-type': 'application/grpc-web+proto',
+            'x-cua-env-authorization': `Bearer ${freshView.viewerTicket}`,
+        },
+        body: Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]),
+    });
+    assert.equal(restartOpenMedia.status, 403, 'restarted pi-dish must refuse pre-restart viewer ticket on OpenMedia');
+    assert.equal(await dialWsStatus(`ws://127.0.0.1:${restartedPort}/api/cu/spaces${freshView.wsPath}`), 403, 'restarted pi-dish must refuse pre-restart media ticket on /media');
+    // Reminting a fresh view-only ticket after restart works normally.
+    const reminted = await mintViewOnlyMedia(restartedBase);
+    assert.equal(await dialWsStatus(`ws://127.0.0.1:${restartedPort}/api/cu/spaces${reminted.wsPath}`), 101);
 });
 test('broker watch loss fails closed, closes /media WS, ignores stale epoch, and rearms after brief socket absence', async (t) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-rearm-'));
@@ -1034,6 +1204,7 @@ test('broker watch loss fails closed, closes /media WS, ignores stale epoch, and
     const takeJson = (0, test_types_js_1.record)(await takeRes.json());
     const leaseId = takeJson.leaseId;
     const leaseToken = takeJson.leaseToken;
+    const interactiveViewerTicket = (0, test_types_js_1.record)(takeJson.viewer).ticket;
     // Stale epoch viewer/ticket response (epoch 2 < current epoch 4) is rejected with 409.
     first.broker.overrideTicketEpoch = 2;
     const staleTicketRes = await fetch(`${base}/api/cu/viewer/ticket`, {
@@ -1043,8 +1214,9 @@ test('broker watch loss fails closed, closes /media WS, ignores stale epoch, and
     });
     assert.equal(staleTicketRes.status, 409);
     first.broker.overrideTicketEpoch = null;
+    const { wsPath: interactiveWsPath } = await mintMediaViaOpenMedia(base, interactiveViewerTicket);
     const mediaWs = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces/media?ticket=live-media`, ['rcdp.v2']);
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces${interactiveWsPath}`, ['rcdp.v2']);
         ws.once('open', () => resolve(ws));
         ws.once('error', reject);
     });
@@ -1070,23 +1242,27 @@ test('broker watch loss fails closed, closes /media WS, ignores stale epoch, and
     const deadline = Date.now() + 2000;
     let reconnected = false;
     while (Date.now() < deadline) {
-        const attempt = await new Promise((resolve) => {
-            const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces/media?ticket=after-rearm`, ['rcdp.v2']);
-            ws.once('open', () => { ws.close(); resolve(true); });
-            ws.once('error', () => resolve(false));
-            ws.once('unexpected-response', (_r, res) => { res.resume(); resolve(false); });
+        const ticketAttempt = await fetch(`${base}/api/cu/viewer/ticket`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ mode: 'view-only' }),
         });
-        if (attempt) {
-            reconnected = true;
-            break;
+        if (ticketAttempt.status === 200) {
+            const vt = (0, test_types_js_1.record)(await ticketAttempt.json()).ticket;
+            const { wsPath: rearmWsPath } = await mintMediaViaOpenMedia(base, vt);
+            if ((await dialWsStatus(`ws://127.0.0.1:${port}/api/cu/spaces${rearmWsPath}`)) === 101) {
+                reconnected = true;
+                break;
+            }
         }
         await new Promise(resolve => setTimeout(resolve, 40));
     }
     assert.equal(reconnected, true, 'watcher must rearm after brief socket absence and accept view-only media again');
-    // Fresh hello reported state=agent, so interactive clipboard stays refused (403).
+    // Pre-loss interactive viewer/media credentials stay revoked, and interactive clipboard stays refused (403).
+    assert.equal(await dialWsStatus(`ws://127.0.0.1:${port}/api/cu/spaces${interactiveWsPath}`), 403);
     const clipAfterRearm = await fetch(`${base}/api/cu/spaces/cua.env.v1.ComputerService/SetClipboard`, {
         method: 'POST',
-        headers: { 'content-type': 'application/grpc-web+proto' },
+        headers: { 'content-type': 'application/grpc-web+proto', 'x-cua-env-authorization': `Bearer ${interactiveViewerTicket}` },
         body: Buffer.from([1]),
     });
     assert.equal(clipAfterRearm.status, 403);
@@ -1102,7 +1278,19 @@ test('WS handshake validation rejects malformed/duplicate protocols without cras
         wsMaxBufferedBytes: 512,
     });
     t.after(() => cu.stop());
-    const server = http.createServer((_req, res) => { res.statusCode = 404; res.end(); });
+    const access = (0, access_handlers_1.createAccessHandlers)({
+        version: '1.0.0',
+        readDishSettings: () => ({}),
+        sttAvailable: () => false,
+        usageLimitsAvailable: () => false,
+        botsAvailable: () => false,
+        knowledgeAvailable: () => false,
+    });
+    const app = express();
+    app.use('/api/cu/spaces', cu.spacesProxy);
+    app.use(access.jsonBody);
+    app.post('/api/cu/viewer/ticket', access.cuMutationGuard, cu.viewerTicket);
+    const server = http.createServer(app);
     server.on('upgrade', (req, socket, head) => {
         const url = new URL(req.url || '/', 'http://localhost');
         if (!cu.upgrade(req, socket, head, url))
@@ -1136,8 +1324,9 @@ test('WS handshake validation rejects malformed/duplicate protocols without cras
     }), 404);
     assert.equal(spaces.wsConnections.length, 0, 'invalid upgrades must never dial spacesd');
     // Backpressure ceiling: frame larger than wsMaxBufferedBytes (512B) terminates pair.
+    const bpMedia = await mintViewOnlyMedia(`http://127.0.0.1:${port}`);
     const bpWs = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces/media?ticket=bp`, ['rcdp.v2']);
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces${bpMedia.wsPath}`, ['rcdp.v2']);
         ws.once('open', () => resolve(ws));
         ws.once('error', reject);
     });
@@ -1152,7 +1341,11 @@ test('WS handshake validation rejects malformed/duplicate protocols without cras
         wsPingIntervalMs: 40,
     });
     t.after(() => cuPing.stop());
-    const pingServer = http.createServer((_req, res) => { res.statusCode = 404; res.end(); });
+    const pingApp = express();
+    pingApp.use('/api/cu/spaces', cuPing.spacesProxy);
+    pingApp.use(access.jsonBody);
+    pingApp.post('/api/cu/viewer/ticket', access.cuMutationGuard, cuPing.viewerTicket);
+    const pingServer = http.createServer(pingApp);
     pingServer.on('upgrade', (req, socket, head) => {
         const url = new URL(req.url || '/', 'http://localhost');
         if (!cuPing.upgrade(req, socket, head, url))
@@ -1160,9 +1353,10 @@ test('WS handshake validation rejects malformed/duplicate protocols without cras
     });
     const pingPort = await listenTcp(t, pingServer);
     await new Promise(resolve => setTimeout(resolve, 30));
+    const pingMedia = await mintViewOnlyMedia(`http://127.0.0.1:${pingPort}`);
     const rawClosed = await new Promise((resolve, reject) => {
         const sock = net.connect(pingPort, '127.0.0.1', () => {
-            sock.write('GET /api/cu/spaces/media?ticket=dead HTTP/1.1\r\n' +
+            sock.write(`GET /api/cu/spaces${pingMedia.wsPath} HTTP/1.1\r\n` +
                 `Host: 127.0.0.1:${pingPort}\r\n` +
                 'Upgrade: websocket\r\n' +
                 'Connection: Upgrade\r\n' +
@@ -1191,8 +1385,19 @@ test('SSE error body and watcher event buffer are bounded', async (t) => {
         maxSseEventBytes: 256,
     });
     t.after(() => cu.stop());
+    const access = (0, access_handlers_1.createAccessHandlers)({
+        version: '1.0.0',
+        readDishSettings: () => ({}),
+        sttAvailable: () => false,
+        usageLimitsAvailable: () => false,
+        botsAvailable: () => false,
+        knowledgeAvailable: () => false,
+    });
     const app = express();
+    app.use('/api/cu/spaces', cu.spacesProxy);
+    app.use(access.jsonBody);
     app.get('/api/cu/stream', cu.stream);
+    app.post('/api/cu/viewer/ticket', access.cuMutationGuard, cu.viewerTicket);
     const server = http.createServer(app);
     server.on('upgrade', (req, socket, head) => {
         const url = new URL(req.url || '/', 'http://localhost');
@@ -1209,8 +1414,9 @@ test('SSE error body and watcher event buffer are bounded', async (t) => {
     // Oversized unterminated watcher event triggers fail-closed watch loss and closes /media WS.
     broker.eventsMode = 'normal';
     await new Promise(resolve => setTimeout(resolve, 60));
+    const sseMedia = await mintViewOnlyMedia(`http://127.0.0.1:${port}`);
     const mediaWs = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces/media?ticket=sse-cap`, ['rcdp.v2']);
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces${sseMedia.wsPath}`, ['rcdp.v2']);
         ws.once('open', () => resolve(ws));
         ws.once('error', reject);
     });
@@ -1490,4 +1696,194 @@ test('vendored viewer.js validates principal.color before innerHTML, constrains 
     ]) {
         assert.equal(helpers.supportsComputerUseTransport(badHost), false, `should reject host ${JSON.stringify(badHost)}`);
     }
+});
+test('parseOpenMediaResponse and ticket extractors handle binary/text gRPC-Web, trailers, subprotocols, and fail closed on invalid frames', () => {
+    assert.equal((0, cu_handlers_1.extractCuaBearerTicket)('Bearer tok_123'), 'tok_123');
+    assert.equal((0, cu_handlers_1.extractCuaBearerTicket)('bearer   tok_456  '), 'tok_456');
+    assert.equal((0, cu_handlers_1.extractCuaBearerTicket)('Basic abc'), null);
+    assert.equal((0, cu_handlers_1.extractCuaBearerTicket)(undefined), null);
+    assert.deepEqual((0, cu_handlers_1.extractMediaWsTickets)(new URL('/media?ticket=q1', 'http://localhost'), ['rcdp.v2', 'cua.ticket.p1', 'rcdp.v2.ticket.p2']), ['q1', 'p1', 'p2']);
+    const expSec = Math.floor(Date.now() / 1000) + 300;
+    const binBody = encodeOpenMediaResponse({
+        mediaSessionId: 'ms-1',
+        ticket: 'media_tok_bin',
+        expiresAtSec: expSec,
+        wsPath: '/media?ticket=media_tok_bin',
+        grpcStatusTrailer: '0',
+    });
+    const parsedBin = (0, cu_handlers_1.parseOpenMediaResponse)('application/grpc-web+proto', undefined, binBody);
+    assert.deepEqual(parsedBin, { kind: 'ok', ticket: 'media_tok_bin', expiresAtMs: expSec * 1000 });
+    const textBody = encodeOpenMediaResponse({
+        mediaSessionId: 'ms-2',
+        ticket: 'media_tok_txt',
+        expiresAtSec: expSec,
+        wsPath: '/media?ticket=media_tok_txt',
+        grpcStatusTrailer: '0',
+        textBase64: true,
+    });
+    const parsedText = (0, cu_handlers_1.parseOpenMediaResponse)('application/grpc-web-text+proto', undefined, textBody);
+    assert.deepEqual(parsedText, { kind: 'ok', ticket: 'media_tok_txt', expiresAtMs: expSec * 1000 });
+    // Non-zero grpc-status header or trailer -> grpc-error (pass through without recording).
+    assert.deepEqual((0, cu_handlers_1.parseOpenMediaResponse)('application/grpc-web+proto', '16', Buffer.alloc(0)), { kind: 'grpc-error' });
+    const trailerErr = encodeOpenMediaResponse({ ticket: 'ignored', grpcStatusTrailer: '7' });
+    assert.deepEqual((0, cu_handlers_1.parseOpenMediaResponse)('application/grpc-web+proto', undefined, trailerErr), { kind: 'grpc-error' });
+    // Compressed data frame, mismatched ticket vs ws_path, non-/media ws_path, or duplicate distinct ?ticket= -> invalid.
+    assert.deepEqual((0, cu_handlers_1.parseOpenMediaResponse)('application/grpc-web+proto', undefined, encodeOpenMediaResponse({ ticket: 't', compressed: true })), { kind: 'invalid' });
+    assert.deepEqual((0, cu_handlers_1.parseOpenMediaResponse)('application/grpc-web+proto', undefined, encodeOpenMediaResponse({ ticket: 't1', wsPath: '/media?ticket=t2' })), { kind: 'invalid' });
+    assert.deepEqual((0, cu_handlers_1.parseOpenMediaResponse)('application/grpc-web+proto', undefined, encodeOpenMediaResponse({ ticket: 't1', wsPath: '/other?ticket=t1' })), { kind: 'invalid' });
+    assert.deepEqual((0, cu_handlers_1.parseOpenMediaResponse)('application/grpc-web+proto', undefined, encodeOpenMediaResponse({ wsPath: '/media?ticket=t1&ticket=t2' })), { kind: 'invalid' });
+});
+test('committed takeover when broker watch drops compensates via hand-back and never strands the seat', async (t) => {
+    const { socketPath, broker } = await startFakeBroker(t);
+    const spaces = await startFakeSpaces(t);
+    const access = (0, access_handlers_1.createAccessHandlers)({
+        version: '1.0.0',
+        readDishSettings: () => ({}),
+        sttAvailable: () => false,
+        usageLimitsAvailable: () => false,
+        botsAvailable: () => false,
+        knowledgeAvailable: () => false,
+    });
+    const cu = (0, cu_handlers_1.createCuHandlers)({
+        upgradeAuthorized: () => true,
+        socketPath: () => socketPath,
+        spacesPort: spaces.port,
+        wsPingIntervalMs: 0,
+        watchRetryMs: 40,
+    });
+    t.after(() => cu.stop());
+    const app = express();
+    app.use('/api/cu/spaces', cu.spacesProxy);
+    app.use(access.jsonBody);
+    app.get('/api/cu/status', cu.status);
+    app.post('/api/cu/takeover', access.cuMutationGuard, cu.takeover);
+    const port = await listenTcp(t, http.createServer(app));
+    const base = `http://127.0.0.1:${port}`;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    // Case A: broker started in agent state; watch drops right after takeover commits -> 503 AND broker handed back to agent.
+    assert.equal(broker.state, 'agent');
+    broker.dropWatchOnNextTakeover = true;
+    const resAgent = await fetch(`${base}/api/cu/takeover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'dropped-watch-agent' }),
+    });
+    assert.equal(resAgent.status, 503);
+    assert.equal(broker.state, 'agent', 'broker must be handed back to agent, never stranded in human');
+    assert.equal(broker.lastReleaseBody?.handBack, true);
+    assert.equal(typeof broker.lastReleaseBody?.leaseId, 'string');
+    assert.equal(typeof broker.lastReleaseBody?.leaseToken, 'string');
+    // Wait for watcher to reconnect before Case B (broker starts idle/free).
+    await new Promise(resolve => setTimeout(resolve, 90));
+    broker.state = 'idle';
+    broker.lease = null;
+    broker.preempted = null;
+    broker.epoch += 1;
+    broker.emitEvent('seat_idle', { state: 'idle', epoch: broker.epoch, lease: null, preempted: null });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    broker.dropWatchOnNextTakeover = true;
+    const resIdle = await fetch(`${base}/api/cu/takeover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'dropped-watch-idle' }),
+    });
+    assert.equal(resIdle.status, 503);
+    assert.equal(broker.state, 'idle', 'broker must end in idle/free, never stranded in human');
+});
+test('delayed stale release reply from an older epoch does not revoke a newer human epoch', async (t) => {
+    const { socketPath, broker } = await startFakeBroker(t);
+    const spaces = await startFakeSpaces(t);
+    const access = (0, access_handlers_1.createAccessHandlers)({
+        version: '1.0.0',
+        readDishSettings: () => ({}),
+        sttAvailable: () => false,
+        usageLimitsAvailable: () => false,
+        botsAvailable: () => false,
+        knowledgeAvailable: () => false,
+    });
+    const cu = (0, cu_handlers_1.createCuHandlers)({
+        upgradeAuthorized: () => true,
+        socketPath: () => socketPath,
+        spacesPort: spaces.port,
+        wsPingIntervalMs: 0,
+    });
+    t.after(() => cu.stop());
+    const app = express();
+    app.use('/api/cu/spaces', cu.spacesProxy);
+    app.use(access.jsonBody);
+    app.post('/api/cu/takeover', access.cuMutationGuard, cu.takeover);
+    app.post('/api/cu/release', access.cuMutationGuard, cu.release);
+    const server = http.createServer(app);
+    server.on('upgrade', (req, socket, head) => {
+        const url = new URL(req.url || '/', 'http://localhost');
+        if (!cu.upgrade(req, socket, head, url))
+            socket.destroy();
+    });
+    const port = await listenTcp(t, server);
+    const base = `http://127.0.0.1:${port}`;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    // Take over into human epoch 4.
+    const take1 = (0, test_types_js_1.record)(await (await fetch(`${base}/api/cu/takeover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'first-human' }),
+    })).json());
+    const epoch1 = take1.epoch;
+    // Hold the HTTP 200 reply of POST /api/cu/release (epoch 5), while broker already
+    // commits the release to agent (epoch 5) and emits the SSE hand_back event.
+    let unblockDelayedRelease;
+    broker.holdNextRelease = new Promise(resolve => { unblockDelayedRelease = resolve; });
+    const delayedReleasePromise = fetch(`${base}/api/cu/release`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ leaseId: take1.leaseId, leaseToken: take1.leaseToken }),
+    });
+    // Wait for broker to process release (epoch 5) and watcher to receive SSE hand_back.
+    const waitDeadline = Date.now() + 2000;
+    while (broker.state !== 'agent' && Date.now() < waitDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(broker.state, 'agent');
+    assert.equal(broker.epoch, epoch1 + 1);
+    await new Promise(resolve => setTimeout(resolve, 25));
+    // Start a newer human takeover (epoch 6) and open an epoch-6 interactive /media WS.
+    const take2Res = await fetch(`${base}/api/cu/takeover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'second-human' }),
+    });
+    assert.equal(take2Res.status, 200);
+    const take2 = (0, test_types_js_1.record)(await take2Res.json());
+    assert.equal(take2.epoch, epoch1 + 2);
+    const viewerTicket2 = (0, test_types_js_1.record)(take2.viewer).ticket;
+    const { wsPath: wsPath2 } = await mintMediaViaOpenMedia(base, viewerTicket2);
+    const ws2 = await new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cu/spaces${wsPath2}`, ['rcdp.v2']);
+        ws.once('open', () => resolve(ws));
+        ws.once('error', reject);
+    });
+    t.after(() => { try {
+        ws2.terminate();
+    }
+    catch { } });
+    // Now let the delayed stale epoch-5 release HTTP reply land!
+    unblockDelayedRelease();
+    const delayedReleaseRes = await delayedReleasePromise;
+    assert.equal(delayedReleaseRes.status, 200);
+    assert.equal((0, test_types_js_1.record)(await delayedReleaseRes.json()).epoch, epoch1 + 1);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    // Epoch-6 interactive /media WS and interactive clipboard must remain completely unaffected.
+    assert.equal(ws2.readyState, WebSocket.OPEN, 'delayed stale release reply must NOT close newer epoch /media WS');
+    const echo = await new Promise((resolve, reject) => {
+        ws2.once('message', data => resolve(data.toString()));
+        ws2.once('close', () => reject(new Error('WS closed unexpectedly after stale release reply')));
+        ws2.send('still-alive');
+    });
+    assert.equal(echo, 'still-alive');
+    const clip2 = await fetch(`${base}/api/cu/spaces/cua.env.v1.ComputerService/SetClipboard`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/grpc-web+proto', 'x-cua-env-authorization': `Bearer ${viewerTicket2}` },
+        body: Buffer.from([1, 2]),
+    });
+    assert.equal(clip2.status, 200, 'newer epoch interactive clipboard must remain allowed after stale release reply');
 });

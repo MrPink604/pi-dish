@@ -51,6 +51,28 @@ export interface ValidatedWsHandshake {
  * never crashes ws or wastes an upstream dial.
  */
 export declare function validateWebSocketHandshake(req: IncomingMessage): ValidatedWsHandshake | null;
+export declare function extractCuaBearerTicket(headerValue: string | string[] | undefined): string | null;
+/**
+ * Extracts all media ticket credentials from a `/media` WebSocket upgrade:
+ * `?ticket=` query parameters plus `cua.ticket.<ticket>` / legacy
+ * `rcdp.v2.ticket.<ticket>` WebSocket subprotocols (MEDIA.md §2).
+ */
+export declare function extractMediaWsTickets(url: URL, protocols: readonly string[]): string[];
+export type ParsedOpenMediaResponse = {
+    readonly kind: 'ok';
+    readonly ticket: string;
+    readonly expiresAtMs: number | null;
+} | {
+    readonly kind: 'grpc-error';
+} | {
+    readonly kind: 'invalid';
+};
+/**
+ * Extracts the media ticket and expiry from a `StreamService.OpenMedia`
+ * gRPC-Web response (`application/grpc-web+proto` or `grpc-web-text+proto`)
+ * per pinned `cua-spacesd v0.17.7` `stream.proto`.
+ */
+export declare function parseOpenMediaResponse(contentType: string | string[] | undefined, grpcStatusHeader: string | string[] | undefined, body: Buffer): ParsedOpenMediaResponse;
 export interface CuHandlersPorts {
     upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
     /** Optional test seam for the broker socket path. */

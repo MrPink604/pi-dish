@@ -26,7 +26,13 @@ const WATCH_SYNC_WAIT_MS = 1_500;
 const DEFAULT_HUMAN_TTL_SEC = 600;
 const MAX_SSE_ERROR_BYTES = 64 * 1024;
 const MAX_SSE_EVENT_BYTES = 256 * 1024;
+const MAX_OPEN_MEDIA_RESPONSE_BYTES = 256 * 1024;
+const MAX_TRACKED_TICKETS = 512;
+const DEFAULT_VIEWER_TICKET_TTL_MS = 60 * 60_000;
+const DEFAULT_MEDIA_TICKET_TTL_MS = 10 * 60_000;
+const MAX_MEDIA_TICKET_TTL_MS = 15 * 60_000;
 const MAX_WS_PROTOCOLS = 8;
+const OPEN_MEDIA_PATH = '/cua.env.v1.StreamService/OpenMedia';
 
 const WS_TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const WS_KEY_RE = /^[A-Za-z0-9+/]{22}==$/;
@@ -355,6 +361,205 @@ export function validateWebSocketHandshake(req: IncomingMessage): ValidatedWsHan
   return { protocols };
 }
 
+export function extractCuaBearerTicket(headerValue: string | string[] | undefined): string | null {
+  const raw = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  if (typeof raw !== 'string') return null;
+  const match = /^Bearer\s+(.+)$/i.exec(raw.trim());
+  return match && match[1].trim() ? match[1].trim() : null;
+}
+
+/**
+ * Extracts all media ticket credentials from a `/media` WebSocket upgrade:
+ * `?ticket=` query parameters plus `cua.ticket.<ticket>` / legacy
+ * `rcdp.v2.ticket.<ticket>` WebSocket subprotocols (MEDIA.md §2).
+ */
+export function extractMediaWsTickets(url: URL, protocols: readonly string[]): string[] {
+  const tickets: string[] = [];
+  for (const q of url.searchParams.getAll('ticket')) {
+    const trimmed = q.trim();
+    if (trimmed) tickets.push(trimmed);
+  }
+  for (const proto of protocols) {
+    if (proto.startsWith('cua.ticket.') && proto.length > 'cua.ticket.'.length) {
+      tickets.push(proto.slice('cua.ticket.'.length));
+    } else if (proto.startsWith('rcdp.v2.ticket.') && proto.length > 'rcdp.v2.ticket.'.length) {
+      tickets.push(proto.slice('rcdp.v2.ticket.'.length));
+    }
+  }
+  return tickets;
+}
+
+function readProtobufVarint(buf: Buffer, start: number): { value: bigint; next: number } | null {
+  let result = 0n;
+  let shift = 0n;
+  let pos = start;
+  for (let i = 0; i < 10; i++) {
+    if (pos >= buf.length) return null;
+    const byte = buf[pos++];
+    result |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) return { value: result, next: pos };
+    shift += 7n;
+  }
+  return null;
+}
+
+function parseTimestampSecondsMs(buf: Buffer): number | null {
+  let pos = 0;
+  let seconds: bigint | null = null;
+  while (pos < buf.length) {
+    const tag = readProtobufVarint(buf, pos);
+    if (!tag) return null;
+    pos = tag.next;
+    const field = Number(tag.value >> 3n);
+    const wire = Number(tag.value & 7n);
+    if (wire === 0) {
+      const val = readProtobufVarint(buf, pos);
+      if (!val) return null;
+      pos = val.next;
+      if (field === 1) seconds = val.value;
+    } else if (wire === 1) {
+      if (pos + 8 > buf.length) return null;
+      pos += 8;
+    } else if (wire === 2) {
+      const len = readProtobufVarint(buf, pos);
+      if (!len || len.value > BigInt(buf.length - len.next)) return null;
+      pos = len.next + Number(len.value);
+    } else if (wire === 5) {
+      if (pos + 4 > buf.length) return null;
+      pos += 4;
+    } else {
+      return null;
+    }
+  }
+  if (seconds === null || seconds <= 0n || seconds > 253_402_300_799n) return null;
+  return Number(seconds) * 1000;
+}
+
+function parseOpenMediaProto(buf: Buffer): { ticket: string; expiresAtMs: number | null } | null {
+  let pos = 0;
+  let ticket = '';
+  let wsPath = '';
+  let expiresAtMs: number | null = null;
+  while (pos < buf.length) {
+    const tag = readProtobufVarint(buf, pos);
+    if (!tag) return null;
+    pos = tag.next;
+    const field = Number(tag.value >> 3n);
+    const wire = Number(tag.value & 7n);
+    if (wire === 0) {
+      const val = readProtobufVarint(buf, pos);
+      if (!val) return null;
+      pos = val.next;
+    } else if (wire === 1) {
+      if (pos + 8 > buf.length) return null;
+      pos += 8;
+    } else if (wire === 2) {
+      const len = readProtobufVarint(buf, pos);
+      if (!len || len.value > BigInt(buf.length - len.next)) return null;
+      const slice = buf.subarray(len.next, len.next + Number(len.value));
+      pos = len.next + Number(len.value);
+      if (field === 2) ticket = slice.toString('utf8').trim();
+      else if (field === 3) expiresAtMs = parseTimestampSecondsMs(slice);
+      else if (field === 4) wsPath = slice.toString('utf8').trim();
+    } else if (wire === 5) {
+      if (pos + 4 > buf.length) return null;
+      pos += 4;
+    } else {
+      return null;
+    }
+  }
+  let wsTicket = '';
+  if (wsPath) {
+    try {
+      const parsed = new URL(wsPath, 'http://localhost');
+      if (parsed.pathname !== '/media') return null;
+      const wsTickets = parsed.searchParams.getAll('ticket').map(s => s.trim()).filter(Boolean);
+      const uniqueWsTickets = new Set(wsTickets);
+      if (uniqueWsTickets.size > 1) return null;
+      wsTicket = wsTickets[0] ?? '';
+    } catch {
+      return null;
+    }
+  }
+  if (ticket && wsTicket && ticket !== wsTicket) return null;
+  const resolved = ticket || wsTicket;
+  if (!resolved) return null;
+  return { ticket: resolved, expiresAtMs };
+}
+
+export type ParsedOpenMediaResponse =
+  | { readonly kind: 'ok'; readonly ticket: string; readonly expiresAtMs: number | null }
+  | { readonly kind: 'grpc-error' }
+  | { readonly kind: 'invalid' };
+
+/**
+ * Extracts the media ticket and expiry from a `StreamService.OpenMedia`
+ * gRPC-Web response (`application/grpc-web+proto` or `grpc-web-text+proto`)
+ * per pinned `cua-spacesd v0.17.7` `stream.proto`.
+ */
+export function parseOpenMediaResponse(
+  contentType: string | string[] | undefined,
+  grpcStatusHeader: string | string[] | undefined,
+  body: Buffer,
+): ParsedOpenMediaResponse {
+  const headerStatus = Array.isArray(grpcStatusHeader) ? grpcStatusHeader[0] : grpcStatusHeader;
+  if (typeof headerStatus === 'string' && headerStatus.trim() !== '' && headerStatus.trim() !== '0') {
+    return { kind: 'grpc-error' };
+  }
+  const rawCt = Array.isArray(contentType) ? contentType[0] : contentType;
+  const mime = typeof rawCt === 'string' ? rawCt.split(';')[0].trim().toLowerCase() : '';
+  let frames: Buffer;
+  if (mime === 'application/grpc-web' || mime === 'application/grpc-web+proto') {
+    frames = body;
+  } else if (mime === 'application/grpc-web-text' || mime === 'application/grpc-web-text+proto') {
+    const cleaned = body.toString('ascii').replace(/\s+/g, '');
+    if (!cleaned || cleaned.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleaned)) {
+      return { kind: 'invalid' };
+    }
+    frames = Buffer.from(cleaned, 'base64');
+  } else {
+    return { kind: 'invalid' };
+  }
+
+  let offset = 0;
+  let dataPayload: Buffer | null = null;
+  let trailerGrpcStatus: string | null = null;
+  while (offset < frames.length) {
+    if (offset + 5 > frames.length) return { kind: 'invalid' };
+    const flags = frames[offset];
+    const len = frames.readUInt32BE(offset + 1);
+    offset += 5;
+    if (offset + len > frames.length) return { kind: 'invalid' };
+    const payload = frames.subarray(offset, offset + len);
+    offset += len;
+    if ((flags & 0x80) !== 0) {
+      const trailerText = payload.toString('ascii');
+      for (const line of trailerText.split(/\r?\n/)) {
+        const idx = line.indexOf(':');
+        if (idx <= 0) continue;
+        if (line.slice(0, idx).trim().toLowerCase() === 'grpc-status') {
+          trailerGrpcStatus = line.slice(idx + 1).trim();
+        }
+      }
+    } else if ((flags & 0x01) !== 0) {
+      // Compressed data frame cannot be inspected: fail closed.
+      return { kind: 'invalid' };
+    } else if (flags === 0x00) {
+      if (dataPayload !== null) return { kind: 'invalid' };
+      dataPayload = payload;
+    } else {
+      return { kind: 'invalid' };
+    }
+  }
+  if (trailerGrpcStatus !== null && trailerGrpcStatus !== '0') {
+    return { kind: 'grpc-error' };
+  }
+  if (!dataPayload) return { kind: 'invalid' };
+  const parsed = parseOpenMediaProto(dataPayload);
+  if (!parsed) return { kind: 'invalid' };
+  return { kind: 'ok', ticket: parsed.ticket, expiresAtMs: parsed.expiresAtMs };
+}
+
 function rawDataByteLength(data: WS.RawData): number {
   if (Buffer.isBuffer(data)) return data.length;
   if (data instanceof ArrayBuffer) return data.byteLength;
@@ -462,10 +667,23 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     handleProtocols: (_protocols, req) => negotiatedProtocols.get(req) ?? false,
   });
 
-  // Fail-closed broker-epoch state: no per-ticket index. Until a fresh broker
-  // snapshot arrives over /v1/events, treat state as not-human and refuse
-  // interactive traffic. On any human-epoch end or watch loss, terminate EVERY
-  // proxied /media WebSocket, pending upgrade, and in-flight Spaces HTTP call.
+  // Fail-closed authority + revocation state:
+  // - viewerTickets tracks every viewer ticket pi-dish minted via the broker.
+  // - mediaTickets tracks every media ticket returned by StreamService.OpenMedia
+  //   with the authenticating viewer ticket's mode and epoch.
+  // - Unknown, expired, or superseded-epoch interactive credentials are refused
+  //   on OpenMedia, ComputerService clipboard RPCs, and /media WS upgrades.
+  // - On any human-epoch end or watch loss, interactive entries are dropped and
+  //   EVERY proxied /media socket, pending upgrade, and in-flight Spaces HTTP
+  //   request is terminated.
+  interface TrackedTicket {
+    readonly mode: 'view-only' | 'interactive';
+    readonly epoch: number;
+    readonly expiresAtMs: number;
+  }
+
+  const viewerTickets = new Map<string, TrackedTicket>();
+  const mediaTickets = new Map<string, TrackedTicket>();
   const activeMediaSockets = new Set<(reason: string) => void>();
   const pendingMediaUpgrades = new Set<(statusLine: string) => void>();
   const activeSpacesRequests = new Set<(reason: string) => void>();
@@ -481,6 +699,82 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
 
   function isHumanControlActive(): boolean {
     return brokerWatchSynced && brokerState === 'human';
+  }
+
+  function pruneTicketMap(map: Map<string, TrackedTicket>, nowMs = Date.now()): void {
+    for (const [ticket, entry] of map) {
+      if (entry.expiresAtMs <= nowMs) map.delete(ticket);
+    }
+  }
+
+  function recordTicket(map: Map<string, TrackedTicket>, ticket: string, entry: TrackedTicket): void {
+    const nowMs = Date.now();
+    pruneTicketMap(map, nowMs);
+    if (entry.expiresAtMs <= nowMs) return;
+    map.delete(ticket);
+    while (map.size >= MAX_TRACKED_TICKETS) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+    map.set(ticket, entry);
+  }
+
+  function revokeInteractiveTickets(keepHumanEpoch: number | null): void {
+    for (const map of [viewerTickets, mediaTickets]) {
+      for (const [ticket, entry] of map) {
+        if (entry.mode === 'interactive' && (keepHumanEpoch === null || entry.epoch !== keepHumanEpoch)) {
+          map.delete(ticket);
+        }
+      }
+    }
+  }
+
+  function computeViewerExpiryMs(expiresAtRaw: unknown, ttlSecRaw: unknown): number {
+    const nowMs = Date.now();
+    const parsed = typeof expiresAtRaw === 'string' ? Date.parse(expiresAtRaw) : Number.NaN;
+    if (Number.isFinite(parsed)) return parsed;
+    if (typeof ttlSecRaw === 'number' && Number.isFinite(ttlSecRaw) && ttlSecRaw > 0) {
+      return nowMs + ttlSecRaw * 1000;
+    }
+    return nowMs + DEFAULT_VIEWER_TICKET_TTL_MS;
+  }
+
+  function computeMediaExpiryMs(expiresAtMs: number | null): number {
+    const nowMs = Date.now();
+    if (expiresAtMs !== null && Number.isFinite(expiresAtMs)) {
+      return Math.min(expiresAtMs, nowMs + MAX_MEDIA_TICKET_TTL_MS);
+    }
+    return nowMs + DEFAULT_MEDIA_TICKET_TTL_MS;
+  }
+
+  function authorizeTrackedCredential(
+    map: Map<string, TrackedTicket>,
+    ticket: string | null,
+    options: { requireInteractive?: boolean } = {},
+  ): { ok: true; entry: TrackedTicket } | { ok: false; status: 403 | 503; code: string; error: string } {
+    if (!ticket) {
+      return { ok: false, status: 403, code: 'viewer_ticket_required', error: 'A valid computer-use ticket is required' };
+    }
+    const nowMs = Date.now();
+    pruneTicketMap(map, nowMs);
+    const entry = map.get(ticket);
+    if (!entry) {
+      return { ok: false, status: 403, code: 'ticket_unknown', error: 'Unknown, expired, or revoked computer-use ticket' };
+    }
+    if (options.requireInteractive && entry.mode !== 'interactive') {
+      return { ok: false, status: 403, code: 'human_lease_required', error: 'Interactive viewer lease required' };
+    }
+    if (entry.mode === 'interactive') {
+      if (!brokerWatchSynced) {
+        return { ok: false, status: 503, code: 'broker_watch_unavailable', error: 'Computer-use broker watch is not synced' };
+      }
+      if (brokerState !== 'human' || entry.epoch !== latestEpoch) {
+        map.delete(ticket);
+        return { ok: false, status: 403, code: 'human_lease_ended', error: 'Interactive viewer lease has ended' };
+      }
+    }
+    return { ok: true, entry };
   }
 
   function resolveWatchSyncWaiters(): void {
@@ -502,10 +796,10 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     state: string,
     epoch: number,
     options: { authoritativeHello?: boolean } = {},
-  ): void {
-    // Ignore stale status/ticket/event responses from an older epoch unless
-    // this is a fresh authoritative hello snapshot after a watcher (re)connect.
-    if (!options.authoritativeHello && epoch < latestEpoch) return;
+  ): boolean {
+    // Ignore stale status/ticket/release/event responses from an older epoch
+    // unless this is a fresh authoritative hello snapshot after (re)connect.
+    if (!options.authoritativeHello && epoch < latestEpoch) return false;
     const wasHuman = brokerState === 'human';
     const humanEpochEnded = wasHuman && (state !== 'human' || epoch !== latestEpoch);
 
@@ -514,9 +808,12 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     latestEpoch = epoch;
     if (options.authoritativeHello) resolveWatchSyncWaiters();
 
+    revokeInteractiveTickets(state === 'human' ? epoch : null);
+
     if (humanEpochEnded || (options.authoritativeHello && state !== 'human')) {
       revokeAllActive('Human lease ended');
     }
+    return true;
   }
 
   function stopEpochWatcher(): void {
@@ -546,6 +843,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   function handleWatchLost(): void {
     brokerWatchSynced = false;
     brokerState = null;
+    revokeInteractiveTickets(null);
     revokeAllActive('Broker watch lost');
     resolveWatchSyncWaiters();
     scheduleEpochWatcherRetry();
@@ -758,6 +1056,25 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     });
   };
 
+  async function compensateDroppedTakeover(takeoverBody: Record<string, unknown>): Promise<void> {
+    const releasePayload: Record<string, unknown> = { handBack: true };
+    const leaseId = pickString(takeoverBody, 'leaseId')
+      ?? (isRecord(takeoverBody.lease) ? pickString(takeoverBody.lease, 'leaseId') : undefined);
+    const leaseToken = pickString(takeoverBody, 'leaseToken') ?? pickString(takeoverBody, 'token');
+    if (leaseId) releasePayload.leaseId = leaseId;
+    if (leaseToken) releasePayload.leaseToken = leaseToken;
+    try {
+      const comp = await broker.requestJson('POST', '/v1/lease/release', releasePayload);
+      if (comp.status === 200 && isRecord(comp.body)) {
+        const st = typeof comp.body.state === 'string' ? comp.body.state : null;
+        const ep = typeof comp.body.epoch === 'number' && Number.isFinite(comp.body.epoch) ? comp.body.epoch : null;
+        if (st !== null && ep !== null) applyBrokerSnapshot(st, ep);
+      }
+    } catch {
+      // Best-effort compensation: still return 503 fail-closed.
+    }
+  }
+
   const takeover: TransportHandler = async (req, res) => {
     if (!ensureAvailable(res)) return;
     if (!(await waitForWatchSync())) {
@@ -785,6 +1102,9 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       if (reply.status === 200 && isRecord(reply.body)) {
         const epoch = typeof reply.body.epoch === 'number' && Number.isFinite(reply.body.epoch) ? reply.body.epoch : null;
         if (!brokerWatchSynced) {
+          // Broker committed takeover while our watch dropped: immediately
+          // hand back with the returned credentials so the seat is never stranded.
+          await compensateDroppedTakeover(reply.body);
           res.status(503).json({ error: 'Computer-use broker watch was lost during takeover', code: 'broker_watch_unavailable' });
           return;
         }
@@ -794,6 +1114,14 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         }
         if (epoch !== null) applyBrokerSnapshot('human', epoch);
         const viewer = withSpacesViewerPath(reply.body.viewer);
+        const mintedTicket = viewer && typeof viewer.ticket === 'string' ? viewer.ticket.trim() : '';
+        if (mintedTicket && epoch !== null) {
+          recordTicket(viewerTickets, mintedTicket, {
+            mode: 'interactive',
+            epoch,
+            expiresAtMs: computeViewerExpiryMs(viewer?.expiresAt, viewer?.ttlSec),
+          });
+        }
         const out = viewer ? { ...reply.body, viewer } : reply.body;
         res.status(200).json(out);
         return;
@@ -842,11 +1170,9 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       const reply = await broker.requestJson('POST', '/v1/lease/release', payload);
       if (reply.status === 200 && isRecord(reply.body)) {
         const st = typeof reply.body.state === 'string' ? reply.body.state : 'idle';
-        const ep = typeof reply.body.epoch === 'number' && Number.isFinite(reply.body.epoch) ? reply.body.epoch : latestEpoch;
-        applyBrokerSnapshot(st, ep);
-        // Always close open media sockets / in-flight interactive calls on a
-        // successful release even if the broker stayed at the same epoch.
-        if (st !== 'human') revokeAllActive('Human lease ended');
+        const ep = typeof reply.body.epoch === 'number' && Number.isFinite(reply.body.epoch) ? reply.body.epoch : null;
+        // Revoke only as part of accepting a non-stale epoch transition.
+        if (ep !== null) applyBrokerSnapshot(st, ep);
       }
       sendBrokerReply(res, reply.status, reply.body);
     } catch (error) {
@@ -888,9 +1214,17 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
           res.status(409).json({ error: 'Viewer ticket is from a superseded epoch', code: 'human_lease_ended', epoch: latestEpoch });
           return;
         }
-        if (mode === 'interactive' && !isHumanControlActive()) {
+        if (mode === 'interactive' && (!isHumanControlActive() || (epoch !== null && epoch !== latestEpoch))) {
           res.status(409).json({ error: 'Human lease ended while minting ticket', code: 'human_lease_ended', epoch: latestEpoch });
           return;
+        }
+        const mintedTicket = typeof reply.body.ticket === 'string' ? reply.body.ticket.trim() : '';
+        if (mintedTicket) {
+          recordTicket(viewerTickets, mintedTicket, {
+            mode,
+            epoch: epoch ?? latestEpoch,
+            expiresAtMs: computeViewerExpiryMs(reply.body.expiresAt, reply.body.ttlSec),
+          });
         }
         res.status(200).json(withSpacesViewerPath(reply.body) ?? reply.body);
         return;
@@ -961,13 +1295,26 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       res.status(405).type('text/plain').send('Method not allowed');
       return;
     }
-    if (routeKind === 'interactive' && !isHumanControlActive()) {
-      if (!brokerWatchSynced) {
-        res.status(503).json({ error: 'Computer-use broker watch is not synced', code: 'broker_watch_unavailable' });
-      } else {
-        res.status(403).json({ error: 'Interactive viewer lease has ended', code: 'human_lease_ended' });
+    if (routeKind === 'interactive') {
+      const bearer = extractCuaBearerTicket(req.headers['x-cua-env-authorization']);
+      const authz = authorizeTrackedCredential(viewerTickets, bearer, { requireInteractive: true });
+      if (!authz.ok) {
+        res.status(authz.status).json({ error: authz.error, code: authz.code });
+        return;
       }
-      return;
+    }
+
+    const isOpenMedia = safe.pathname === OPEN_MEDIA_PATH;
+    let openMediaBearer: string | null = null;
+    let openMediaViewerEntry: TrackedTicket | null = null;
+    if (isOpenMedia) {
+      openMediaBearer = extractCuaBearerTicket(req.headers['x-cua-env-authorization']);
+      const authz = authorizeTrackedCredential(viewerTickets, openMediaBearer);
+      if (!authz.ok) {
+        res.status(authz.status).json({ error: authz.error, code: authz.code });
+        return;
+      }
+      openMediaViewerEntry = authz.entry;
     }
 
     const upstreamHeaders = buildSpacesRequestHeaders(req.headers, spacesPort);
@@ -1001,6 +1348,79 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     }, (upstreamRes) => {
       if (finished) { upstreamRes.destroy(); return; }
       activeRes = upstreamRes;
+      if (isOpenMedia && openMediaViewerEntry) {
+        const statusCode = upstreamRes.statusCode ?? 502;
+        if (statusCode !== 200) {
+          res.status(statusCode);
+          copySpacesResponseHeaders(upstreamRes, res);
+          upstreamRes.pipe(res);
+          upstreamRes.on('end', cleanupRequest);
+          upstreamRes.on('close', cleanupRequest);
+          upstreamRes.on('error', () => { cleanupRequest(); try { res.end(); } catch {} });
+          res.on('close', () => { cleanupRequest(); try { upstreamRes.destroy(); } catch {} });
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let overflowed = false;
+        upstreamRes.on('data', (chunk: Buffer) => {
+          if (finished || overflowed) return;
+          totalBytes += chunk.length;
+          if (totalBytes > MAX_OPEN_MEDIA_RESPONSE_BYTES) {
+            overflowed = true;
+            cleanupRequest();
+            if (!res.headersSent) res.status(502).json({ error: 'OpenMedia response exceeded size limit' });
+            try { upstreamRes.destroy(); } catch {}
+            return;
+          }
+          chunks.push(chunk);
+        });
+        upstreamRes.on('error', () => {
+          cleanupRequest();
+          if (!res.headersSent) res.status(502).json({ error: 'OpenMedia upstream error' });
+        });
+        upstreamRes.on('end', () => {
+          if (finished || overflowed) return;
+          cleanupRequest();
+          const body = Buffer.concat(chunks);
+          const parsed = parseOpenMediaResponse(
+            upstreamRes.headers['content-type'],
+            upstreamRes.headers['grpc-status'],
+            body,
+          );
+          if (parsed.kind === 'invalid') {
+            if (!res.headersSent) res.status(502).json({ error: 'Invalid OpenMedia response from spacesd' });
+            return;
+          }
+          if (parsed.kind === 'ok') {
+            const recheck = authorizeTrackedCredential(viewerTickets, openMediaBearer, {
+              requireInteractive: openMediaViewerEntry.mode === 'interactive',
+            });
+            if (!recheck.ok || recheck.entry.epoch !== openMediaViewerEntry.epoch) {
+              if (!res.headersSent) {
+                const status = !recheck.ok ? recheck.status : 403;
+                const code = !recheck.ok ? recheck.code : 'human_lease_ended';
+                const error = !recheck.ok ? recheck.error : 'Interactive viewer lease has ended';
+                res.status(status).json({ error, code });
+              }
+              return;
+            }
+            recordTicket(mediaTickets, parsed.ticket, {
+              mode: openMediaViewerEntry.mode,
+              epoch: openMediaViewerEntry.epoch,
+              expiresAtMs: computeMediaExpiryMs(parsed.expiresAtMs),
+            });
+          }
+          if (res.headersSent) return;
+          res.status(200);
+          copySpacesResponseHeaders(upstreamRes, res);
+          res.setHeader('Content-Length', String(body.length));
+          res.end(body);
+        });
+        res.on('close', () => { cleanupRequest(); try { upstreamRes.destroy(); } catch {} });
+        return;
+      }
+
       res.status(upstreamRes.statusCode ?? 502);
       copySpacesResponseHeaders(upstreamRes, res);
       upstreamRes.pipe(res);
@@ -1081,12 +1501,45 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       return true;
     }
 
-    // Fail closed if the broker event watch is not synced: wait briefly when
-    // an initial watcher handshake is in flight, otherwise refuse with 503.
+    // Require a media ticket recorded from a pi-dish-authorized OpenMedia call
+    // (checking both ?ticket= and cua.ticket.* / rcdp.v2.ticket.* subprotocols).
+    const safeUrl = new URL(`${safe.pathname}${safe.search}`, 'http://localhost');
+    const presentedMediaTickets = extractMediaWsTickets(safeUrl, handshake.protocols);
+    if (presentedMediaTickets.length === 0) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return true;
+    }
+    const authorizeMediaUpgrade = (): { ok: true; isInteractive: boolean; epoch: number } | { ok: false; statusLine: string } => {
+      let hasInteractive = false;
+      let interactiveEpoch = -1;
+      for (const candidate of presentedMediaTickets) {
+        const authz = authorizeTrackedCredential(mediaTickets, candidate);
+        if (!authz.ok) {
+          return { ok: false, statusLine: authz.status === 503 ? 'HTTP/1.1 503 Service Unavailable' : 'HTTP/1.1 403 Forbidden' };
+        }
+        if (authz.entry.mode === 'interactive') {
+          hasInteractive = true;
+          interactiveEpoch = authz.entry.epoch;
+        }
+      }
+      return { ok: true, isInteractive: hasInteractive, epoch: interactiveEpoch };
+    };
+
+    const initialMediaAuth = authorizeMediaUpgrade();
+    if (!initialMediaAuth.ok && initialMediaAuth.statusLine === 'HTTP/1.1 403 Forbidden') {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return true;
+    }
+
+    // Dial upstream once media credential authorization passes (waiting briefly
+    // for initial broker watch sync only when an interactive upgrade races boot).
     const beginUpstreamDial = () => {
       if (stopped || socket.destroyed) return;
-      if (!brokerWatchSynced) {
-        try { socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n'); } catch {}
+      const checked = authorizeMediaUpgrade();
+      if (!checked.ok) {
+        try { socket.write(`${checked.statusLine}\r\n\r\n`); } catch {}
         try { socket.destroy(); } catch {}
         return;
       }
@@ -1140,8 +1593,13 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       });
 
       upstreamWs.once('open', () => {
-        if (settled || stopped || socket.destroyed || !brokerWatchSynced) {
+        if (settled || stopped || socket.destroyed) {
           rejectHandshake('HTTP/1.1 503 Service Unavailable');
+          return;
+        }
+        const recheck = authorizeMediaUpgrade();
+        if (!recheck.ok) {
+          rejectHandshake(recheck.statusLine);
           return;
         }
         if (upstreamWs.protocol) negotiatedProtocols.set(req, upstreamWs.protocol);
@@ -1151,7 +1609,8 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         try {
           wss.handleUpgrade(req, socket, head, (clientWs) => {
             negotiatedProtocols.delete(req);
-            if (settled || stopped || !brokerWatchSynced) {
+            const finalCheck = authorizeMediaUpgrade();
+            if (settled || stopped || !finalCheck.ok) {
               try { clientWs.terminate(); } catch {}
               try { upstreamWs.terminate(); } catch {}
               return;
@@ -1267,7 +1726,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       });
     };
 
-    if (brokerWatchSynced) {
+    if (initialMediaAuth.ok) {
       beginUpstreamDial();
     } else {
       void waitForWatchSync().then(beginUpstreamDial);
@@ -1280,6 +1739,8 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     stopped = true;
     brokerWatchSynced = false;
     brokerState = null;
+    viewerTickets.clear();
+    mediaTickets.clear();
     stopEpochWatcher();
     resolveWatchSyncWaiters();
     revokeAllActive('Server shutting down');
