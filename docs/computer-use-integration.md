@@ -566,3 +566,335 @@ What Slice 1 implemented on the `pi-dish` side (leaving Slice 2 session-spawn le
 - **Host removal retiring the standalone pane:** Pre-existing Slice-1 behavior; retiring `#cuViewerView` when its host disappears from `/api/hosts` is tracked separately from Step A.
 - **Mobile swipe gutter over desktop viewer iframe** (step-A #8): reserve a narrow parent-owned swipe gutter over the configured edge-handle zone so left-edge drawer swipes work over the embedded viewer iframe without intercepting the rest of the desktop.
 - **Keep session panel open on same-session transcript reload** (step-A #9): distinguish a forced same-session transcript reload (`forceTranscriptReload`) from explicit collapse/close so the stored open preference is reapplied on reload.
+
+---
+
+## 9. Slice 2 Broker Interface (`cu-broker` v1 / Slice 2 Additions)
+
+This section specifies the exact Slice 2 additions to `cu-broker`, `cua-driver-mcp`, and `cu-seat` deployed on `cu-sandbox` by `fleet-config` (`ansible/roles/cu_guest/`). All Slice 1 endpoints and payloads in §8 remain backward-compatible.
+
+### 9.1 Versioning, Capabilities & Ordering Identifiers
+
+`cu-broker` keeps `"version": 1` for Slice 1 compatibility and adds:
+
+- **`capabilities`**: `["bind", "cancel_preempted", "ordered_sse", "claim_handoff"]` on `GET /v1/health`, `GET /v1/status`, and SSE `hello`. `pi-dish` can feature-detect Slice 2 broker support via this array.
+- **`generation`**: opaque non-empty string (`gen-<16 hex chars>`), newly generated on **every** `cu-broker` process start (never reused across restarts).
+- **`cursor`**: monotonic non-negative integer starting at `0` on each broker start and incremented by `1` for every emitted SSE event under the broker state lock at commit time. Together, `(generation, cursor)` totally orders every transition and metadata update within a broker process lifetime.
+- **`epoch`**: persisted monotonic seat-ownership counter (from §8). **`epoch` increments ONLY on seat ownership transitions** (`acquire`, `takeover`, `hand_back`, `release`, `expired`/`reaped`). Metadata and reservation updates (`bind`, `cancel-preempted`, `preempted_reaped`, `attention`, `claim-nonce`, `claim`) **never** increment `epoch` so active interactive human viewer tickets are never disrupted.
+
+`generation` and `cursor` are included on `GET /v1/health`, `GET /v1/status`, all `/v1/lease/*` responses, and every SSE event payload.
+
+### 9.2 Public `lease` and `preempted` Schema Additions
+
+Additive fields on public `lease` objects (never exposing secrets or hashes):
+
+```json
+{
+  "holderKind": "agent",
+  "leaseId": "omp-spawn-...",
+  "sessionId": "omp-spawn-...",
+  "holderId": "omp-spawn-...",
+  "ownerId": "~sk1_omp_abc123",
+  "label": "~sk1_omp_abc123",
+  "requestedBy": null,
+  "reason": null,
+  "pid": 12345,
+  "pidStartTime": 9876543,
+  "boundAt": "2026-11-25T15:00:01.234Z",
+  "mcpClaimed": true,
+  "claimedPid": 12378,
+  "acquiredAt": "2026-11-25T15:00:00.000Z",
+  "lastHeartbeatAt": "2026-11-25T15:00:20.000Z",
+  "lastActivityAt": "2026-11-25T15:00:20.000Z",
+  "ttlSec": 90,
+  "expiresAt": "2026-11-25T15:01:50.000Z",
+  "hardExpiresAt": "2026-11-25T16:00:00.000Z",
+  "reservedUntil": null
+}
+```
+
+Additive fields on public `preempted` objects:
+
+```json
+{
+  "sessionId": "omp-spawn-...",
+  "leaseId": "omp-spawn-...",
+  "ownerId": "~sk1_omp_abc123",
+  "label": "~sk1_omp_abc123",
+  "requestedBy": null,
+  "pid": 12345,
+  "pidStartTime": 9876543,
+  "boundAt": "2026-11-25T15:00:01.234Z",
+  "mcpClaimed": true,
+  "claimedPid": 12378,
+  "preemptedAt": "2026-11-25T15:02:00.000Z",
+  "hardExpiresAt": "2026-11-25T16:00:00.000Z"
+}
+```
+
+All fields (`ownerId`, `label`, `pid`, `pidStartTime`, `boundAtMs`, `mcpTokenHash`, `claimedPeer`) are preserved across `takeover` (`lease` → `preempted`) and `hand_back` (`preempted` → `lease`). `POST /v1/lease/acquire` also accepts optional `ownerId` (stored as `null` when omitted) and keeps its Slice 1 idempotent refresh behavior unchanged (never mutating `ownerId`, `label`, or `pid`).
+
+### 9.3 `POST /v1/lease/bind` — Authenticated Bind / Transfer
+
+Control-side bind or ownership transfer of an existing agent lease. Valid while the agent lease is **active** (`state` is `"agent"` or `"waiting_for_human"`) **or displaced** (`state` is `"human"` and matching `preempted`).
+
+- **Socket:** `control.sock` **only** (`agent.sock` returns `403 { ok: false, code: "forbidden" }`).
+- **Auth:** `sessionId` (or `leaseId`) + `sessionSecret` (or `token`) verified in constant time against the matched agent record's `tokenHash`. (`mcpToken` is rejected.)
+- **Request body:**
+  ```json
+  {
+    "sessionId": "omp-spawn-...",
+    "sessionSecret": "<control-plane sessionSecret>",
+    "ownerId": "~sk1_omp_abc123",
+    "label": "~sk1_omp_abc123",
+    "pid": 12345,
+    "pidStartTime": 9876543,
+    "requestedBy": "optional",
+    "expectedEpoch": 4
+  }
+  ```
+  - At least one of `ownerId`, `label`, or `pid` must be supplied (`400 invalid_bind`).
+  - `ownerId` (optional): opaque non-empty string (`1..160` chars, no ASCII control characters `\x00-\x1f`; else `400 invalid_owner_id`). When `ownerId` is provided and `label` is omitted, `label` is automatically updated to `ownerId`.
+  - `label` (optional): non-empty string (`1..160` chars, no ASCII control characters; else `400 invalid_label`).
+  - `pid` & `pidStartTime` (optional pair):
+    - Supplying `pid` without `pidStartTime` returns `400 pid_start_time_required`. Supplying `pidStartTime` without `pid` returns `400 invalid_pid`.
+    - `pid` must be an integer `> 1` (`400 invalid_pid`).
+    - `pidStartTime` accepts an integer or base-10 digit string matching `/proc/<pid>/stat` field 22 (`starttime` in clock ticks; else `400 invalid_pid_start`).
+    - Broker verifies `/proc/<pid>/stat` exists, process state is not dead/zombie (`Z`/`X`/`x`; else `400 pid_not_found`), `/proc/<pid>` UID equals the broker's UID (`403 pid_owner_mismatch`), and observed field 22 equals `pidStartTime` (`400 pid_mismatch`).
+  - `expectedEpoch` (optional integer): if provided and `expectedEpoch !== epoch`, returns `409 epoch_mismatch` without mutating state.
+- **State effects:**
+  - Persists updated `ownerId`, `label`, `pid`, `pidStartTime`, `boundAtMs` (and `requestedBy` if supplied) atomically to `lease.json`.
+  - If `(pid, pidStartTime)` changes to a new process birth: clears any previous `claimedPeer` / `mcpTokenHash`, binds any `pending_bind` claim nonce for this `sessionId` to the new `(pid, pidStartTime)`, and wakes any `POST /v1/lease/claim` waiter immediately.
+  - Does **not** bump `epoch`.
+  - Appends audit entry `"bound"` (`epoch`, `target`, `sessionId`, `ownerId`, `label`, `pid`, `pidStartTime`).
+  - Increments `cursor` and emits ordered SSE `lease_changed` (`reason: "bound"`, `target: "active" | "displaced"`).
+- **Success response (`200`):**
+  ```json
+  {
+    "ok": true,
+    "generation": "gen-...",
+    "cursor": 12,
+    "state": "agent | waiting_for_human | human",
+    "epoch": 4,
+    "target": "active | displaced",
+    "lease": { ... },
+    "preempted": { ... }
+  }
+  ```
+- **Error responses:**
+  - `400`: `invalid_json`, `invalid_bind`, `invalid_owner_id`, `invalid_label`, `invalid_pid`, `pid_start_time_required`, `invalid_pid_start`, `pid_not_found`, `pid_mismatch`.
+  - `403`: `forbidden` (wrong socket, invalid `sessionSecret`, or `mcpToken` presented), `pid_owner_mismatch`.
+  - `409`: `lease_not_found` (no matching active or displaced agent lease), `not_agent_lease` (matched a human lease), `epoch_mismatch`.
+
+### 9.4 `POST /v1/lease/cancel-preempted` — Cancel Displaced Agent Only
+
+Cancels **only** a displaced agent reservation (`preempted`) while leaving any active `human` lease completely untouched (same `state`, `epoch`, `lease`, and `expiresAt`).
+
+- **Socket:** `control.sock` (credentials or `force: true`) or `agent.sock` (credentials only; `force: true` returns `403 forbidden`).
+- **Auth:** `sessionId` (or `leaseId`) + `sessionSecret` (or `token`) verified against `preempted.tokenHash` (or `force: true` on `control.sock` only). `mcpToken` is rejected.
+- **Request body:**
+  ```json
+  {
+    "sessionId": "omp-spawn-...",
+    "sessionSecret": "<control-plane sessionSecret>",
+    "force": false
+  }
+  ```
+- **Behavior:**
+  - Runs reaping first.
+  - If `preempted` exists:
+    - Unless `force: true` on `control.sock`, credentials must match `preempted.sessionId`/`preempted.leaseId` and `preempted.tokenHash`; mismatches return `403 forbidden`.
+    - Clears `preempted`, revokes and unlinks any pending claim nonce for that `sessionId`, persists `lease.json`, appends audit `"preempted_cancelled"`, increments `cursor`, and emits ordered SSE `lease_changed` (`reason: "preempted_cancelled"`, `cancelled: <public_preempted>`).
+    - Does **not** alter `state`, `epoch`, or `lease`.
+    - Returns `200`:
+      ```json
+      {
+        "ok": true,
+        "cancelled": true,
+        "alreadyAbsent": false,
+        "cancelledReservation": { ... },
+        "generation": "gen-...",
+        "cursor": 15,
+        "state": "human",
+        "epoch": 5,
+        "lease": { ... },
+        "preempted": null
+      }
+      ```
+  - If `preempted` is `null`:
+    - If not `force` and credentials match the **currently active** agent lease (`self.lease`), returns `409 { ok: false, code: "lease_active", generation, cursor, state, epoch, lease, preempted: null, message }`.
+    - If not `force` and either `sessionId` or `sessionSecret` is missing, returns `400 { ok: false, code: "missing_credentials" }`.
+    - Otherwise (reservation was already cancelled, reaped, or expired), returns idempotent `200 { ok: true, cancelled: false, alreadyAbsent: true, cancelledReservation: null, generation, cursor, state, epoch, lease, preempted: null }`.
+- **Backward-compatible behavior on `POST /v1/lease/release`:**
+  - If `force` is false and valid control-plane `sessionId` + `sessionSecret` match `preempted` (while `state === "human"`), `POST /v1/lease/release` cancels **only** `preempted` without touching the human lease and returns `200 { ok: true, generation, cursor, state: "human", epoch, lease, preempted: null, cancelledPreempted: true, cancelledReservation, handedBackTo: null }`. Callers that want strict displaced-only semantics (failing `409 lease_active` if hand-back raced ahead of cancel) should use `POST /v1/lease/cancel-preempted`.
+
+### 9.5 Ordered SSE Reconnect (`GET /v1/events`)
+
+Every SSE transition event is assigned a strictly increasing `cursor` and appended to an in-memory bounded ring buffer (`CU_BROKER_EVENT_HISTORY_SIZE`, default `512`) **under `broker._lock` at state-commit time** (before any out-of-lock driver termination or viewer ticket minting), guaranteeing total ordering of `(generation, cursor, epoch)` across all concurrent HTTP mutations.
+
+#### Request Resume Parameters
+
+Clients may resume via query parameters or the standard SSE header (query parameters take precedence):
+- `GET /v1/events?generation=<gen>&cursor=<n>` (`after=<n>` accepted as alias for `cursor=<n>`). Non-integer or negative `cursor` returns `400 { ok: false, code: "invalid_cursor" }`.
+- Or `Last-Event-ID: <generation>:<cursor>`.
+
+#### Atomic Subscription & Strict Framing Order
+
+1. Component health is sampled outside the state lock.
+2. Under `broker._lock`, the broker reaps expired/dead leases, captures the atomic snapshot at `currentCursor`, determines the replay slice or resync reason, and registers the subscriber queue to receive **only** live events with `cursor > currentCursor`.
+3. Frames are written to the connection in strict order:
+   1. **`event: hello`** — **ALWAYS strictly first.**
+      - `id:` is `<generation>:<currentCursor>` unless `resume.status === "replayed"`, in which case `id:` is omitted so automatic `Last-Event-ID` reconnects do not skip pending replay frames.
+      - Payload is the full `/v1/status` object (`ok`, `version`, `capabilities`, `generation`, `cursor`, `state`, `epoch`, `lease`, `preempted`, `defaults`, `viewer`, `health`) plus `resume`:
+        ```json
+        {
+          "status": "fresh | up_to_date | replayed | resync_required",
+          "requestedGeneration": "gen-... | null",
+          "requestedCursor": 7,
+          "replayedCount": 3,
+          "oldestAvailableCursor": 1,
+          "resyncReason": null
+        }
+        ```
+        - `fresh`: no resume cursor/header supplied.
+        - `up_to_date`: `requestedGeneration === generation` and `requestedCursor === currentCursor`.
+        - `replayed`: `requestedGeneration === generation`, `requestedCursor < currentCursor`, and all events `(requestedCursor + 1)..currentCursor` are present in the history buffer (`requestedCursor >= oldestAvailableCursor - 1`).
+        - `resync_required`: any gap or mismatch, with `resyncReason` in:
+          - `"generation_mismatch"` (broker restarted, or `cursor` passed without matching `generation`, or malformed `Last-Event-ID`),
+          - `"cursor_too_old"` (`requestedCursor < oldestAvailableCursor - 1`, evicted from ring buffer),
+          - `"cursor_ahead"` (`requestedCursor > currentCursor`).
+   2. **If `resume.status === "resync_required"`:** immediately emit **`event: resync`** (`id: <generation>:<currentCursor>`):
+      ```json
+      {
+        "generation": "gen-...",
+        "cursor": 100,
+        "reason": "generation_mismatch | cursor_too_old | cursor_ahead | subscriber_lagged",
+        "requestedGeneration": "gen-old",
+        "requestedCursor": 4,
+        "oldestAvailableCursor": 50,
+        "state": "agent",
+        "epoch": 9,
+        "lease": { ... },
+        "preempted": null
+      }
+      ```
+   3. **Else if `resume.status === "replayed"`:** immediately emit every missed event in strictly ascending cursor order (`requestedCursor + 1 .. currentCursor`), each with `id: <generation>:<evCursor>`, its original `event:` name (`lease_changed`, `preempted`, `hand_back`, `seat_idle`, `attention_needed`), and payload carrying `generation`, `cursor: evCursor`, and `"replayed": true`.
+   4. **Live events:** strictly `cursor > currentCursor` in ascending cursor order, each with `id: <generation>:<evCursor>` and payload carrying `generation`, `cursor`, and `"replayed": false`.
+   5. **Subscriber overflow (`subscriber_lagged`):** if a slow subscriber fills its in-memory queue (`128` frames), the broker does **not** silently drop events; it clears the stalled queue and emits an explicit **`event: resync`** with `reason: "subscriber_lagged"` and a fresh atomic snapshot at the current `(generation, cursor)` before resuming live delivery.
+
+#### Complete SSE Event Catalog
+
+| `event:` | `id:` | When emitted | Key payload fields |
+|---|---|---|---|
+| `hello` | `<gen>:<cursor>` (omitted while replaying) | Strictly first on every `/v1/events` connect | Full `/v1/status` + `generation`, `cursor`, `capabilities`, `resume` |
+| `resync` | `<gen>:<cursor>` | Immediately after `hello` on gap/restart, or mid-stream on queue overflow | `generation`, `cursor`, `reason`, `oldestAvailableCursor`, `requestedGeneration`, `requestedCursor`, `state`, `epoch`, `lease`, `preempted` |
+| `lease_changed` | `<gen>:<cursor>` | Every lease/binding/reservation state change | `generation`, `cursor`, `replayed`, `reason` (`acquired` \| `bound` \| `takeover` \| `hand_back` \| `released` \| `ttl_expired` \| `hard_cap_expired` \| `pid_dead` \| `attention_changed` \| `preempted_cancelled` \| `preempted_reaped`), plus optional `target`/`cancelled`/`reaped`, and snapshot (`state`, `epoch`, `lease`, `preempted`) |
+| `preempted` | `<gen>:<cursor>` | Human takes over an active agent lease | `generation`, `cursor`, `replayed`, `sessionId`, `displaced`, and snapshot |
+| `hand_back` | `<gen>:<cursor>` | Human releases with `handBack: true` to live displaced agent | `generation`, `cursor`, `replayed`, `handedBackTo`, and snapshot |
+| `seat_idle` | `<gen>:<cursor>` | Seat returns to `idle` (release/expiry/reap) | `generation`, `cursor`, `replayed`, `reason`, `previous`, and snapshot |
+| `attention_needed` | `<gen>:<cursor>` | Agent sets `waiting_for_human` | `generation`, `cursor`, `replayed`, `reason`, and snapshot |
+
+### 9.6 State Persistence & Restart Reconciliation
+
+`$XDG_RUNTIME_DIR/cu-broker/lease.json` (`0600`, atomic temp-file + `os.replace`; preserved across `cu-broker.service` restarts via `RuntimeDirectoryPreserve=yes` while remaining on tmpfs so reboots start clean) persists:
+- `version`, `epoch`, `state`, `lease` (including `ownerId`, `pid`, `pidStartTime`, `boundAtMs`, `tokenHash`, `mcpTokenHash`, `claimedPeer`), `preempted` (same fields plus `preemptedAtMs`, `hardExpiresAtMs`).
+- **Never persisted:** `generation` (fresh every start), `cursor` (starts at `0`), SSE history ring buffer, plaintext secrets/tokens, or pending claim nonces.
+
+**Process liveness check (`pid_alive`):** reads `/proc/<pid>/stat` for both state (field 3) and `starttime` (field 22), plus `/proc/<pid>` UID ownership. A process is considered dead if `/proc/<pid>/stat` is missing, its state is zombie/dead (`Z`, `X`, `x`), its UID does not match the broker UID, or its `starttime` differs from `pidStartTime`.
+
+**Startup reconciliation (executed before opening sockets):**
+1. Delete any stale files in `$XDG_RUNTIME_DIR/cu-broker/claims/`.
+2. Drop malformed `lease` / `preempted` records.
+3. If `lease` is expired (`ttl_expired` / `hard_cap_expired`) or an active agent `lease` has a bound `pid` whose `pidStartTime` is missing (`unverified_pid`) or no longer alive (`pid_dead`), bump `epoch`, transition to `idle`, clear `preempted`, and append `"reconciled"` to `audit.ndjson`.
+4. If `preempted` exists:
+   - Drop if `state !== "human"` (`orphan_preempted`), `hardExpiresAtMs <= now` (`preempted_hard_cap_expired`), `pid` or `pidStartTime` is missing (`preempted_unbound_on_restart`), or `pid_alive(pid, pidStartTime)` is false (`preempted_pid_dead`).
+   - Dropping `preempted` alone preserves any live human `lease` and does **not** bump `epoch`; appends `"reconciled"` to `audit.ndjson`.
+5. If a surviving `lease` or `preempted` carries `claimedPeer`, verify `pid_alive(claimedPeer.pid, claimedPeer.pidStartTime)`; if dead, clear `claimedPeer` and `mcpTokenHash` and audit `"reconciled"`.
+6. Persist the reconciled `lease.json` atomically before binding sockets.
+
+**Runtime reaping:** every `REAP_INTERVAL_SEC` (default `2 s`) and before state mutations, `_reap_locked()` enforces TTLs, hard caps, and `pid_alive` on both `lease` and `preempted`. When `preempted` is reaped at runtime (`pid_dead` or `hard_cap_expired`), the broker persists `lease.json`, revokes pending claims for that session, audits `"preempted_reaped"`, increments `cursor`, and emits `lease_changed` (`reason: "preempted_reaped"`, `reaped`).
+
+### 9.7 Process-Bound Secret Delivery (`cua-driver-mcp` Only)
+
+To eliminate `CU_BROKER_SESSION_SECRET` from `tmux` command lines, `/proc/<omp>/environ`, `omp`'s shell and non-CUA MCP children, and `omp 19.1.1`'s SQLite environment store, Slice 2 replaces env-var secret passing with a **one-use, process-lineage-bound claim handoff** that mints a dedicated, `SO_PEERCRED`-bound `mcpToken` exclusively for the redeeming `/usr/local/bin/cua-driver-mcp` process.
+
+#### End-to-End Flow
+
+1. **Acquire (control-plane):** `pi-dish` calls `POST /v1/lease/acquire` on `control.sock`. `sessionSecret` stays exclusively inside `pi-dish`'s private Node memory — it is **never** placed in `tmux` args, `omp`'s env, or any file.
+2. **Mint one-use claim nonce (`control.sock`):** `pi-dish` calls `POST /v1/lease/claim-nonce` with `{ sessionId, sessionSecret, ttlSec?, bindTimeoutSec?: 30, pid?, pidStartTime?, requireRebind?: false }`.
+   - `cu-broker` generates a 256-bit `claimNonce`, keeps only `sha256(claimNonce)` in RAM (never in `lease.json` or `audit.ndjson`), writes a `0600` file under `$XDG_RUNTIME_DIR/cu-broker/claims/claim-<id>.json` (`0700` dir), and returns `{ ok: true, claimId, claimFile, claimNonce, sessionId, bound, expectedPid, expectedPidStartTime, bindTimeoutSec, bindExpiresAt, ttlSec, expiresAt, generation, cursor }`.
+   - **Two-phase claim TTL (required for `omp 19.1.1` lazy MCP spawn):**
+     - While **unbound** (`bound: false`, pre-spawn before `POST /v1/lease/bind`), the claim **cannot be redeemed** and expires after `bindTimeoutSec` (default `30` s, clamped `5..120` s).
+     - Once **bound** to a verified `(omp_pid, omp_start_time)`, `omp 19.1.1` serves cached MCP tool catalogs from `~/.omp/run/daemon/modules/mcp/cache.db` and spawns `/usr/local/bin/cua-driver-mcp` **lazily on the first `mcp__cua_*` tool call** (which may occur minutes after launch). Bound claims therefore remain redeemable up to `ttlSec` (default: lease hard cap, clamped `5..3600` s and always capped at `lease.hardExpiresAt`), and are immediately revoked and unlinked when redeemed, when the bound `omp` PID exits, when the lease is released/cancelled/expired, or when `cu-broker` restarts/shuts down.
+   - For `respawnPane` (reusing an existing lease with a new `omp` process), pass `requireRebind: true` so the claim waits for the *next* `POST /v1/lease/bind` instead of accepting the old pane's PID.
+3. **Launch `omp` with zero secrets in env:** `pi-dish` spawns `omp` via tmux with only non-secret identifiers:
+   - `CU_BROKER_SESSION_ID=<brokerSessionId>`
+   - `CU_BROKER_CLAIM_FILE=<claimFile>` *(recommended — not even the spent nonce enters `tmux` argv, `/proc/<omp>/environ`, or `omp`'s SQLite env store; `CU_BROKER_CLAIM_NONCE` is also supported as a fallback)*
+   - `CU_BROKER_LABEL=<label>`
+   - **Never** `CU_BROKER_SESSION_SECRET`.
+4. **Bind verified `omp` birth (`control.sock`):** As soon as `pi-dish` observes `omp`'s `(pid, pidStartTime)` (immediately from tmux `paneProcessIdentity` and/or upon bridge registration with `ownerId`), it calls `POST /v1/lease/bind`. `cu-broker` verifies `/proc/<pid>/stat`, persists `(pid, pidStartTime)`, attaches it to the pending claim, and immediately wakes any waiting `POST /v1/lease/claim`.
+5. **Redeem (`agent.sock`, inside `/usr/local/bin/cua-driver-mcp`):**
+   - `cua-driver-mcp` (`#!/usr/bin/python3 -I`, isolated mode ignoring `PYTHONPATH`/`PYTHONUSERBASE`) sees `CU_BROKER_CLAIM_FILE` (or `CU_BROKER_CLAIM_NONCE`), sets `auto_acquire = False` (fail-closed), and defers consuming the one-use claim until the MCP client sends `notifications/initialized`, `tools/list`, or `tools/call` — this avoids burning the claim during `omp 19.1.1`'s throwaway `server/discover` + `initialize` capability probe (which closes the probe child after ~20 ms before spawning the persistent MCP child). Upon `notifications/initialized` (still during `omp` boot, before the first LLM turn), `cua-driver-mcp` reads `claimNonce` into memory, immediately unlinks `claimFile` (best-effort; `cu-broker` also unlinks it on redeem/expiry/cancel/shutdown), and calls `POST /v1/lease/claim` on `agent.sock` in a background thread (so `initialize` and `tools/list` never stall `omp`'s 5 s `mcp.startupTimeoutMs`).
+   - `POST /v1/lease/claim` (`agent.sock` **only**; `control.sock` returns `403`):
+     - Request: `{ sessionId, claimNonce, waitMs?: 5000 }` (`waitMs` clamped `0..15000`).
+     - Broker verifies all of the following atomically before minting a token:
+       1. Kernel `SO_PEERCRED` on the accepted Unix socket: `peer_uid === broker_uid` (`403 peer_uid_mismatch`).
+       2. `claimNonce` hash matches an active, unexpired claim for `sessionId` (`403 claim_used` | `claim_expired` | `claim_invalid`).
+       3. Target agent lease (active **or displaced**) still exists.
+       4. Claim is bound to a verified `(expectedPid, expectedPidStartTime)`; if still `pending_bind`, waits on condition variable up to `waitMs` and returns `409 { ok: false, code: "binding_pending", retryAfterMs: 150 }` without consuming the nonce if still unbound.
+       5. **Process lineage check:** peer is alive (not zombie), `expectedPid` is alive with matching `starttime === expectedPidStartTime` and matching UID, `expectedPid` is `peer_pid` or an ancestor in `/proc/*/stat`'s `ppid` chain within depth `6`, and child `starttime >= parent starttime` at every hop (`403 peer_lineage_mismatch`).
+       6. **Peer entrypoint check:** `/proc/<peer_pid>/exe` + `/proc/<peer_pid>/cmdline` match `CU_BROKER_MCP_ENTRYPOINT` (default `/usr/local/bin/cua-driver-mcp`), allowing only direct binary execution or `python3` with safe flags (`-I`, `-u`, `-B`, `-E`, `-s`, `-S`, `-O`, `-OO`) and forbidding `-c`, `-m`, `-i`, `-` (`403 peer_binary_mismatch`). Failed lineage/binary checks do not immediately DoS-burn the nonce, but audit `"claim_denied"` and burn the nonce after `5` failed attempts.
+     - On success:
+       - Atomically burns the claim nonce, records its hash in a bounded recently-used cache, and unlinks `claimFile`.
+       - Mints a fresh, MCP-scoped `mcpToken` (`256`-bit random), stores `mcpTokenHash` and `claimedPeer = { pid, pidStartTime, claimedAtMs }` on the lease (active or displaced; persisted in `lease.json` and preserved across `takeover` and `hand_back`).
+       - Never reveals `pi-dish`'s control-plane `sessionSecret` to `cua-driver-mcp`.
+       - Returns `200`:
+         ```json
+         {
+           "ok": true,
+           "generation": "gen-...",
+           "cursor": 13,
+           "state": "agent | waiting_for_human | human",
+           "epoch": 4,
+           "sessionId": "omp-spawn-...",
+           "leaseId": "omp-spawn-...",
+           "mcpToken": "<mcp-scoped token>",
+           "sessionSecret": "<mcp-scoped token>",
+           "token": "<mcp-scoped token>",
+           "claimedPeer": { "pid": 12378, "pidStartTime": 9876601 },
+           "lease": { ... },
+           "preempted": null,
+           "heartbeatIntervalSec": 20
+         }
+         ```
+6. **Ongoing `SO_PEERCRED` enforcement on `agent.sock`:**
+   - Once a lease has `claimedPeer` set, `POST /v1/mcp/call` on `agent.sock` verifies kernel `SO_PEERCRED` + `/proc/<peer_pid>/stat` matches `(claimedPeer.pid, claimedPeer.pidStartTime)`; any other process is rejected with `403 peer_mismatch` even if it presents a token.
+   - `POST /v1/lease/heartbeat` on `agent.sock` accepts `mcpToken` only from `claimedPeer` (`403 peer_mismatch` otherwise; returns `409 lease_preempted` while displaced so `cua-driver-mcp` keeps `mcpToken` for hand-back).
+   - `mcpToken` is **never** accepted by `bind`, `release`, `cancel-preempted`, `attention`, or `claim-nonce`.
+   - Legacy Slice 1 callers (env `CU_BROKER_SESSION_SECRET` or standalone terminal `autoAcquire`) continue working unchanged when `claimedPeer` is not set.
+
+#### Endpoint Summary Table (Slice 2 Additions)
+
+| Method & Path | Socket | Auth | Key Codes |
+|---|---|---|---|
+| `POST /v1/lease/bind` | `control.sock` only | `sessionId` + control `sessionSecret` | `200`, `400 invalid_bind / invalid_owner_id / invalid_label / invalid_pid / pid_start_time_required / invalid_pid_start / pid_not_found / pid_mismatch`, `403 forbidden / pid_owner_mismatch`, `409 lease_not_found / not_agent_lease / epoch_mismatch` |
+| `POST /v1/lease/cancel-preempted` | `control.sock` (`force` ok) or `agent.sock` (no `force`) | `sessionId` + control `sessionSecret` (or `force: true` on `control.sock`) | `200` (`cancelled: true` or idempotent `alreadyAbsent: true`), `400 missing_credentials`, `403 forbidden`, `409 lease_active` |
+| `POST /v1/lease/claim-nonce` | `control.sock` only | `sessionId` + control `sessionSecret` | `200` (`claimId`, `claimFile`, `claimNonce`, `bound`, `expiresAt`), `400 invalid_pid / pid_start_time_required / invalid_pid_start / pid_not_found / pid_mismatch`, `403 forbidden / pid_owner_mismatch`, `409 lease_not_found / not_agent_lease` |
+| `POST /v1/lease/claim` | `agent.sock` only | `sessionId` + `claimNonce` + `SO_PEERCRED` + lineage + MCP entrypoint | `200` (`mcpToken`, `claimedPeer`), `400 invalid_claim`, `403 peer_uid_mismatch / claim_invalid / claim_expired / claim_used / peer_lineage_mismatch / peer_binary_mismatch`, `409 binding_pending / lease_not_found` |
+| `GET /v1/events` | `control.sock` or `agent.sock` | Optional `?generation=&cursor=` (or `after=`) / `Last-Event-ID: <gen>:<cursor>` | `200` SSE (`hello` strictly first, then `resync` or replayed events, then live), `400 invalid_cursor` |
+
+#### Threat Model & Residual Risk (Honest Assessment)
+
+**What this handoff defeats completely:**
+- **Env / tmux / SQLite secret leakage:** Neither `sessionSecret` nor `mcpToken` (nor `claimNonce` when using `CU_BROKER_CLAIM_FILE`) ever appears in `tmux` argv/env, `/proc/<omp>/environ`, `omp`'s bash shell environment, sibling MCP children, or `omp 19.1.1`'s SQLite env store.
+- **Cross-process and post-redemption replay:** Once `cua-driver-mcp` redeems and unlinks the claim (at boot on a cold MCP cache, or on the first `mcp__cua_*` tool call when `omp 19.1.1` serves the catalog from `~/.omp/run/daemon/modules/mcp/cache.db`), the claim is atomically burned and cannot be replayed. Unrelated processes or non-MCP scripts (`python3 -c ...`, `curl`, bash) are rejected by `SO_PEERCRED` + parent-chain process-birth verification + MCP entrypoint check (`python3 -I` blocks `PYTHONPATH` injection).
+- **Control-plane escalation from MCP:** `cua-driver-mcp` never receives `pi-dish`'s control-plane `sessionSecret`; its `mcpToken` cannot bind, transfer, release, cancel, or mint new claims, and is pinned to `claimedPeer`'s `(pid, pidStartTime)` on `agent.sock`.
+- **Pre-bind race theft & PID reuse:** Unbound claims expire in 30 s and cannot be redeemed before `control.sock` binds a verified `(pid, pidStartTime)`, and `/proc/<pid>/stat` field 22 + monotonic hop timestamps defeat PID reuse.
+
+**What a prompt-injected agent shell COULD STILL DO in Slices 1–3 (same UID `jyarwood` + guest passwordless sudo):**
+- Because `omp`, `omp`'s bash tool, `cua-driver-mcp`, `pi-dish`, `cu-broker`, and `cua-driver` all run as UID `1000` (`jyarwood`) with passwordless `sudo` inside `cu-sandbox`:
+  1. An injected bash command can connect directly to `control.sock`, `backend.sock`, or `127.0.0.1:3211` (reading `~/.config/cua/token`), or invoke `cu-seat` / `sudo`.
+  2. An injected bash command can inspect `cua-driver-mcp` or `pi-dish` heap memory (via `sudo` or `ptrace` if `kernel.yama.ptrace_scope = 0`) or kill `cua-driver-mcp` (DoS).
+  3. On a warm `omp 19.1.1` MCP cache (lazy spawn), if an agent somehow became prompt-injected *before* its first `mcp__cua_*` tool call (e.g. via `web_search`), an injected bash child of `omp` could launch `/usr/local/bin/cua-driver-mcp` itself to claim the pending `mcpToken` (or race with `LD_PRELOAD` under same-UID). Even then, it still only receives an `mcpToken` gated by the same single-seat lease (cut off immediately on human Take Over) and never learns `pi-dish`'s control-plane `sessionSecret`.
+- **Forward path to hard enforcement (Slice 4b UID split):** Running `omp` + its shell under an unprivileged `cu-agent` UID (no `sudo`, no access to `control.sock`, `backend.sock`, or `~/.config/cua/token`, with `kernel.yama.ptrace_scope = 1`, `claims/` mode `0710` group-accessible without listing, and `autoAcquire` restricted) turns this exact Slice 2 protocol into a kernel-enforced boundary with zero API changes: a sibling bash child of `omp` cannot see `mcpToken` in env/SQLite, cannot redeem a burned claim, cannot `ptrace` sibling `cua-driver-mcp` (`ptrace_scope=1`), and cannot call `/v1/mcp/call` (`claimedPeer` `SO_PEERCRED` check). Remaining same-UID risks even in Slice 4b are limited to killing `cua-driver-mcp` (DoS), racing an unredeemed lazy-spawn claim via the real `/usr/local/bin/cua-driver-mcp` binary before the first CUA call, or indirect prompt injection through normal broker-gated MCP calls.
+
