@@ -172,6 +172,7 @@ function buildSidebar(options: SidebarRenderOptions): SidebarProjection {
   const downHosts = new Set(options.hosts.filter(hostIsDown).map(host => host.hostId || null));
   const badges = new Map<string, string>(), hostChips = new Map<string | null, string>();
   const rows: { key: string; html: string }[] = [], occurrences = new Map<string, number>();
+  const visibleHostSet = new Set<string | null>();
 function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const contextPercent = session.contextPercent ?? 0;
   const ctxClass = contextClass(contextPercent);
@@ -301,6 +302,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   occurrences.set(key, occurrence + 1);
   const rowKey = JSON.stringify([key, occurrence]);
   rows.push({ key: rowKey, html });
+  visibleHostSet.add(session.host || options.selfHostId || null);
   return `<template data-sidebar-row="${escapeHtml(rowKey)}"></template>`;
 }
 
@@ -577,8 +579,6 @@ function renderSessions() {
     html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
   }
 
-  const visibleHostSet = new Set<string | null>();
-  for (const session of filtered) visibleHostSet.add(session.host || options.selfHostId || null);
   const visibleHostIds = [...visibleHostSet];
   const mode = `${options.tab}\0${options.view}\0${options.query}\0${options.scope}`;
   return { layout: html, rows, count: active.length + pending.length, mode, visibleHostIds,

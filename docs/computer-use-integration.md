@@ -550,3 +550,9 @@ What Slice 1 implemented on the `pi-dish` side (leaving Slice 2 session-spawn le
 - **Retain in-flight takeover result across pane switches** (round-1 #10 remainder): persist a successful takeover lease returned after closing or switching away from the Desktop pane against its captured host without rendering into the active view.
 - **Request-byte caps on raw Spaces streaming POSTs** (round-1 #12 remainder): enforce per-RPC streaming byte limits on raw `/api/cu/spaces/*` POST request bodies.
 - **Orderly shutdown ordering** (round-1 #13): track public broker SSE streams and pending handshakes alongside active media sockets and tear them down before waiting for HTTP listener drain on shutdown.
+
+#### Deferred Follow-ups (Step A — Session Desktop Panel)
+
+- **Fresh viewer ticket on panel ↔ main-pane handoff** (step-A #5): mint a fresh viewer ticket for the existing mode and lease on same-host handoff instead of replaying the prior ticket URL across iframe remount.
+- **Mobile swipe gutter over desktop viewer iframe** (step-A #8): reserve a narrow parent-owned swipe gutter over the configured edge-handle zone so left-edge drawer swipes work over the embedded viewer iframe without intercepting the rest of the desktop.
+- **Keep session panel open on same-session transcript reload** (step-A #9): distinguish a forced same-session transcript reload (`forceTranscriptReload`) from explicit collapse/close so the stored open preference is reapplied on reload.

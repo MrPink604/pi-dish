@@ -32,13 +32,14 @@ export function createFileViews(options: {
   mountModel?: (options: ModelMountOptions) => MountedModelView;
   status: (message: string, type?: string) => void; refreshArtifacts: (owner: SelectionOwner) => void;
   closeComments: () => void; clearComments: () => void; refreshComments: () => void; markComments: () => void;
+  onOverlayChange?: (open: boolean) => void;
 }) {
   const { document, sessionState } = options;
   const element = requiredElement(document, 'file view');
   interface View { owner: SelectionOwner | null; endpoint: Readonly<HostEndpoint> | null; sessionId: string | null; generation: number }
   const file: View & { raw: string | null; path: string | null; relPath: string | null } = { owner: null, endpoint: null, sessionId: null, generation: 0, raw: null, path: null, relPath: null };
   const diff: View = { owner: null, endpoint: null, sessionId: null, generation: 0 };
-  let disposed = false, pageSequence = 0, copySequence = 0;
+  let disposed = false, overlayOpen = false, pageSequence = 0, copySequence = 0;
   let displayedPage: PublishedPage | null = null;
   let activeModel: MountedModelView | null = null;
   let fileEvents = new AbortController(), pageEvents = new AbortController(), diffEvents = new AbortController();
@@ -63,7 +64,13 @@ export function createFileViews(options: {
     if (disposed || !current || current.base !== endpoint.base) return Promise.reject(new Error('Host connection changed; reopen this view'));
     return options.request({ ...endpoint, token: current.token }, path, init);
   }
-  function closeFile() {
+  function syncOverlay() {
+    const next = isOpen('file') || isOpen('diff');
+    if (next === overlayOpen) return;
+    overlayOpen = next;
+    options.onOverlayChange?.(next);
+  }
+  function closeFileInternal() {
     file.generation++; file.owner = null; file.endpoint = null; file.sessionId = null; file.raw = null; file.path = null; file.relPath = null;
     fileEvents.abort(); pageEvents.abort(); pageSequence++; copySequence++;
     for (const timer of timers) clearTimeout(timer); timers.clear();
@@ -79,11 +86,13 @@ export function createFileViews(options: {
     const copyBtn = element('fileViewCopy'); copyBtn.style.display = ''; copyBtn.textContent = '⧉';
     clearPage(); options.closeComments(); options.clearComments();
   }
-  function closeDiff() {
+  function closeFile() { closeFileInternal(); syncOverlay(); }
+  function closeDiffInternal() {
     diff.generation++; diff.owner = null; diff.endpoint = null; diff.sessionId = null; diffEvents.abort();
     element('sessionView').classList.remove('diff-open'); element('btnDiff').classList.remove('active'); element('diffViewBody').innerHTML = '';
     options.closeComments(); options.clearComments();
   }
+  function closeDiff() { closeDiffInternal(); syncOverlay(); }
   function clearPage() { displayedPage = null; pageEvents.abort(); const row = element('fileViewPage'); row.style.display = 'none'; row.innerHTML = ''; }
   function renderPage(page: PublishedPage, id: string, generation: number) {
     if (!ownsFile(id, generation) || !file.owner || !file.endpoint) return;
@@ -132,9 +141,9 @@ export function createFileViews(options: {
   }
   async function openFile(mention: string) {
     if (disposed || !sessionState.currentSession) return;
-    closeFile(); closeDiff(); const captured = capture(file); if (!captured) return;
+    closeFileInternal(); closeDiffInternal(); const captured = capture(file); if (!captured) { syncOverlay(); return; }
     const { owner, endpoint, id, generation } = captured;
-    element('sessionView').classList.add('file-open'); fileEvents = new AbortController();
+    element('sessionView').classList.add('file-open'); fileEvents = new AbortController(); syncOverlay();
     element('fileViewPublish').addEventListener('click', () => { if (ownsFile(id, generation)) void publish(); }, { signal: fileEvents.signal });
     const copyButton = element('fileViewCopy'); copyButton.addEventListener('click', () => { if (ownsFile(id, generation)) copy(copyButton); }, { signal: fileEvents.signal });
     const body = element('fileViewBody'), title = element('fileViewTitle'), path = element('fileViewPath'), rawLink = element<HTMLAnchorElement>('fileViewRaw');
@@ -296,7 +305,7 @@ export function createFileViews(options: {
       options.highlight(body, { host: owner.host, sessionId: id, baseFilePath: data.path }); options.refreshComments();
     } catch (e) { if (ownsFile(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorMessage(e))}</div>`; }
   }
-  async function openDiff() { if (disposed || !sessionState.currentSession) return; closeFile(); element('sessionView').classList.add('diff-open'); element('btnDiff').classList.add('active'); await loadDiff(); }
+  async function openDiff() { if (disposed || !sessionState.currentSession) return; closeFileInternal(); element('sessionView').classList.add('diff-open'); element('btnDiff').classList.add('active'); syncOverlay(); await loadDiff(); }
   function toggleDiff() { if (isOpen('diff')) closeDiff(); else void openDiff(); }
   async function loadDiff() {
     if (disposed || !sessionState.currentSession || !isOpen('diff')) return;

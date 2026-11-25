@@ -33,6 +33,7 @@ export interface CuViewerOptions {
   hosts: () => readonly CuViewerHost[];
   host: (id: string | null | undefined) => CuViewerHost | null;
   currentSession: () => { id?: string | null; host?: string | null } | null;
+  selectionGeneration?: () => number;
   supports: (host: CuViewerHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
   ticket: (host: HostEndpoint) => Promise<string>;
@@ -52,6 +53,11 @@ type HostStatusSubscriber = 'list' | 'viewer';
 interface ViewerNotice {
   kind: NoticeKind;
   text: string;
+}
+
+interface HeldHumanLease extends CuLocalHumanLease {
+  readonly endpoint: Readonly<HostEndpoint>;
+  connGen: number;
 }
 
 interface ViewerSurfaceRefs {
@@ -74,6 +80,10 @@ interface HostStatusEntry {
   readonly subscribers: Set<HostStatusSubscriber>;
   status: CuStatus | null;
   latestEpoch: number;
+  connGen: number;
+  disconnected: boolean;
+  awaitingReconnectHello: boolean;
+  streamConnectedOnce: boolean;
   statusFlight: Promise<CuStatus | null> | null;
   eventSource: EventSource | null;
   retryTimer: ReturnType<typeof setTimeout> | null;
@@ -110,7 +120,8 @@ export function createCuViewer(options: CuViewerOptions) {
   const now = options.now ?? (() => Date.now());
   const openSource = options.source ?? ((url: string) => new EventSource(url));
   const storage = options.storage !== undefined ? options.storage : defaultSessionStorage(doc);
-  const localLeases = new Map<string, CuLocalHumanLease>();
+  const localLeases = new Map<string, HeldHumanLease>();
+  const releasingLeaseIds = new Set<string>();
   const hostStatuses = new Map<string, HostStatusEntry>();
   const visibleListHostKeys = new Set<string>();
   const lastCueFingerprints = new Map<string, string>();
@@ -123,6 +134,10 @@ export function createCuViewer(options: CuViewerOptions) {
   let activeHostKey: string | null = null;
   let panelSessionKey: string | null = null;
   let restoredPanelSessionKey: string | null = null;
+  let sessionViewOccluded = false;
+  let suspendedPanelForOcclusion = false;
+  let suspendedSelectionGen: number | null = null;
+  let suspendedSessionKey: string | null = null;
   let status: CuStatus | null = null;
   let mode: 'view-only' | 'interactive' = 'view-only';
   let notice: ViewerNotice | null = null;
@@ -341,7 +356,9 @@ export function createCuViewer(options: CuViewerOptions) {
     }
     const hostKey = keyOf(host);
     const entry = hostStatuses.get(hostKey);
-    const cue = cuSessionListCue(entry?.status ?? null, localLeases.get(hostKey) ?? null);
+    const cue = entry && !entry.disconnected
+      ? cuSessionListCue(entry.status, localLeases.get(hostKey) ?? null)
+      : null;
     if (!cue) {
       summary.hidden = true;
       summary.textContent = '';
@@ -431,15 +448,16 @@ export function createCuViewer(options: CuViewerOptions) {
     panel.hidden = false;
 
     const sKey = sessionIdentityKey(session, host);
-    if (surface === 'panel' && panelSessionKey !== null && panelSessionKey !== sKey) {
-      close();
+    const nextHostKey = keyOf(host);
+    if (surface === 'panel' && (panelSessionKey !== sKey || activeHostKey !== nextHostKey)) {
+      closeActiveSurface(true);
     }
 
     renderPanelSummary();
 
     if (sKey && restoredPanelSessionKey !== sKey) {
       restoredPanelSessionKey = sKey;
-      if (surface === 'none' && !isAnyTakeoverOpen() && readPanelOpenPref(sKey)) {
+      if (surface === 'none' && !sessionViewOccluded && !isAnyTakeoverOpen() && readPanelOpenPref(sKey)) {
         openSurface('panel', host, sKey);
       } else if (surface !== 'panel') {
         setPanelExpandedDom(false);
@@ -449,6 +467,12 @@ export function createCuViewer(options: CuViewerOptions) {
 
   function syncSessionChip(): void {
     if (disposed) return;
+    if (surface === 'pane' && activeHost?.hostId) {
+      const currentPaneHost = options.host(activeHost.hostId);
+      if (currentPaneHost && (!hostSupported(currentPaneHost) || keyOf(currentPaneHost) !== activeHostKey)) {
+        closeActiveSurface(true);
+      }
+    }
     const chip = ensureSessionChip();
     const session = options.currentSession();
     const host = session ? options.host(session.host ?? null) : null;
@@ -468,7 +492,7 @@ export function createCuViewer(options: CuViewerOptions) {
     return mode === 'interactive' && iframeUrl !== null;
   }
 
-  function currentLocalLease(): CuLocalHumanLease | null {
+  function currentLocalLease(): HeldHumanLease | null {
     return activeHostKey ? (localLeases.get(activeHostKey) ?? null) : null;
   }
 
@@ -639,13 +663,37 @@ export function createCuViewer(options: CuViewerOptions) {
       return;
     }
     entry.eventSource = source;
+    let seenHelloOnSource = false;
     const handleEvent = (event: MessageEvent) => {
       if (!hostEntryAlive(entry, entryGen) || entry.eventSource !== source) return;
       entry.retryAttempt = 0;
       let parsed: unknown;
       try { parsed = JSON.parse(String(event.data || '')); } catch { return; }
       const decoded = decodeCuStatus(parsed);
-      if (decoded) acceptHostStatus(entry, decoded);
+      if (!decoded) return;
+      const isHello = event.type === 'hello';
+      if (isHello) {
+        // Authoritative reconnect / broker-restart hello starts a fresh
+        // connection generation so a restarted broker's lower epoch (e.g. 0)
+        // is accepted while stale responses from the prior generation stay
+        // rejected. The very first initial hello of a fresh connection stays
+        // in connGen 1 so it does not abort an in-flight ticket or takeover.
+        const authoritativeHello = entry.awaitingReconnectHello
+          || seenHelloOnSource
+          || entry.streamConnectedOnce;
+        seenHelloOnSource = true;
+        entry.streamConnectedOnce = true;
+        if (authoritativeHello) {
+          entry.connGen += 1;
+          entry.latestEpoch = -1;
+          entry.awaitingReconnectHello = false;
+        }
+        entry.disconnected = false;
+        acceptHostStatus(entry, decoded, { connGen: entry.connGen, authoritativeHello });
+        return;
+      }
+      entry.disconnected = false;
+      acceptHostStatus(entry, decoded, { connGen: entry.connGen });
     };
     for (const type of SSE_EVENTS) {
       source.addEventListener(type, handleEvent as EventListener);
@@ -656,30 +704,51 @@ export function createCuViewer(options: CuViewerOptions) {
     };
     // Close on error and reconnect through connectHostStream so a fresh stream
     // ticket is minted on every reconnect instead of looping on an expired one.
+    // Clear display state to unknown/stale on disconnect while keeping any
+    // release credentials in localLeases separate so Hand Back still works.
     source.onerror = () => {
       if (!hostEntryAlive(entry, entryGen) || entry.eventSource !== source) return;
       try { source.close(); } catch {}
       entry.eventSource = null;
+      entry.disconnected = true;
+      entry.awaitingReconnectHello = true;
+      entry.connGen += 1;
+      entry.latestEpoch = -1;
+      entry.status = null;
+      if (isViewerActive() && activeHostKey === entry.hostKey) {
+        status = null;
+        renderHeaderAndControls();
+      }
+      notifySeatCueIfChanged(entry.hostKey, null);
+      renderPanelSummary();
       scheduleHostReconnect(entry, entryGen);
     };
   }
 
-  function acceptHostStatus(entry: HostStatusEntry, next: CuStatus): void {
+  function acceptHostStatus(
+    entry: HostStatusEntry,
+    next: CuStatus,
+    acceptOpts: { connGen?: number; authoritativeHello?: boolean } = {},
+  ): void {
     if (disposed || hostStatuses.get(entry.hostKey) !== entry) return;
-    // Ignore stale status/SSE snapshots from an older epoch so a delayed poll
-    // response cannot discard a newly acquired takeover lease.
-    if (next.epoch < entry.latestEpoch) return;
+    if (acceptOpts.connGen !== undefined && acceptOpts.connGen !== entry.connGen) return;
+    // Ignore stale status/SSE snapshots from an older epoch within the same
+    // broker connection generation unless this is an authoritative hello.
+    if (!acceptOpts.authoritativeHello && next.epoch < entry.latestEpoch) return;
+    entry.disconnected = false;
+    if (acceptOpts.authoritativeHello) entry.awaitingReconnectHello = false;
     entry.latestEpoch = next.epoch;
     entry.status = next;
 
     if (isViewerActive() && activeHostKey === entry.hostKey) {
-      applyStatusUpdate(next, generation, entry.hostKey, entry.endpoint);
+      applyStatusUpdate(next, generation, entry.hostKey, entry.endpoint, entry.connGen);
     } else {
       const localLease = localLeases.get(entry.hostKey) ?? null;
       if (localLease && !isOwnHumanLease(next, localLease)) {
         localLeases.delete(entry.hostKey);
-      } else if (localLease && next.lease?.expiresAt) {
-        localLease.expiresAt = next.lease.expiresAt;
+      } else if (localLease) {
+        localLease.connGen = entry.connGen;
+        if (next.lease?.expiresAt) localLease.expiresAt = next.lease.expiresAt;
       }
     }
     notifySeatCueIfChanged(entry.hostKey, next);
@@ -690,18 +759,19 @@ export function createCuViewer(options: CuViewerOptions) {
     if (disposed || hostStatuses.get(entry.hostKey) !== entry) return null;
     if (!force) {
       if (entry.statusFlight) return entry.statusFlight;
-      if (entry.status !== null && entry.eventSource !== null && entry.eventSource.readyState !== 2) {
+      if (!entry.disconnected && entry.status !== null && entry.eventSource !== null && entry.eventSource.readyState !== 2) {
         return entry.status;
       }
     }
     const entryGen = entry.generation;
+    const reqConnGen = entry.connGen;
     const endpoint = entry.endpoint;
     let flight: Promise<CuStatus | null> | null = null;
     flight = (async (): Promise<CuStatus | null> => {
       try {
         const response = await options.request(endpoint, '/api/cu/status', { timeoutMs: CU_REQUEST_TIMEOUT_MS });
         const data = await readJson(response);
-        if (!hostEntryAlive(entry, entryGen)) return null;
+        if (!hostEntryAlive(entry, entryGen) || entry.connGen !== reqConnGen) return null;
         if (!response.ok) {
           if (isViewerActive() && activeHostKey === entry.hostKey) {
             notice = { kind: 'error', text: responseError(response, data, `Status failed (${response.status})`) };
@@ -710,10 +780,10 @@ export function createCuViewer(options: CuViewerOptions) {
           return null;
         }
         const decoded = decodeCuStatus(data);
-        if (decoded) acceptHostStatus(entry, decoded);
+        if (decoded) acceptHostStatus(entry, decoded, { connGen: reqConnGen });
         return entry.status;
       } catch (error) {
-        if (!hostEntryAlive(entry, entryGen)) return null;
+        if (!hostEntryAlive(entry, entryGen) || entry.connGen !== reqConnGen) return null;
         if (isViewerActive() && activeHostKey === entry.hostKey) {
           notice = { kind: 'error', text: `Could not reach computer-use broker: ${errorMessage(error)}` };
           renderHeaderAndControls();
@@ -739,6 +809,10 @@ export function createCuViewer(options: CuViewerOptions) {
         subscribers: new Set([sub]),
         status: null,
         latestEpoch: -1,
+        connGen: 1,
+        disconnected: false,
+        awaitingReconnectHello: false,
+        streamConnectedOnce: false,
         statusFlight: null,
         eventSource: null,
         retryTimer: null,
@@ -806,7 +880,52 @@ export function createCuViewer(options: CuViewerOptions) {
     if (!hostSupported(host)) return null;
     const hostKey = keyOf(host);
     const entry = hostStatuses.get(hostKey);
-    return cuSessionListCue(entry?.status ?? null, localLeases.get(hostKey) ?? null);
+    if (!entry || entry.disconnected) return null;
+    return cuSessionListCue(entry.status, localLeases.get(hostKey) ?? null);
+  }
+
+  async function releaseLeaseBestEffort(
+    endpoint: Readonly<HostEndpoint>,
+    hostKey: string,
+    held: Pick<HeldHumanLease, 'leaseId' | 'leaseToken' | 'connGen'>,
+  ): Promise<void> {
+    if (releasingLeaseIds.has(held.leaseId)) return;
+    releasingLeaseIds.add(held.leaseId);
+    try {
+      const response = await options.request(endpoint, '/api/cu/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leaseId: held.leaseId, leaseToken: held.leaseToken, handBack: true }),
+        timeoutMs: CU_REQUEST_TIMEOUT_MS,
+      });
+      const data = await readJson(response);
+      if (disposed || !response.ok) return;
+      const released = decodeCuRelease(data);
+      const entry = hostStatuses.get(hostKey);
+      if (released && entry && entry.connGen === held.connGen && released.epoch >= entry.latestEpoch) {
+        acceptHostStatus(entry, {
+          state: released.state,
+          epoch: released.epoch,
+          lease: released.lease,
+          preempted: null,
+          health: entry.status?.health ?? null,
+        }, { connGen: held.connGen });
+      }
+    } catch {
+      // Best-effort release on surface teardown; broker TTL remains the safety net.
+    } finally {
+      releasingLeaseIds.delete(held.leaseId);
+    }
+  }
+
+  function releaseHeldLeaseForHost(hostKey: string): void {
+    const held = localLeases.get(hostKey);
+    if (!held) return;
+    localLeases.delete(hostKey);
+    const entry = hostStatuses.get(hostKey);
+    notifySeatCueIfChanged(hostKey, entry && !entry.disconnected ? entry.status : null);
+    renderPanelSummary();
+    void releaseLeaseBestEffort(held.endpoint, hostKey, held);
   }
 
   function startHeartbeat(ownerGen: number, ownerHostKey: string, endpoint: Readonly<HostEndpoint>, intervalSec: number): void {
@@ -822,8 +941,9 @@ export function createCuViewer(options: CuViewerOptions) {
   async function sendHeartbeat(ownerGen: number, ownerHostKey: string, endpoint: Readonly<HostEndpoint>): Promise<void> {
     const lease = localLeases.get(ownerHostKey);
     if (!lease || !owns(ownerGen, ownerHostKey)) { clearHeartbeat(); return; }
+    const reqConnGen = hostStatuses.get(ownerHostKey)?.connGen ?? lease.connGen;
     try {
-      const response = await options.request(endpoint, '/api/cu/heartbeat', {
+      const response = await options.request(lease.endpoint, '/api/cu/heartbeat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ leaseId: lease.leaseId, leaseToken: lease.leaseToken }),
@@ -831,19 +951,24 @@ export function createCuViewer(options: CuViewerOptions) {
       });
       const data = await readJson(response);
       if (!owns(ownerGen, ownerHostKey)) return;
+      const entry = hostStatuses.get(ownerHostKey);
       if (response.ok) {
         const updated = decodeCuStatus(data);
-        const entry = hostStatuses.get(ownerHostKey);
-        if (updated && entry && updated.epoch >= entry.latestEpoch) {
+        if (updated && entry && entry.connGen === reqConnGen && updated.epoch >= entry.latestEpoch) {
           if (updated.lease?.expiresAt) lease.expiresAt = updated.lease.expiresAt;
-          const merged: CuStatus = status
-            ? { ...status, state: updated.state, epoch: updated.epoch, lease: updated.lease ?? status.lease }
-            : updated;
-          acceptHostStatus(entry, merged);
+          if (!entry.disconnected) {
+            const merged: CuStatus = status
+              ? { ...status, state: updated.state, epoch: updated.epoch, lease: updated.lease ?? status.lease }
+              : updated;
+            acceptHostStatus(entry, merged, { connGen: reqConnGen });
+          } else {
+            renderHeaderAndControls();
+          }
         }
         return;
       }
       if (response.status === 409 || response.status === 403) {
+        if (entry && entry.connGen !== reqConnGen) return;
         const busy = decodeCuBusyError(data, 'Human control ended');
         handleLocalLeaseLost(ownerGen, ownerHostKey, endpoint, busy);
       }
@@ -868,7 +993,7 @@ export function createCuViewer(options: CuViewerOptions) {
       text: busy ? formatBusyMessage(busy, now()) : 'Control ended — returned to view-only',
     };
     const entry = hostStatuses.get(ownerHostKey);
-    notifySeatCueIfChanged(ownerHostKey, entry?.status ?? status);
+    notifySeatCueIfChanged(ownerHostKey, entry && !entry.disconnected ? entry.status : null);
     renderHeaderAndControls();
     if (wasInteractive) void loadViewerTicket(ownerGen, ownerHostKey, endpoint, 'view-only');
     if (entry) void fetchHostStatus(entry, true);
@@ -879,6 +1004,7 @@ export function createCuViewer(options: CuViewerOptions) {
     ownerGen: number,
     ownerHostKey: string,
     endpoint: Readonly<HostEndpoint>,
+    entryConnGen: number,
   ): void {
     if (!owns(ownerGen, ownerHostKey)) return;
     const localLease = localLeases.get(ownerHostKey) ?? null;
@@ -897,8 +1023,9 @@ export function createCuViewer(options: CuViewerOptions) {
         };
         void loadViewerTicket(ownerGen, ownerHostKey, endpoint, 'view-only');
       }
-    } else if (localLease && next.lease?.expiresAt) {
-      localLease.expiresAt = next.lease.expiresAt;
+    } else if (localLease) {
+      localLease.connGen = entryConnGen;
+      if (next.lease?.expiresAt) localLease.expiresAt = next.lease.expiresAt;
     }
     renderHeaderAndControls();
   }
@@ -910,6 +1037,7 @@ export function createCuViewer(options: CuViewerOptions) {
     ticketMode: 'view-only' | 'interactive',
   ): Promise<void> {
     const seq = ++ticketSequence;
+    const reqConnGen = hostStatuses.get(ownerHostKey)?.connGen ?? 0;
     const localLease = localLeases.get(ownerHostKey) ?? null;
     const body: Record<string, unknown> = { mode: ticketMode };
     if (ticketMode === 'interactive' && localLease) {
@@ -925,6 +1053,8 @@ export function createCuViewer(options: CuViewerOptions) {
       });
       const data = await readJson(response);
       if (!owns(ownerGen, ownerHostKey) || seq !== ticketSequence) return;
+      const entry = hostStatuses.get(ownerHostKey);
+      if (entry && entry.connGen !== reqConnGen) return;
       if (!response.ok) {
         if (ticketMode === 'interactive' && (response.status === 403 || response.status === 409)) {
           handleLocalLeaseLost(ownerGen, ownerHostKey, endpoint, decodeCuBusyError(data, 'Interactive lease unavailable'));
@@ -940,7 +1070,7 @@ export function createCuViewer(options: CuViewerOptions) {
         showPlaceholder(iframeError);
         return;
       }
-      const latestEpoch = hostStatuses.get(ownerHostKey)?.latestEpoch ?? -1;
+      const latestEpoch = entry?.latestEpoch ?? -1;
       if (ticket.epoch !== null && ticket.epoch < latestEpoch) return;
       if (ticketMode === 'view-only' && isOwnHumanLease(status, localLeases.get(ownerHostKey) ?? null)) return;
       mode = ticket.mode;
@@ -958,6 +1088,7 @@ export function createCuViewer(options: CuViewerOptions) {
     const ownerGen = generation;
     const ownerHostKey = activeHostKey;
     const endpoint = Object.freeze({ ...activeHost });
+    const reqConnGen = hostStatuses.get(ownerHostKey)?.connGen ?? 0;
     actionBusy = true;
     notice = null;
     renderHeaderAndControls();
@@ -970,7 +1101,23 @@ export function createCuViewer(options: CuViewerOptions) {
         timeoutMs: CU_REQUEST_TIMEOUT_MS,
       });
       const data = await readJson(response);
-      if (!owns(ownerGen, ownerHostKey)) return;
+      const stillOwned = owns(ownerGen, ownerHostKey);
+      if (!stillOwned) {
+        // The controlling surface retired while takeover was in flight: if the
+        // broker granted a lease, release that exact grant against its original
+        // endpoint immediately so the browser never strands control.
+        if (response.ok) {
+          const late = decodeCuTakeover(data);
+          if (late) {
+            void releaseLeaseBestEffort(endpoint, ownerHostKey, {
+              leaseId: late.leaseId,
+              leaseToken: late.leaseToken,
+              connGen: reqConnGen,
+            });
+          }
+        }
+        return;
+      }
       const entry = hostStatuses.get(ownerHostKey);
       const latestEpoch = entry?.latestEpoch ?? -1;
       if (response.status === 409) {
@@ -979,7 +1126,7 @@ export function createCuViewer(options: CuViewerOptions) {
           kind: 'busy',
           text: formatBusyMessage(busy, now()),
         };
-        if (busy.holder && (busy.epoch === null || busy.epoch >= latestEpoch)) {
+        if (busy.holder && (!entry || entry.connGen === reqConnGen) && (busy.epoch === null || busy.epoch >= latestEpoch)) {
           const nextStatus: CuStatus = {
             state: busy.state === 'human' ? 'human' : (status?.state ?? 'human'),
             epoch: busy.epoch ?? (status?.epoch ?? 0),
@@ -987,7 +1134,7 @@ export function createCuViewer(options: CuViewerOptions) {
             preempted: status?.preempted ?? null,
             health: status?.health ?? null,
           };
-          if (entry) acceptHostStatus(entry, nextStatus);
+          if (entry) acceptHostStatus(entry, nextStatus, { connGen: reqConnGen });
           else { status = nextStatus; renderHeaderAndControls(); }
         } else {
           renderHeaderAndControls();
@@ -1005,7 +1152,15 @@ export function createCuViewer(options: CuViewerOptions) {
         renderHeaderAndControls();
         return;
       }
-      if (result.epoch < latestEpoch) return;
+      if (entry && (entry.connGen !== reqConnGen || result.epoch < latestEpoch)) {
+        // Stale or superseded connection generation: never adopt or strand the grant.
+        void releaseLeaseBestEffort(endpoint, ownerHostKey, {
+          leaseId: result.leaseId,
+          leaseToken: result.leaseToken,
+          connGen: reqConnGen,
+        });
+        return;
+      }
       // Invalidate any earlier in-flight view-only ticket fetch before mounting
       // interactive control so a late view-only reply cannot replace the iframe.
       ++ticketSequence;
@@ -1015,6 +1170,8 @@ export function createCuViewer(options: CuViewerOptions) {
         epoch: result.epoch,
         heartbeatIntervalSec: result.heartbeatIntervalSec,
         expiresAt: result.lease?.expiresAt ?? null,
+        endpoint,
+        connGen: entry?.connGen ?? reqConnGen,
       });
       const nextStatus: CuStatus = {
         state: result.state,
@@ -1025,7 +1182,7 @@ export function createCuViewer(options: CuViewerOptions) {
       };
       mode = 'interactive';
       notice = null;
-      if (entry) acceptHostStatus(entry, nextStatus);
+      if (entry) acceptHostStatus(entry, nextStatus, { connGen: entry.connGen });
       else status = nextStatus;
       startHeartbeat(ownerGen, ownerHostKey, endpoint, result.heartbeatIntervalSec);
       if (result.viewer) {
@@ -1052,9 +1209,11 @@ export function createCuViewer(options: CuViewerOptions) {
     if (!lease) return;
     const ownerGen = generation;
     const ownerHostKey = activeHostKey;
-    const endpoint = Object.freeze({ ...activeHost });
+    const endpoint = lease.endpoint;
+    const reqConnGen = hostStatuses.get(ownerHostKey)?.connGen ?? lease.connGen;
     actionBusy = true;
     notice = null;
+    releasingLeaseIds.add(lease.leaseId);
     renderHeaderAndControls();
     try {
       const response = await options.request(endpoint, '/api/cu/release', {
@@ -1064,7 +1223,22 @@ export function createCuViewer(options: CuViewerOptions) {
         timeoutMs: CU_REQUEST_TIMEOUT_MS,
       });
       const data = await readJson(response);
-      if (!owns(ownerGen, ownerHostKey)) return;
+      if (!owns(ownerGen, ownerHostKey)) {
+        if (response.ok) {
+          const released = decodeCuRelease(data);
+          const entry = hostStatuses.get(ownerHostKey);
+          if (released && entry && entry.connGen === reqConnGen && released.epoch >= entry.latestEpoch) {
+            acceptHostStatus(entry, {
+              state: released.state,
+              epoch: released.epoch,
+              lease: released.lease,
+              preempted: null,
+              health: entry.status?.health ?? null,
+            }, { connGen: reqConnGen });
+          }
+        }
+        return;
+      }
       if (response.status === 409 || response.status === 403) {
         handleLocalLeaseLost(ownerGen, ownerHostKey, endpoint, decodeCuBusyError(data, 'Lease already released'));
         return;
@@ -1080,7 +1254,7 @@ export function createCuViewer(options: CuViewerOptions) {
       localLeases.delete(ownerHostKey);
       clearHeartbeat();
       mode = 'view-only';
-      if (released && released.epoch >= latestEpoch) {
+      if (released && (!entry || entry.connGen === reqConnGen) && released.epoch >= latestEpoch) {
         notice = released.handedBackTo
           ? { kind: 'info', text: `Handed back to ${released.handedBackTo.label || released.handedBackTo.sessionId || 'agent'}.` }
           : null;
@@ -1091,10 +1265,10 @@ export function createCuViewer(options: CuViewerOptions) {
           preempted: null,
           health: status?.health ?? null,
         };
-        if (entry) acceptHostStatus(entry, nextStatus);
+        if (entry) acceptHostStatus(entry, nextStatus, { connGen: reqConnGen });
         else { status = nextStatus; renderHeaderAndControls(); }
       } else {
-        notifySeatCueIfChanged(ownerHostKey, entry?.status ?? status);
+        notifySeatCueIfChanged(ownerHostKey, entry && !entry.disconnected ? entry.status : null);
         renderHeaderAndControls();
       }
       void loadViewerTicket(ownerGen, ownerHostKey, endpoint, 'view-only');
@@ -1103,6 +1277,7 @@ export function createCuViewer(options: CuViewerOptions) {
       notice = { kind: 'error', text: `Hand back failed: ${errorMessage(error)}` };
       renderHeaderAndControls();
     } finally {
+      releasingLeaseIds.delete(lease.leaseId);
       if (owns(ownerGen, ownerHostKey)) {
         actionBusy = false;
         renderHeaderAndControls();
@@ -1140,6 +1315,7 @@ export function createCuViewer(options: CuViewerOptions) {
       const prevUrl = iframeUrl;
       const prevError = iframeError;
       clearAllIframes();
+      clearSuspendedPanel();
       if (targetSurface === 'pane') {
         const container = ensureContainer();
         options.closeOtherViews();
@@ -1176,6 +1352,7 @@ export function createCuViewer(options: CuViewerOptions) {
     }
 
     // Tear down any prior active surface / host before mounting fresh.
+    clearSuspendedPanel();
     const prevHostKey = activeHostKey;
     clearHeartbeat();
     clearCountdown();
@@ -1186,6 +1363,7 @@ export function createCuViewer(options: CuViewerOptions) {
       setPanelExpandedDom(false);
     }
     if (prevHostKey && prevHostKey !== hostKey) {
+      releaseHeldLeaseForHost(prevHostKey);
       unsubscribeHost(prevHostKey, 'viewer');
     }
 
@@ -1257,7 +1435,7 @@ export function createCuViewer(options: CuViewerOptions) {
   }
 
   function openPanel(opts: { persist?: boolean } = {}): void {
-    if (disposed) return;
+    if (disposed || sessionViewOccluded) return;
     const session = options.currentSession();
     const host = session ? options.host(session.host ?? null) : null;
     if (!session || !hostSupported(host)) return;
@@ -1287,7 +1465,14 @@ export function createCuViewer(options: CuViewerOptions) {
     else openPanel({ persist: true });
   }
 
-  function close(): void {
+  function clearSuspendedPanel(): void {
+    suspendedPanelForOcclusion = false;
+    suspendedSelectionGen = null;
+    suspendedSessionKey = null;
+  }
+
+  function closeActiveSurface(clearSuspended: boolean): void {
+    if (clearSuspended) clearSuspendedPanel();
     if (disposed || surface === 'none') return;
     const prevHostKey = activeHostKey;
     surface = 'none';
@@ -1306,11 +1491,49 @@ export function createCuViewer(options: CuViewerOptions) {
     mode = 'view-only';
     hidePaneDom();
     setPanelExpandedDom(false);
-    if (prevHostKey) unsubscribeHost(prevHostKey, 'viewer');
+    if (prevHostKey) {
+      // Never retain a human lease without a visible Hand Back control.
+      releaseHeldLeaseForHost(prevHostKey);
+      unsubscribeHost(prevHostKey, 'viewer');
+    }
+  }
+
+  function close(): void {
+    closeActiveSurface(true);
+  }
+
+  function setOccluded(occluded: boolean): void {
+    if (disposed || sessionViewOccluded === occluded) return;
+    sessionViewOccluded = occluded;
+    if (occluded) {
+      if (surface === 'panel') {
+        suspendedPanelForOcclusion = true;
+        suspendedSelectionGen = options.selectionGeneration?.() ?? null;
+        suspendedSessionKey = panelSessionKey;
+        closeActiveSurface(false);
+      }
+      return;
+    }
+    const shouldRestore = suspendedPanelForOcclusion;
+    const prevSelGen = suspendedSelectionGen;
+    const prevSessionKey = suspendedSessionKey;
+    clearSuspendedPanel();
+    if (!shouldRestore || surface !== 'none' || isAnyTakeoverOpen()) return;
+    const currentSelGen = options.selectionGeneration?.() ?? null;
+    if (prevSelGen !== null && currentSelGen !== prevSelGen) return;
+    const session = options.currentSession();
+    const host = session ? options.host(session.host ?? null) : null;
+    if (!session || !hostSupported(host)) return;
+    const sKey = sessionIdentityKey(session, host);
+    if (prevSessionKey !== null && sKey !== prevSessionKey) return;
+    openSurface('panel', host, sKey);
   }
 
   function dispose(): void {
     close();
+    for (const hostKey of [...localLeases.keys()]) {
+      releaseHeldLeaseForHost(hostKey);
+    }
     for (const entry of [...hostStatuses.values()]) {
       entry.generation += 1;
       disconnectHostStream(entry);
@@ -1329,6 +1552,7 @@ export function createCuViewer(options: CuViewerOptions) {
     openPanel,
     closePanel,
     togglePanel,
+    setOccluded,
     refresh,
     isOpen,
     isPanelOpen,

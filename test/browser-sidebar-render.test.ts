@@ -578,6 +578,14 @@ test('sidebar renders host-level computer-use seat cue, invalidates memo on seat
 
   const filtered = renderSidebar(options({ active, tab: 'active', multiHost: true, hosts, selfHostId: SELF, query: 'Local', cuSeat: (hostId?: string | null) => hostId === CU ? humanCue : null }), memo);
   assert.deepEqual([...(filtered.visibleHostIds ?? [])], [SELF], 'filtered-out CU host leaves visibleHostIds');
+
+  // Collapsing the CU host section hides all of its rows, so it must drop out of visibleHostIds.
+  const collapsedHost = renderSidebar(options({
+    active, tab: 'active', multiHost: true, hosts, selfHostId: SELF,
+    collapsed: new Set([`host:${CU}`]),
+    cuSeat: (hostId?: string | null) => hostId === CU ? humanCue : null,
+  }), memo);
+  assert.deepEqual([...(collapsedHost.visibleHostIds ?? [])], [SELF], 'collapsed CU host section leaves visibleHostIds');
 });
 
 export {};
