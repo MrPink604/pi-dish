@@ -135,6 +135,18 @@ function writeJsonl(file, rows) {
         const peerRegDir = (0, node_path_1.join)(fleet.peer.home, '.pi/dish/sessions');
         (0, node_fs_1.mkdirSync)(peerRegDir, { recursive: true });
         (0, node_fs_1.writeFileSync)((0, node_path_1.join)(peerRegDir, `${OMP_PARENT_NATIVE}.json`), JSON.stringify(bridgeClaim));
+        // Wait for fleet.peer's 500ms bridge registry cache (populated by the fleet fixture's #tabAll load)
+        // to roll over and expose the newly written claim before reloading; otherwise the reload's Active
+        // fetch can hit the stale empty cache and wait 10s for the next sidebar poll (past expect.poll's 5s timeout).
+        await fixtures_js_1.expect.poll(async () => {
+            const res = await fetch(`${fleet.peer.base}/api/sessions?active=1`, {
+                headers: { Authorization: `Bearer ${fleet.peer.token}` },
+            });
+            if (!res.ok)
+                return false;
+            const body = await res.json();
+            return Array.isArray(body.active) && body.active.some(row => row.id === OMP_PARENT_ROUTE);
+        }).toBe(true);
         // Mount peer through the hub's real /hosts/desktop/ proxy.
         (0, node_fs_1.writeFileSync)((0, node_path_1.join)(fleet.self.home, '.pi/dish/settings.json'), JSON.stringify({
             remotes: [{ name: 'desktop', url: fleet.peer.base, token: fleet.peer.token }],
@@ -153,6 +165,7 @@ function writeJsonl(file, rows) {
         })).toBe(true);
         await fleet.select(fleet.peer, OMP_PARENT_ROUTE);
         await fixtures_js_1.expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
+        await fixtures_js_1.expect.poll(() => bridgeClients.size).toBeGreaterThanOrEqual(1);
         // 1. Finished blocks (real server messages): single -> BoraCheck, batch -> chip bar, forged -> ZERO links!
         const toolCalls = page.locator('#messages details.tool-call');
         await (0, fixtures_js_1.expect)(toolCalls).toHaveCount(3);

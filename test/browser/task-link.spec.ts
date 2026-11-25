@@ -140,6 +140,18 @@ test('task tool blocks link to real running and finished OMP subagents across /h
     mkdirSync(peerRegDir, { recursive: true });
     writeFileSync(join(peerRegDir, `${OMP_PARENT_NATIVE}.json`), JSON.stringify(bridgeClaim));
 
+    // Wait for fleet.peer's 500ms bridge registry cache (populated by the fleet fixture's #tabAll load)
+    // to roll over and expose the newly written claim before reloading; otherwise the reload's Active
+    // fetch can hit the stale empty cache and wait 10s for the next sidebar poll (past expect.poll's 5s timeout).
+    await expect.poll(async () => {
+      const res = await fetch(`${fleet.peer.base}/api/sessions?active=1`, {
+        headers: { Authorization: `Bearer ${fleet.peer.token}` },
+      });
+      if (!res.ok) return false;
+      const body = await res.json() as { active?: Array<{ id?: string }> };
+      return Array.isArray(body.active) && body.active.some(row => row.id === OMP_PARENT_ROUTE);
+    }).toBe(true);
+
     // Mount peer through the hub's real /hosts/desktop/ proxy.
     writeFileSync(join(fleet.self.home, '.pi/dish/settings.json'), JSON.stringify({
       remotes: [{ name: 'desktop', url: fleet.peer.base, token: fleet.peer.token }],
@@ -159,6 +171,7 @@ test('task tool blocks link to real running and finished OMP subagents across /h
     })).toBe(true);
     await fleet.select(fleet.peer, OMP_PARENT_ROUTE);
     await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
+    await expect.poll(() => bridgeClients.size).toBeGreaterThanOrEqual(1);
 
     // 1. Finished blocks (real server messages): single -> BoraCheck, batch -> chip bar, forged -> ZERO links!
     const toolCalls = page.locator('#messages details.tool-call');

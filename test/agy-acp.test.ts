@@ -401,7 +401,8 @@ test('a dropped server connection does not lose a running turn', { timeout: 6000
     assert.equal(hello.turnInProgress, true, 'the replacement connection rejoins the running turn');
     await until(() => secondEvents.some(entry => entry.event === 'turn_end'));
     assert.equal(assistantText(secondEvents), 'First part. Second part.', 'the whole reply arrives after reconnect');
-    assert.equal(readClaim(sessionId).turnInProgress, false);
+    // The relay broadcasts turn_end over the socket before writeClaim() atomically replaces the claim file.
+    await until(() => readClaim(sessionId).turnInProgress === false, 5000);
 
     const messages = await get(sessionPath(sessionId, '/messages'));
     assert.equal(messages.status, 200, JSON.stringify(messages.body));

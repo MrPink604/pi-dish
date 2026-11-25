@@ -1425,23 +1425,62 @@ test('a script cannot call new_context, bot_create or bot_update', async (t) => 
     assert.ok(!bot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'no new window');
 });
 test('a script past the time cap ends with an error, whatever its options line asks, and the bot is free again', async (t) => {
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    let reachedWait;
+    const waitEntered = new Promise(resolve => { reachedWait = resolve; });
     let stopped = false;
     const port = async (args, signal) => {
         if (args[0] !== 'wait')
             throw new Error(`unexpected ${args[0]}`);
-        return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => { stopped = true; reject(new Error('stopped')); }, { once: true }));
+        return new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => { stopped = true; reject(new Error('stopped')); }, { once: true });
+            reachedWait();
+        });
     };
-    const bot = await openTestBot(t, port, { scriptTimeoutMs: 300 });
-    bot.respond(script(bot, '// @options: {"timeout_ms": 3600000}\nawait tools.sessions({ action: "wait", ref: "ffff0000", timeout: 600 });'), bot.faux.fauxAssistantMessage('It timed out.'), bot.faux.fauxAssistantMessage('Free again.'));
-    await bot.runtime.prompt('Wait a long time', 'followUp');
-    await until(() => said(bot, 'It timed out.'), 'the script ends');
-    const result = toolResults(bot)[0];
-    assert.equal(result.isError, true);
-    assert.match(textOf(result), /timed out/i);
-    await until(() => stopped, 'the call the script waited on is stopped');
-    await until(() => !bot.runtime.busy, 'the run ends');
-    await bot.runtime.prompt('Still there?', 'followUp');
-    await until(() => said(bot, 'Free again.'), 'the bot answers the next message');
+    let timersMocked = false;
+    const resetTimers = () => {
+        if (!timersMocked)
+            return;
+        timersMocked = false;
+        t.mock.timers.reset();
+    };
+    // Control setTimeout and Date so the 300ms cap cannot fire while QuickJS / worker startup is under load.
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+    timersMocked = true;
+    try {
+        const bot = await openTestBot(t, port, { scriptTimeoutMs: 300 });
+        bot.respond(script(bot, '// @options: {"timeout_ms": 3600000}\nawait tools.sessions({ action: "wait", ref: "ffff0000", timeout: 600 });'), bot.faux.fauxAssistantMessage('It timed out.'), bot.faux.fauxAssistantMessage('Free again.'));
+        await bot.runtime.prompt('Wait a long time', 'followUp');
+        let guard;
+        try {
+            await Promise.race([
+                waitEntered,
+                new Promise((_resolve, reject) => {
+                    guard = realSetTimeout(() => reject(new Error('timed out: script never reached sessions wait')), 10_000);
+                }),
+            ]);
+        }
+        finally {
+            if (guard !== undefined)
+                realClearTimeout(guard);
+        }
+        t.mock.timers.tick(299);
+        assert.equal(stopped, false, 'the script is still waiting before the cap');
+        t.mock.timers.tick(1);
+        resetTimers();
+        await until(() => said(bot, 'It timed out.'), 'the script ends');
+        const result = toolResults(bot)[0];
+        assert.equal(result.isError, true);
+        assert.match(textOf(result), /timed out/i);
+        await until(() => stopped, 'the call the script waited on is stopped');
+        await until(() => !bot.runtime.busy, 'the run ends');
+        await bot.runtime.prompt('Still there?', 'followUp');
+        await until(() => said(bot, 'Free again.'), 'the bot answers the next message');
+    }
+    finally {
+        resetTimers();
+    }
 });
 test('a worker whose answer a script waited for does not report it, and reports its next turn', async (t) => {
     const worker = scriptedWorker();
