@@ -768,17 +768,16 @@ test.describe('session Desktop panel version skew', () => {
   });
 });
 
-test('Slice 2 phone (390x844): per-session full ownerId badges, waiting-for-desktop cue, and SSE resync epoch reset', async ({ page, fleet }) => {
+test('Slice 2 phone (390x844): per-session full ownerId badges, desktop-access-lost cue, and SSE resync epoch reset', async ({ page, fleet }) => {
   await installTrackedCuEventSource(page);
   const ownerOne = 'cu-owner-abcdef0123456789abcdef0123456701';
   const ownerTwoNearMiss = 'cu-owner-abcdef0123456789abcdef0123456702';
   const expiresAgent = new Date(Date.now() + 90_000).toISOString();
-  const expiresHuman = new Date(Date.now() + 600_000).toISOString();
-  let seatState: 'agent' | 'human' = 'agent';
+  let seatState: 'agent' | 'idle' = 'agent';
   let epoch = 7;
   let generation = 'gen-1';
   let activeOwner: string | null = ownerOne;
-  let rowTwoWaiting = false;
+  let rowTwoAccessLost = false;
 
   await page.route(`${fleet.self.base}/api/hosts`, async route => {
     const response = await route.fetch();
@@ -813,8 +812,8 @@ test('Slice 2 phone (390x844): per-session full ownerId badges, waiting-for-desk
           isActive: true,
           host: RELAY_HOST_ID,
           lastActivity: Date.now() - 1000,
-          cuOwnerId: rowTwoWaiting ? undefined : ownerTwoNearMiss,
-          ...(rowTwoWaiting ? { cuWaitingForDesktop: true } : {}),
+          cuOwnerId: rowTwoAccessLost ? undefined : ownerTwoNearMiss,
+          ...(rowTwoAccessLost ? { cuDesktopAccessLost: true } : {}),
         },
       ],
       previous: [],
@@ -849,10 +848,10 @@ test('Slice 2 phone (390x844): per-session full ownerId badges, waiting-for-desk
       : {
           ok: true,
           generation,
-          state: 'human',
+          state: 'idle',
           epoch,
-          lease: { leaseId: `h-${epoch}`, holderKind: 'human', label: 'pi-dish', expiresAt: expiresHuman },
-          preempted: { sessionId: 'cu-agent-opaque', ownerId: ownerOne, label: 'omp' },
+          lease: null,
+          preempted: null,
         },
   }));
   await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/viewer/ticket`, route => route.fulfill({
@@ -913,27 +912,31 @@ test('Slice 2 phone (390x844): per-session full ownerId badges, waiting-for-desk
   await expect(page.locator('#cuPanelSummary')).toHaveText('agent: this session');
   await expect(page.locator('#cuPanelSummary')).toHaveAttribute('data-owner', 'this');
 
-  // Human takeover + waiting-for-desktop flag on rowTwo -> displays "waiting for desktop".
-  seatState = 'human';
+  // Re-adopted/expired session with cuDesktopAccessLost on rowTwo shows honest
+  // "desktop access lost — restart session" badge even when broker seat is idle.
+  seatState = 'idle';
   epoch = 1;
-  rowTwoWaiting = true;
+  rowTwoAccessLost = true;
   await page.evaluate(() => {
     const streams = Reflect.get(window, '__cuPanelStreams') as EventSource[];
     const open = [...streams].reverse().find(s => s.readyState === 1)!;
-    open.dispatchEvent(new MessageEvent('lease_changed', {
+    open.dispatchEvent(new MessageEvent('seat_idle', {
       data: JSON.stringify({
         generation: 'gen-2',
         cursor: 1,
-        state: 'human',
+        state: 'idle',
         epoch: 1,
-        lease: { leaseId: 'h-1', holderKind: 'human', label: 'pi-dish' },
+        lease: null,
         preempted: null,
       }),
     }));
   });
   await page.evaluate(() => fixtureApp.features.sidebarLists.refresh());
+  await expect(page.locator('#cuPanelSummary')).toHaveText('desktop access lost — restart session');
+  await page.locator('#cuSessionPanelToggle').click();
+  await expect(page.locator('#cuPanelSeatBadge')).toHaveText('Desktop access lost — restart session');
   await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
-  await expect(rowTwo.locator('.cu-seat-cue')).toHaveText('waiting for desktop');
+  await expect(rowTwo.locator('.cu-seat-cue')).toHaveText('desktop access lost — restart session');
 });
 
 export {};

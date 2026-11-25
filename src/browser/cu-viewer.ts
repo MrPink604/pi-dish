@@ -34,7 +34,7 @@ export interface CuViewerOptions {
     id?: string | null;
     host?: string | null;
     cuOwnerId?: string | null;
-    cuWaitingForDesktop?: boolean;
+    cuDesktopAccessLost?: boolean;
   } | null;
   supports: (host: CuViewerHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;

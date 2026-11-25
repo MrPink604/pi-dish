@@ -18,8 +18,8 @@ export interface SessionOperationObservations {
     recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string, sourceBasis?: string | null): void;
     /** Invoked after a session is explicitly closed or hibernated so external leases release/cancel cleanly. */
     onSessionStopped?(sessionId: string): Promise<void> | void;
-    /** Optional non-secret CU seat disposition for async spawn completion. */
-    cuSeatState?(sessionId: string): 'waiting_for_desktop' | null;
+    /** Checks whether a Slice-2 capable CU broker manages omp sessions on this host (throws 503 if configured broker is unreachable). */
+    cuCheckSlice2?(): Promise<boolean>;
 }
 export interface CreateSessionOptions {
     harness?: unknown;
@@ -53,7 +53,6 @@ export type SessionSpawnOperation = {
     status: 'ready';
     createdAt: number;
     sessionId: string;
-    cuSeat?: 'waiting_for_desktop';
 } | {
     status: 'error';
     createdAt: number;
@@ -103,6 +102,10 @@ export type SessionOperationOutcome = NoActionOutcome | StoppedOutcome | StopUnc
 export interface SessionOperationBody {
     success?: true;
     error?: string;
+    code?: string;
+    state?: string | null;
+    epoch?: number | null;
+    holder?: Record<string, unknown> | null;
     id?: string;
     placement?: 'rpc' | 'tmux';
     paneId?: string;

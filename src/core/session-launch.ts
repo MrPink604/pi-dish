@@ -142,6 +142,89 @@ const REGISTRY_POLL_MAX_MS = 300;
 const MAX_BRIDGE_SOCKET_PATH_BYTES = 103;
 const BRIDGE_SOCKET_BASENAME = `${'0'.repeat(24)}.sock`;
 
+const RESERVED_CU_BROKER_ENV_KEYS = [
+  'CU_BROKER_SESSION_SECRET',
+  'CU_BROKER_CLAIM_NONCE',
+  'CU_BROKER_CLAIM_FILE',
+  'CU_BROKER_SESSION_ID',
+  'CU_BROKER_LABEL',
+  'CU_BROKER_MCP_TOKEN',
+] as const;
+
+const ENV_ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+
+/**
+ * Strip reserved `CU_BROKER_*` assignments from both the tmux `-e` env map and
+ * any leading launch command / `env` wrappers before applying the managed
+ * `env -u ... <allowlist>` prefix.
+ */
+function stripReservedCuBrokerEnv(env: HarnessEnvironment, command: readonly unknown[]): unknown[] {
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('CU_BROKER_')) delete env[key];
+  }
+  let start = 0;
+  while (start < command.length) {
+    const word = command[start];
+    const match = typeof word === 'string' ? ENV_ASSIGNMENT_RE.exec(word) : null;
+    if (match && match[1].startsWith('CU_BROKER_')) {
+      start++;
+      continue;
+    }
+    break;
+  }
+  let trimmed = command.slice(start);
+  while (trimmed.length >= 2 && (trimmed[0] === 'env' || trimmed[0] === '/usr/bin/env' || trimmed[0] === '/bin/env')) {
+    const keptArgs: unknown[] = [];
+    let idx = 1;
+    let stoppedAtDoubleDash = false;
+    while (idx < trimmed.length) {
+      const token = trimmed[idx];
+      if (typeof token !== 'string') break;
+      if (token === '--') {
+        stoppedAtDoubleDash = true;
+        idx++;
+        break;
+      }
+      if (token === '-u' || token === '--unset') {
+        const next = trimmed[idx + 1];
+        if (typeof next === 'string') {
+          if (!next.startsWith('CU_BROKER_')) keptArgs.push(token, next);
+          idx += 2;
+          continue;
+        }
+        keptArgs.push(token);
+        idx++;
+        continue;
+      }
+      if (token.startsWith('--unset=')) {
+        if (!token.slice('--unset='.length).startsWith('CU_BROKER_')) keptArgs.push(token);
+        idx++;
+        continue;
+      }
+      if (token.startsWith('-')) {
+        keptArgs.push(token);
+        idx++;
+        continue;
+      }
+      const match = ENV_ASSIGNMENT_RE.exec(token);
+      if (match) {
+        if (!match[1].startsWith('CU_BROKER_')) keptArgs.push(token);
+        idx++;
+        continue;
+      }
+      break;
+    }
+    const rest = trimmed.slice(idx);
+    if (!keptArgs.length && !stoppedAtDoubleDash && rest.length) {
+      trimmed = rest;
+      continue;
+    }
+    trimmed = [trimmed[0], ...keptArgs, ...(stoppedAtDoubleDash ? ['--'] : []), ...rest];
+    break;
+  }
+  return trimmed;
+}
+
 function forbidden(error: unknown): LaunchOutcome {
   if (error instanceof LifecycleInterruption) return { kind: 'interrupted', error, status: errorStatus(error, 500) };
   return { kind: 'fallback-forbidden', error, status: errorStatus(error, 500) };
@@ -447,17 +530,25 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     if (descriptor.id === 'omp' && observations.cuLeases?.configured()) {
       cuLeaseHandle = await observations.cuLeases.prepareSpawn({
         knownSessionId: restartPane?.sessionId ?? knownSessionId ?? null,
-        isRestart: !!restartPane,
       });
       if (cuLeaseHandle) {
-        // Inject the non-secret CU_BROKER_* variables via `env` in the pane command
-        // rather than `tmux -e` so `tmux new-session` never stores them in the
-        // session environment or leaks them to sibling windows. `env` execs the
-        // target in place, preserving the pane's exact (pid, pidStartTime).
-        const cuEnvPairs = Object.entries(cuLeaseHandle.env).map(([k, v]) => `${k}=${v}`);
-        if (cuEnvPairs.length) {
-          command = ['env', ...cuEnvPairs, ...command];
-        }
+        // P1-10 (+ Fleet addendum):
+        // 1. Strip reserved CU_BROKER_* assignments from `env` (so nothing enters
+        //    `tmux -e` or leaks into sibling windows) and from the launch command.
+        // 2. Explicitly `env -u` inherited CU_BROKER_* variables FIRST to clear any
+        //    pre-populated tmux session/server environment.
+        // 3. THEN set the managed allowlist (CU_BROKER_SESSION_ID,
+        //    CU_BROKER_CLAIM_FILE, CU_BROKER_LABEL) so omp keeps the fresh managed
+        //    CU_BROKER_SESSION_ID (needed by Fleet's future reclaim).
+        // `env` execs the target in place, preserving the pane's exact (pid, pidStartTime).
+        const sanitizedCommand = stripReservedCuBrokerEnv(env, command);
+        const unsetArgs = RESERVED_CU_BROKER_ENV_KEYS.flatMap(key => ['-u', key]);
+        const allowlistPairs = [
+          `CU_BROKER_SESSION_ID=${cuLeaseHandle.env.CU_BROKER_SESSION_ID}`,
+          `CU_BROKER_CLAIM_FILE=${cuLeaseHandle.env.CU_BROKER_CLAIM_FILE}`,
+          `CU_BROKER_LABEL=${cuLeaseHandle.env.CU_BROKER_LABEL}`,
+        ];
+        command = ['env', ...unsetArgs, ...allowlistPairs, ...sanitizedCommand];
       }
     }
     try {
@@ -493,14 +584,34 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       }
 
       // Bind the CU agent lease promptly to the omp pane's (pid, pidStartTime)
-      // right after spawnInTmux/respawnPane (never waiting for bridge registration)
+      // right after spawnInTmux (never waiting for bridge registration)
       // so cua-driver-mcp's claim handoff resolves immediately.
       if (cuLeaseHandle && observations.cuLeases) {
         const spawnedPaneProcess = await tmux.paneProcessIdentity(socket, paneId);
         try {
           await observations.cuLeases.bindSpawnedProcess(cuLeaseHandle, spawnedPaneProcess);
         } catch (bindError) {
-          await tmux.killPaneAndWait(socket, paneId, { timeout: 3000 }).catch(() => {});
+          const cleanupTimeoutMs = 3000;
+          const knownProcesses = spawnedPaneProcess ? [spawnedPaneProcess] : [];
+          try {
+            await tmux.killPaneAndWait(socket, paneId, { timeout: cleanupTimeoutMs, knownProcesses });
+          } catch (cleanupError) {
+            const error = new LaunchError(
+              `${errorMessage(bindError)}, and tmux cleanup failed: ${errorMessage(cleanupError)}`,
+              500,
+            );
+            return {
+              kind: 'cleanup-incomplete',
+              error,
+              status: 500,
+              cleanup: {
+                socket,
+                paneId,
+                knownProcesses: cleanupProcesses(cleanupError) ?? knownProcesses,
+                timeout: cleanupTimeoutMs,
+              },
+            };
+          }
           throw bindError;
         }
       }

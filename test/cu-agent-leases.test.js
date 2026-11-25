@@ -2,22 +2,28 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
- * Focused tests for Computer-Use Slice 2 (guest-broker §9 contract):
+ * Focused tests for Computer-Use Slice 2 (guest-broker §9 contract — Round 2 hardened):
  * - Zero secrets or nonces in tmux argv/env, sibling tmux windows, omp child env,
  *   HTTP/SSE replies, persisted files, or logs (`CU_BROKER_CLAIM_FILE` only).
- * - Prompt bind once right after `spawnInTmux`, and `requireRebind: true` + rebind on `respawnPane`.
- * - Durable non-secret lease store (`cu-agent-leases.json`, 0600) + startup reconciliation
- *   (releases dead active orphans, cancels dead displaced orphans, re-adopts live ones).
- * - Close/death while displaced calls `POST /v1/lease/cancel-preempted` (with `409 lease_active`
- *   fallback to `release`), never letting a closed agent regain the seat on hand-back.
- * - Reliable command delivery keyed by `(generation, processBirth)`, separate pending/acked
- *   tracking, pre-send owner+PID recheck, and heartbeat `409` immediate abort.
- * - Ordered broker event watcher with `Last-Event-ID: <gen>:<cursor>`, generation & resync
- *   watermark resets (`generation_mismatch`, `cursor_too_old`, `cursor_ahead`, `subscriber_lagged`),
- *   and atomic SSE frames with backpressure on `/api/cu/stream`.
- * - Private (PIN-locked) session isolation (opaque `ownerId`, never route/session IDs in broker).
- * - Recovery & hibernation non-poisoning on `409 seat_busy` / `503` broker unavailable.
- * - Configured-but-missing broker socket fails closed (`503`), plus typed async refusal.
+ * - P1-1: Fresh stop -> authenticated release/cancel -> acquire+claim+bind on managed CU restart
+ *   (no requireRebind transfer; guard refusal mints nothing; busy seat refuses with typed 409 seat_busy).
+ * - P1-2: Zero `force: true` release/cancel calls on re-adopted or secretless records.
+ * - P1-3: Human-held seat refuses managed omp launch with typed 409 seat_busy (no waiting launch).
+ * - P1-4: §9.1 capabilities array feature check before any mutation (Slice-1 legacy vs 503 outage).
+ * - P1-5: Restart re-adoption strictly for routing to live claimed MCP peers (no heartbeats);
+ *   unredeemed or expired sessions surface honest `cuDesktopAccessLost` state.
+ * - P1-6: Single `(generation, cursor, epoch)` ordering rule ignores stale heartbeat 409 / delayed bind.
+ * - P1-7: Gap `hello(resync_required)` + `event: resync` deduped to one reconcile / at most one abort;
+ *   replay `hello` (no `id:`) does not drop targets before replayed events run.
+ * - P1-8: Unbound targets refused; ambiguous nested omp descendants refused without dispatch.
+ * - P1-9: Bind failure propagates `cleanup-incomplete` with known births and keeps writer quarantine.
+ * - P1-10 (+ Fleet addendum): Strip reserved CU_BROKER_* from command & tmux -e, unset inherited
+ *   CU_BROKER_* first (env -u), then set managed CU_BROKER_SESSION_ID, CU_BROKER_CLAIM_FILE, CU_BROKER_LABEL.
+ * - Outage: Transport errors (`statusCode` 503/504, ECONNREFUSED/stale socket) classify as typed
+ *   `CuBrokerUnavailableError`, keeping hibernation & recovery retryable without uncertain markers.
+ * - SSE leak: Unconditional `activeBrokerStreams` teardown on every stream exit path.
+ * - P3: Fake broker matches §9 framing (v1 + capabilities array, gap hello+resync, replay no-id hello,
+ *   bind-time & pre-mutation reaping of dead births, `alreadyAbsent: true`, `mcpClaimed`/`claimedPid`).
  *
  * Run with: npm test -- test/cu-agent-leases.test.js
  */
@@ -28,6 +34,7 @@ const crypto = require("node:crypto");
 const node_events_1 = require("node:events");
 const fs = require("node:fs");
 const http = require("node:http");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const test_types_js_1 = require("./test-types.js");
@@ -55,16 +62,19 @@ process.env.PI_DISH_CU_LIVENESS_MS = '60';
 process.env.PI_DISH_CU_WATCH_RETRY_MS = '35';
 process.env.PI_DISH_BOTS = 'off';
 process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${TEST_FAKE_OMP_PATH}`;
-const { createCuAgentLeases, CuBrokerUnavailableError, CuSeatBusyError, CU_HAND_BACK_NUDGE, BROKER_AGENT_LABEL, } = require('../lib/cu-agent-leases');
+const { createCuAgentLeases, CuBrokerUnavailableError, CuSeatBusyError, CU_HAND_BACK_NUDGE, BROKER_AGENT_LABEL, REQUIRED_SLICE2_CAPABILITIES, } = require('../lib/cu-agent-leases');
 const { createCuBrokerClient } = require('../lib/cu-broker');
 const { createCuHandlers } = require('../lib/cu-handlers');
 const { createSessionHibernation } = require('../lib/session-hibernation');
 const { createRecoveryRuntime } = require('../lib/recovery-runner');
 const recoveryStore = require('../lib/session-recovery');
+const { LaunchError } = require('../lib/session-launch');
+const { createSessionOperations } = require('../lib/session-operations');
+const { OwnershipRefusal, routeSessionId } = require('../lib/session-ownership');
 const { resolveSessionRoute } = require('../lib/session-key');
-const { routeSessionId } = require('../lib/session-ownership');
 const { dishDir } = require('../lib/dish-store');
-const { errorStatus } = require('../lib/http-boundary');
+const { errorStatus, httpError } = require('../lib/http-boundary');
+const { processIdentity, processIdentityAlive } = require('../lib/process-identity');
 const SECRET_PREFIX = 'cu-agent-secret-never-leak-';
 const NONCE_PREFIX = 'cu-claim-nonce-never-leak-';
 function hashSecret(value) {
@@ -73,12 +83,15 @@ function hashSecret(value) {
 async function startFakeCuBroker(socketPath, claimDir) {
     fs.mkdirSync(claimDir, { recursive: true, mode: 0o700 });
     const sseClients = new Set();
+    const pendingEventsRes = [];
+    const deadBirths = new Set();
     const acquireCalls = [];
     const claimNonceCalls = [];
     const bindCalls = [];
     const heartbeatCalls = [];
     const releaseCalls = [];
     const cancelPreemptedCalls = [];
+    const forcedMutationCalls = [];
     const eventsRequests = [];
     const issuedSecrets = new Set();
     const issuedNonces = new Set();
@@ -98,6 +111,8 @@ async function startFakeCuBroker(socketPath, claimDir) {
             label: lease.label,
             pid: lease.pid,
             pidStartTime: lease.pidStartTime,
+            mcpClaimed: lease.mcpClaimed,
+            claimedPid: lease.claimedPid,
             expiresAt: lease.expiresAt,
         };
     }
@@ -111,6 +126,46 @@ async function startFakeCuBroker(socketPath, claimDir) {
             label: lease.label,
             pid: lease.pid,
             pidStartTime: lease.pidStartTime,
+            mcpClaimed: lease.mcpClaimed,
+            claimedPid: lease.claimedPid,
+        };
+    }
+    function isLeaseBirthDead(lease) {
+        if (!lease || lease.holderKind !== 'agent')
+            return false;
+        if (lease.pid === null || lease.pidStartTime === null)
+            return false;
+        if (deadBirths.has(`${lease.pid}:${lease.pidStartTime}`))
+            return true;
+        if (ctrl.enforceRealPids) {
+            return !processIdentityAlive({ pid: lease.pid, startTime: String(lease.pidStartTime) });
+        }
+        return false;
+    }
+    /** P3: Matches real cu-broker `_reap_locked()` invoked before status, events, and mutations. */
+    function reapDeadBirths() {
+        if (ctrl.lease && isLeaseBirthDead(ctrl.lease)) {
+            const prev = publicLease(ctrl.lease);
+            ctrl.epoch += 1;
+            ctrl.state = 'idle';
+            ctrl.lease = null;
+            ctrl.emitEvent('seat_idle', { ...ctrl.snapshotPayload(), reason: 'pid_dead', previous: prev });
+            ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'pid_dead' });
+        }
+        if (ctrl.preempted && isLeaseBirthDead(ctrl.preempted)) {
+            const reaped = publicPreempted(ctrl.preempted);
+            ctrl.preempted = null;
+            ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'preempted_reaped', reaped });
+        }
+    }
+    function statusMeta() {
+        if (ctrl.slice1Mode) {
+            return { ok: true, version: 1 };
+        }
+        return {
+            ok: true,
+            version: 1,
+            capabilities: [...REQUIRED_SLICE2_CAPABILITIES],
         };
     }
     const ctrl = {
@@ -122,17 +177,37 @@ async function startFakeCuBroker(socketPath, claimDir) {
         lease: null,
         preempted: null,
         minRetainedCursor: 0,
+        slice1Mode: false,
+        enforceRealPids: false,
+        deadBirths,
+        eventsErrorStatus: null,
+        holdEventsResponses: false,
+        pendingEventsRes,
         acquireCalls,
         claimNonceCalls,
         bindCalls,
         heartbeatCalls,
         releaseCalls,
         cancelPreemptedCalls,
+        forcedMutationCalls,
         eventsRequests,
         issuedSecrets,
         issuedNonces,
         sseClients,
         publicLease,
+        simulateMcpClaim(claimedPid, target = 'active') {
+            const lease = target === 'preempted' ? ctrl.preempted : ctrl.lease;
+            if (!lease)
+                throw new Error(`No ${target} lease to claim`);
+            lease.mcpClaimed = true;
+            lease.claimedPid = claimedPid;
+        },
+        resetIdleForTest() {
+            ctrl.epoch += 1;
+            ctrl.state = 'idle';
+            ctrl.lease = null;
+            ctrl.preempted = null;
+        },
         snapshotPayload() {
             return {
                 generation: ctrl.generation,
@@ -149,6 +224,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 ...payload,
                 generation: ctrl.generation,
                 cursor: ctrl.cursor,
+                replayed: false,
             };
             eventRing.push({ generation: ctrl.generation, cursor: ctrl.cursor, eventName, payload: fullPayload });
             if (eventRing.length > 64) {
@@ -190,6 +266,13 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 catch { }
             }
             sseClients.clear();
+            for (const pending of [...pendingEventsRes]) {
+                try {
+                    pending.destroy();
+                }
+                catch { }
+            }
+            pendingEventsRes.length = 0;
         },
         async close() {
             ctrl.dropSseClients();
@@ -206,17 +289,26 @@ async function startFakeCuBroker(socketPath, claimDir) {
     const server = http.createServer((req, res) => {
         const url = new URL(req.url || '/', 'http://localhost');
         if (req.method === 'GET' && url.pathname === '/v1/status') {
+            reapDeadBirths();
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify({
-                ok: true,
-                version: 2,
-                capabilities: { claimNonce: true, bind: true, cancelPreempted: true, orderedEvents: true },
+                ...statusMeta(),
                 ...ctrl.snapshotPayload(),
                 health: { broker: true, spacesd: true, driver: true, xvfb: true, desktop: true, chrome: true, driverWorkerRunning: true },
             }));
             return;
         }
         if (req.method === 'GET' && url.pathname === '/v1/events') {
+            if (ctrl.holdEventsResponses) {
+                pendingEventsRes.push(res);
+                return;
+            }
+            if (ctrl.eventsErrorStatus !== null) {
+                res.writeHead(ctrl.eventsErrorStatus, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({ ok: false, error: `Injected events error (${ctrl.eventsErrorStatus})` }));
+                return;
+            }
+            reapDeadBirths();
             const lastEventId = typeof req.headers['last-event-id'] === 'string' ? req.headers['last-event-id'] : null;
             const qGen = url.searchParams.get('generation');
             const qCursor = url.searchParams.get('cursor');
@@ -234,34 +326,90 @@ async function startFakeCuBroker(socketPath, claimDir) {
             res.flushHeaders();
             sseClients.add(res);
             res.on('close', () => sseClients.delete(res));
+            const oldestAvailableCursor = eventRing.length ? eventRing[0].cursor : ctrl.cursor;
+            const emitGap = (reason) => {
+                // P3 / §9.5: `event: hello` (resume.status === 'resync_required') ALWAYS strictly first,
+                // immediately followed by `event: resync` at the EXACT same `(generation, cursor)`!
+                res.write(`id: ${ctrl.generation}:${ctrl.cursor}\nevent: hello\ndata: ${JSON.stringify({
+                    ...statusMeta(),
+                    ...ctrl.snapshotPayload(),
+                    resume: {
+                        status: 'resync_required',
+                        requestedGeneration: reqGen,
+                        requestedCursor: reqCursor,
+                        replayedCount: 0,
+                        oldestAvailableCursor,
+                        resyncReason: reason,
+                    },
+                })}\n\n`);
+                res.write(`id: ${ctrl.generation}:${ctrl.cursor}\nevent: resync\ndata: ${JSON.stringify({
+                    ...ctrl.snapshotPayload(),
+                    reason,
+                    requestedGeneration: reqGen,
+                    requestedCursor: reqCursor,
+                    oldestAvailableCursor,
+                })}\n\n`);
+            };
             if (reqGen !== null || reqCursor !== null) {
                 if (reqGen !== null && reqGen !== ctrl.generation) {
-                    res.write(`id: ${ctrl.generation}:${ctrl.cursor}\nevent: resync\ndata: ${JSON.stringify({ ...ctrl.snapshotPayload(), reason: 'generation_mismatch' })}\n\n`);
+                    emitGap('generation_mismatch');
                     return;
                 }
                 if (reqCursor !== null && reqCursor > ctrl.cursor) {
-                    res.write(`id: ${ctrl.generation}:${ctrl.cursor}\nevent: resync\ndata: ${JSON.stringify({ ...ctrl.snapshotPayload(), reason: 'cursor_ahead' })}\n\n`);
+                    emitGap('cursor_ahead');
                     return;
                 }
                 if (reqCursor !== null && reqCursor < ctrl.minRetainedCursor) {
-                    res.write(`id: ${ctrl.generation}:${ctrl.cursor}\nevent: resync\ndata: ${JSON.stringify({ ...ctrl.snapshotPayload(), reason: 'cursor_too_old' })}\n\n`);
+                    emitGap('cursor_too_old');
                     return;
                 }
                 const fromCursor = reqCursor ?? 0;
                 const missed = eventRing.filter(e => e.generation === ctrl.generation && e.cursor > fromCursor);
-                // §9.5: hello with resume.status === 'replayed' carries the client's pre-replay cursor.
-                res.write(`id: ${ctrl.generation}:${fromCursor}\nevent: hello\ndata: ${JSON.stringify({
-                    ...ctrl.snapshotPayload(),
-                    resume: { status: 'replayed', generation: ctrl.generation, cursor: fromCursor, currentCursor: ctrl.cursor },
-                })}\n\n`);
-                for (const item of missed) {
-                    res.write(`id: ${item.generation}:${item.cursor}\nevent: ${item.eventName}\ndata: ${JSON.stringify(item.payload)}\n\n`);
+                if (missed.length > 0) {
+                    // P3 / §9.5: `event: hello` with `resume.status === 'replayed'` MUST OMIT `id:` so
+                    // automatic `Last-Event-ID` reconnects never skip pending replay frames!
+                    res.write(`event: hello\ndata: ${JSON.stringify({
+                        ...statusMeta(),
+                        ...ctrl.snapshotPayload(),
+                        resume: {
+                            status: 'replayed',
+                            requestedGeneration: reqGen,
+                            requestedCursor: fromCursor,
+                            replayedCount: missed.length,
+                            oldestAvailableCursor,
+                            resyncReason: null,
+                        },
+                    })}\n\n`);
+                    for (const item of missed) {
+                        res.write(`id: ${item.generation}:${item.cursor}\nevent: ${item.eventName}\ndata: ${JSON.stringify({ ...item.payload, replayed: true })}\n\n`);
+                    }
+                    return;
                 }
+                res.write(`id: ${ctrl.generation}:${ctrl.cursor}\nevent: hello\ndata: ${JSON.stringify({
+                    ...statusMeta(),
+                    ...ctrl.snapshotPayload(),
+                    resume: {
+                        status: 'up_to_date',
+                        requestedGeneration: reqGen,
+                        requestedCursor: fromCursor,
+                        replayedCount: 0,
+                        oldestAvailableCursor,
+                        resyncReason: null,
+                    },
+                })}\n\n`);
                 return;
             }
             res.write(`id: ${ctrl.generation}:${ctrl.cursor}\nevent: hello\ndata: ${JSON.stringify({
+                ...statusMeta(),
                 ...ctrl.snapshotPayload(),
-                resume: { status: 'fresh', generation: ctrl.generation, cursor: ctrl.cursor },
+                resume: {
+                    status: 'fresh',
+                    requestedGeneration: null,
+                    requestedCursor: null,
+                    replayedCount: 0,
+                    oldestAvailableCursor,
+                    resyncReason: null,
+                },
             })}\n\n`);
             return;
         }
@@ -289,7 +437,11 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     body = parsed;
             }
             catch { }
+            if (body.force === true) {
+                forcedMutationCalls.push({ path: url.pathname, body });
+            }
             if (req.method === 'POST' && url.pathname === '/v1/lease/acquire') {
+                reapDeadBirths();
                 acquireCalls.push(body);
                 const sid = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : `agent-${++secretSeq}`;
                 const ownerId = typeof body.ownerId === 'string' && body.ownerId ? body.ownerId : null;
@@ -300,6 +452,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                         ok: false,
                         code: 'seat_busy',
                         generation: ctrl.generation,
+                        cursor: ctrl.cursor,
                         state: ctrl.state,
                         epoch: ctrl.epoch,
                         lease: publicLease(ctrl.lease),
@@ -321,11 +474,13 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     label,
                     pid: typeof body.pid === 'number' ? body.pid : null,
                     pidStartTime: typeof body.pidStartTime === 'number' ? body.pidStartTime : null,
+                    mcpClaimed: false,
+                    claimedPid: null,
                     expiresAt: new Date(Date.now() + 90_000).toISOString(),
                     tokenHash: hashSecret(secret),
                     rawSecret: secret,
                 };
-                ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'agent_acquire' });
+                ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'acquired' });
                 res.writeHead(200, { 'content-type': 'application/json' });
                 res.end(JSON.stringify({
                     ok: true,
@@ -339,6 +494,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/claim-nonce') {
+                reapDeadBirths();
                 claimNonceCalls.push(body);
                 const sid = typeof body.sessionId === 'string' ? body.sessionId : '';
                 const secret = typeof body.sessionSecret === 'string' ? body.sessionSecret : '';
@@ -373,6 +529,8 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/bind') {
+                // P3: Real cu-broker runs `_reap_locked()` before lookup so dead births return 409 lease_not_found.
+                reapDeadBirths();
                 bindCalls.push(body);
                 const sid = typeof body.sessionId === 'string' ? body.sessionId : '';
                 const secret = typeof body.sessionSecret === 'string' ? body.sessionSecret : '';
@@ -399,44 +557,63 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     target.pidStartTime = body.pidStartTime;
                 else if (typeof body.pidStartTime === 'string' && /^\d+$/.test(body.pidStartTime))
                     target.pidStartTime = Number(body.pidStartTime);
-                ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'agent_bind' });
+                ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'bound', target: isDisplaced ? 'displaced' : 'active' });
                 res.writeHead(200, { 'content-type': 'application/json' });
                 res.end(JSON.stringify({
                     ok: true,
                     ...ctrl.snapshotPayload(),
                     target: isDisplaced ? 'displaced' : 'active',
-                    boundLease: publicLease(target),
                 }));
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/cancel-preempted') {
+                reapDeadBirths();
                 cancelPreemptedCalls.push(body);
                 const sid = typeof body.sessionId === 'string' ? body.sessionId : '';
                 const secret = typeof body.sessionSecret === 'string' ? body.sessionSecret : '';
                 const force = body.force === true;
-                if (ctrl.state === 'agent' && ctrl.lease && ctrl.lease.sessionId === sid) {
+                if (ctrl.preempted) {
+                    if (!force && (ctrl.preempted.sessionId !== sid || hashSecret(secret) !== ctrl.preempted.tokenHash)) {
+                        res.writeHead(403, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, code: 'forbidden', message: 'Invalid session secret.' }));
+                        return;
+                    }
+                    const cancelled = publicPreempted(ctrl.preempted);
+                    ctrl.preempted = null;
+                    ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'preempted_cancelled', cancelled });
+                    res.writeHead(200, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({
+                        ok: true,
+                        cancelled: true,
+                        alreadyAbsent: false,
+                        cancelledReservation: cancelled,
+                        ...ctrl.snapshotPayload(),
+                    }));
+                    return;
+                }
+                // §9.4: preempted is null -> 409 lease_active only if !force and credentials match active agent lease.
+                if (!force && ctrl.state === 'agent' && ctrl.lease && ctrl.lease.sessionId === sid && hashSecret(secret) === ctrl.lease.tokenHash) {
                     res.writeHead(409, { 'content-type': 'application/json' });
                     res.end(JSON.stringify({ ok: false, code: 'lease_active', ...ctrl.snapshotPayload() }));
                     return;
                 }
-                if (!ctrl.preempted || (sid && ctrl.preempted.sessionId !== sid)) {
-                    res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: true, cancelled: false, ...ctrl.snapshotPayload() }));
+                if (!force && (!sid || !secret)) {
+                    res.writeHead(400, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ ok: false, code: 'missing_credentials', message: 'Missing credentials.' }));
                     return;
                 }
-                if (!force && hashSecret(secret) !== ctrl.preempted.tokenHash) {
-                    res.writeHead(403, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'forbidden', message: 'Invalid session secret.' }));
-                    return;
-                }
-                const cancelled = publicPreempted(ctrl.preempted);
-                ctrl.preempted = null;
-                ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'preempted_cancelled', cancelled });
                 res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({ ok: true, cancelled: true, ...ctrl.snapshotPayload() }));
+                res.end(JSON.stringify({
+                    ok: true,
+                    cancelled: false,
+                    alreadyAbsent: true,
+                    cancelledReservation: null,
+                    ...ctrl.snapshotPayload(),
+                }));
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/heartbeat') {
+                reapDeadBirths();
                 heartbeatCalls.push(body);
                 const sid = typeof body.sessionId === 'string' ? body.sessionId : null;
                 const lid = typeof body.leaseId === 'string' ? body.leaseId : null;
@@ -445,7 +622,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     : typeof body.leaseToken === 'string' ? body.leaseToken : '';
                 if (ctrl.state === 'human' && ctrl.preempted && sid === ctrl.preempted.sessionId) {
                     res.writeHead(409, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'lease_preempted', generation: ctrl.generation, state: 'human', epoch: ctrl.epoch }));
+                    res.end(JSON.stringify({ ok: false, code: 'lease_preempted', generation: ctrl.generation, cursor: ctrl.cursor, state: 'human', epoch: ctrl.epoch }));
                     return;
                 }
                 if (ctrl.lease
@@ -453,17 +630,18 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     && hashSecret(secret) === ctrl.lease.tokenHash) {
                     ctrl.lease.expiresAt = new Date(Date.now() + 90_000).toISOString();
                     res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: true, generation: ctrl.generation, state: ctrl.state, epoch: ctrl.epoch, lease: publicLease(ctrl.lease) }));
+                    res.end(JSON.stringify({ ok: true, generation: ctrl.generation, cursor: ctrl.cursor, state: ctrl.state, epoch: ctrl.epoch, lease: publicLease(ctrl.lease) }));
                     return;
                 }
                 res.writeHead(409, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({ ok: false, code: 'lease_lost', generation: ctrl.generation, state: ctrl.state, epoch: ctrl.epoch }));
+                res.end(JSON.stringify({ ok: false, code: 'lease_lost', generation: ctrl.generation, cursor: ctrl.cursor, state: ctrl.state, epoch: ctrl.epoch }));
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/takeover') {
+                reapDeadBirths();
                 if (ctrl.state === 'human') {
                     res.writeHead(409, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'seat_busy', generation: ctrl.generation, state: 'human', epoch: ctrl.epoch, lease: publicLease(ctrl.lease) }));
+                    res.end(JSON.stringify({ ok: false, code: 'seat_busy', generation: ctrl.generation, cursor: ctrl.cursor, state: 'human', epoch: ctrl.epoch, lease: publicLease(ctrl.lease) }));
                     return;
                 }
                 const displaced = ctrl.state === 'agent' && ctrl.lease ? ctrl.lease : null;
@@ -481,6 +659,8 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     label: typeof body.label === 'string' ? body.label : 'pi-dish',
                     pid: null,
                     pidStartTime: null,
+                    mcpClaimed: false,
+                    claimedPid: null,
                     expiresAt: new Date(Date.now() + 600_000).toISOString(),
                     tokenHash: hashSecret(leaseToken),
                     rawSecret: leaseToken,
@@ -507,6 +687,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/release') {
+                reapDeadBirths();
                 releaseCalls.push(body);
                 const ident = (typeof body.leaseId === 'string' ? body.leaseId : null)
                     || (typeof body.sessionId === 'string' ? body.sessionId : null);
@@ -753,12 +934,14 @@ function collectFilesRecursively(dir) {
     }
     return out;
 }
-test('unit: command delivery tracks pending vs acked, rechecks owner/PID, aborts on heartbeat 409, and resets on generation/resync', async (t) => {
+test('unit: P1-6 ordering rule, P1-7 gap dedupe & replay hello, P1-8 unbound refusal, pending/acked retry, and heartbeat 409 abort', async (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-u1-'));
     const storePath = path.join(tmpDir, 'cu-agent-leases.json');
     t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
     let hbStatus = 200;
-    let hbBody = { ok: true, state: 'agent', epoch: 10, generation: 'gen-A' };
+    let hbBody = { ok: true, state: 'agent', epoch: 10, cursor: 2, generation: 'gen-A' };
+    let holdNextBind = null;
+    let holdBindEnabled = false;
     let capturedBrokerSid = '';
     let capturedOwnerId = '';
     const abortTargets = [];
@@ -770,6 +953,22 @@ test('unit: command delivery tracks pending vs acked, rechecks owner/PID, aborts
         configured: () => true,
         available: () => true,
         async requestJson(_method, pathname, body) {
+            if (pathname === '/v1/status') {
+                return {
+                    status: 200,
+                    body: {
+                        ok: true,
+                        version: 1,
+                        capabilities: [...REQUIRED_SLICE2_CAPABILITIES],
+                        generation: 'gen-A',
+                        cursor: 1,
+                        state: 'idle',
+                        epoch: 9,
+                        lease: null,
+                        preempted: null,
+                    },
+                };
+            }
             if (pathname === '/v1/lease/acquire') {
                 const bodyObj = body ? (0, test_types_js_1.record)(body) : {};
                 capturedBrokerSid = String(bodyObj.sessionId ?? 'cu-agent-u1');
@@ -779,6 +978,7 @@ test('unit: command delivery tracks pending vs acked, rechecks owner/PID, aborts
                     body: {
                         ok: true,
                         generation: 'gen-A',
+                        cursor: 2,
                         state: 'agent',
                         epoch: 10,
                         sessionId: capturedBrokerSid,
@@ -796,9 +996,12 @@ test('unit: command delivery tracks pending vs acked, rechecks owner/PID, aborts
                 };
             }
             if (pathname === '/v1/lease/bind') {
+                if (holdBindEnabled) {
+                    await new Promise(resolve => { holdNextBind = resolve; });
+                }
                 return {
                     status: 200,
-                    body: { ok: true, generation: 'gen-A', state: 'agent', epoch: 10, target: 'active' },
+                    body: { ok: true, generation: 'gen-A', cursor: 3, state: 'agent', epoch: 10, target: 'active' },
                 };
             }
             if (pathname === '/v1/lease/heartbeat') {
@@ -812,7 +1015,8 @@ test('unit: command delivery tracks pending vs acked, rechecks owner/PID, aborts
         broker: mockBroker,
         storeFile: () => storePath,
         processAlive: () => processStillAlive,
-        heartbeatIntervalMs: 40,
+        pidAlive: () => true,
+        heartbeatIntervalMs: 35,
         livenessCheckMs: 0,
         commandRetryMs: 25,
         abortSession: async (target) => {
@@ -832,21 +1036,42 @@ test('unit: command delivery tracks pending vs acked, rechecks owner/PID, aborts
     });
     t.after(() => leases.stop());
     const sid = '~sk1_omp_unit_delivery';
-    const handle = (0, test_types_js_1.present)(await leases.prepareSpawn({ knownSessionId: null }));
-    // Verify handle.env carries ONLY claim file, opaque brokerSessionId, and non-identifying label — zero secret or nonce.
+    const handle = (0, test_types_js_1.present)(await leases.prepareSpawn({ knownSessionId: sid }));
     assert.deepEqual(Object.keys(handle.env).sort(), ['CU_BROKER_CLAIM_FILE', 'CU_BROKER_LABEL', 'CU_BROKER_SESSION_ID']);
     assert.equal(handle.env.CU_BROKER_LABEL, BROKER_AGENT_LABEL);
     assert.equal(JSON.stringify(handle.env).includes('unit-secret-only-in-memory'), false);
     assert.equal(JSON.stringify(handle.env).includes('unit-nonce-discarded'), false);
-    await leases.bindSpawnedProcess(handle, { pid: 4242, startTime: '987654321' });
-    leases.attachSpawnedSession(handle, { sessionId: sid, pid: 4242, pidStartTime: '987654321' });
-    // Preempt at epoch 11: first abort returns false (pending, not acked), retry succeeds once; duplicate at epoch 11 ignored.
+    // P1-8: Before process birth is bound, preempted MUST NOT dispatch abort to an unbound target!
     leases.handleBrokerEvent({
         eventName: 'preempted',
         authoritativeHello: false,
         generation: 'gen-A',
+        cursor: 3,
         payload: {
             generation: 'gen-A',
+            cursor: 3,
+            state: 'human',
+            epoch: 10,
+            displaced: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
+            preempted: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
+        },
+    });
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(abortTargets.length, 0, 'P1-8: unbound target must never receive abort');
+    // P1-6: Start a delayed bind at older (epoch 10, cursor 3) while a takeover (epoch 11, cursor 4) arrives mid-flight!
+    holdBindEnabled = true;
+    const delayedBind = leases.bindSpawnedProcess(handle, { pid: 4242, startTime: '987654321' });
+    leases.attachSpawnedSession(handle, { sessionId: sid, pid: 4242, pidStartTime: '987654321' });
+    await waitFor(() => holdNextBind !== null, 'bind request in flight');
+    // Preempt at (gen-A, cursor 4, epoch 11): first abort returns false -> retries and succeeds once.
+    leases.handleBrokerEvent({
+        eventName: 'preempted',
+        authoritativeHello: false,
+        generation: 'gen-A',
+        cursor: 4,
+        payload: {
+            generation: 'gen-A',
+            cursor: 4,
             state: 'human',
             epoch: 11,
             displaced: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
@@ -857,27 +1082,60 @@ test('unit: command delivery tracks pending vs acked, rechecks owner/PID, aborts
     assert.equal(abortTargets[0].generation, 'gen-A');
     assert.equal(abortTargets[0].pid, 4242);
     assert.equal(abortTargets[0].pidStartTime, '987654321');
-    // Duplicate event at same (gen-A, epoch 11) must NOT re-abort once acked.
+    // Now complete the stale delayed bind reply (epoch 10, cursor 3 < epoch 11, cursor 4) -> MUST NOT undo preempted!
+    holdBindEnabled = false;
+    holdNextBind();
+    await delayedBind;
+    assert.equal(abortTargets[1].isStillValid(), true, 'P1-6: delayed bind must not undo newer preempted state');
+    // P1-7: Gap `hello(resync_required)` + immediately following `event: resync` at the EXACT same (gen-A, cursor 5, epoch 11)
+    // MUST dedupe AND NOT re-abort the same birth at already-acked epoch 11!
     leases.handleBrokerEvent({
         eventName: 'hello',
         authoritativeHello: true,
+        isResync: true,
+        resumeStatus: 'resync_required',
+        resyncReason: 'cursor_too_old',
         generation: 'gen-A',
+        cursor: 5,
         payload: {
             generation: 'gen-A',
+            cursor: 5,
             state: 'human',
             epoch: 11,
+            preempted: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
+            resume: { status: 'resync_required', resyncReason: 'cursor_too_old' },
+        },
+    });
+    leases.handleBrokerEvent({
+        eventName: 'resync',
+        authoritativeHello: true,
+        isResync: true,
+        resyncReason: 'cursor_too_old',
+        generation: 'gen-A',
+        cursor: 5,
+        payload: {
+            generation: 'gen-A',
+            cursor: 5,
+            state: 'human',
+            epoch: 11,
+            reason: 'cursor_too_old',
             preempted: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
         },
     });
     await new Promise(resolve => setTimeout(resolve, 60));
-    assert.equal(abortTargets.length, 2);
-    // Hand back at epoch 12 -> one nudge, and previously captured abort target.isStillValid() is now false!
+    assert.equal(abortTargets.length, 2, 'P1-7: same-generation gap hello+resync at already-acked epoch must not duplicate abort');
+    // Hand back at (gen-A, cursor 6, epoch 12) -> one nudge.
+    // Simultaneously configure heartbeat to return a STALE 409 lease_preempted at older (epoch 11, cursor 4)!
+    hbStatus = 409;
+    hbBody = { ok: false, code: 'lease_preempted', generation: 'gen-A', cursor: 4, state: 'human', epoch: 11 };
     leases.handleBrokerEvent({
         eventName: 'hand_back',
         authoritativeHello: false,
         generation: 'gen-A',
+        cursor: 6,
         payload: {
             generation: 'gen-A',
+            cursor: 6,
             state: 'agent',
             epoch: 12,
             lease: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
@@ -886,49 +1144,113 @@ test('unit: command delivery tracks pending vs acked, rechecks owner/PID, aborts
     });
     await waitFor(() => resumeTargets.length === 1, 'hand_back nudge delivered');
     assert.equal(resumeTargets[0].text, CU_HAND_BACK_NUDGE);
-    assert.equal(abortTargets[1].isStillValid(), false, 'old abort target is invalidated after hand-back');
-    // Resync with ALL four reasons resets watermarks so a lower epoch (1 < 12) triggers cleanly!
-    for (const [idx, reason] of ['generation_mismatch', 'cursor_too_old', 'cursor_ahead', 'subscriber_lagged'].entries()) {
-        const nextGen = reason === 'generation_mismatch' ? 'gen-B' : 'gen-B';
-        const expectedAborts = abortTargets.length + 1;
-        leases.handleBrokerEvent({
-            eventName: 'resync',
-            authoritativeHello: true,
-            isResync: true,
-            resyncReason: reason,
-            generation: nextGen,
-            generationChanged: reason === 'generation_mismatch',
-            payload: {
-                generation: nextGen,
-                state: 'human',
-                epoch: 1 + idx,
-                preempted: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
-            },
-        });
-        await waitFor(() => abortTargets.length === expectedAborts, `abort after resync (${reason})`);
-    }
-    // Return to holding, then simulate heartbeat 409 lease_lost -> MUST immediately abort without SSE!
+    assert.equal(abortTargets[1].isStillValid(), false, 'old abort target invalidated after hand-back');
+    // Wait >2 heartbeat ticks while broker returns stale 409 (epoch 11 < 12): P1-6 MUST ignore it (zero spurious aborts)!
+    await new Promise(resolve => setTimeout(resolve, 90));
+    assert.equal(abortTargets.length, 2, 'P1-6: late heartbeat 409 from older epoch after hand-back must NOT abort');
+    assert.equal(leases.ownerIdForSession(sid), capturedOwnerId, 'session stays holding after stale heartbeat 409');
+    // P1-7: New-generation gap `hello(resync_required)` + `event: resync` at the EXACT same (gen-B, cursor 0, epoch 1)
+    // MUST dedupe so ONE gap produces AT MOST ONE abort!
+    hbStatus = 200;
+    hbBody = { ok: true, state: 'agent', epoch: 1, cursor: 0, generation: 'gen-B' };
+    const abortsBeforeGap = abortTargets.length;
+    leases.handleBrokerEvent({
+        eventName: 'hello',
+        authoritativeHello: true,
+        isResync: true,
+        resumeStatus: 'resync_required',
+        resyncReason: 'generation_mismatch',
+        generation: 'gen-B',
+        cursor: 0,
+        generationChanged: true,
+        payload: {
+            generation: 'gen-B',
+            cursor: 0,
+            state: 'human',
+            epoch: 1,
+            preempted: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp', mcpClaimed: true, claimedPid: 4299 },
+            resume: { status: 'resync_required', resyncReason: 'generation_mismatch' },
+        },
+    });
+    leases.handleBrokerEvent({
+        eventName: 'resync',
+        authoritativeHello: true,
+        isResync: true,
+        resyncReason: 'generation_mismatch',
+        generation: 'gen-B',
+        cursor: 0,
+        generationChanged: false,
+        payload: {
+            generation: 'gen-B',
+            cursor: 0,
+            state: 'human',
+            epoch: 1,
+            reason: 'generation_mismatch',
+            preempted: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp', mcpClaimed: true, claimedPid: 4299 },
+        },
+    });
+    await waitFor(() => abortTargets.length === abortsBeforeGap + 1, 'gap hello+resync delivers one abort');
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(abortTargets.length, abortsBeforeGap + 1, 'P1-7: trailing resync at same (gen-B, cursor 0) was deduped');
+    // Hand back at (gen-B, cursor 1, epoch 2), then test P1-7 replay hello (`resumeStatus: 'replayed'`)
+    // carrying FINAL `state: 'idle'` followed by replayed `lease_changed(ttl_expired)` -> MUST still abort!
     leases.handleBrokerEvent({
         eventName: 'hand_back',
         authoritativeHello: false,
         generation: 'gen-B',
+        cursor: 1,
         payload: {
             generation: 'gen-B',
+            cursor: 1,
             state: 'agent',
-            epoch: 5,
-            lease: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
-            handedBackTo: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp' },
+            epoch: 2,
+            lease: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp', mcpClaimed: true, claimedPid: 4299 },
+            handedBackTo: { ownerId: capturedOwnerId, sessionId: capturedBrokerSid, label: 'omp', mcpClaimed: true, claimedPid: 4299 },
         },
     });
-    await waitFor(() => resumeTargets.length === 2, 'second hand_back nudge delivered');
-    const abortsBeforeHb409 = abortTargets.length;
-    hbStatus = 409;
-    hbBody = { ok: false, code: 'lease_lost', generation: 'gen-B', state: 'idle', epoch: 6 };
-    await waitFor(() => abortTargets.length === abortsBeforeHb409 + 1, 'heartbeat 409 triggers immediate abort');
+    await waitFor(() => resumeTargets.length === 2, 'second hand_back delivered');
+    const abortsBeforeReplay = abortTargets.length;
+    leases.handleBrokerEvent({
+        eventName: 'hello',
+        authoritativeHello: true,
+        resumeStatus: 'replayed',
+        generation: 'gen-B',
+        cursor: 2,
+        payload: {
+            generation: 'gen-B',
+            cursor: 2,
+            state: 'idle',
+            epoch: 3,
+            lease: null,
+            preempted: null,
+            resume: { status: 'replayed', replayedCount: 1 },
+        },
+    });
+    // Replay hello must NOT have deleted/aborted before the replayed event arrives!
+    assert.equal(leases.ownerIdForSession(sid), capturedOwnerId, 'P1-7: replay hello does not prematurely drop target');
+    leases.handleBrokerEvent({
+        eventName: 'lease_changed',
+        authoritativeHello: false,
+        generation: 'gen-B',
+        cursor: 2,
+        payload: {
+            generation: 'gen-B',
+            cursor: 2,
+            state: 'idle',
+            epoch: 3,
+            reason: 'ttl_expired',
+            replayed: true,
+            lease: null,
+            preempted: null,
+        },
+    });
+    await waitFor(() => abortTargets.length === abortsBeforeReplay + 1, 'P1-7: replayed ttl_expired still aborts cleanly');
+    assert.equal(leases.isDesktopAccessLost(sid), true, 'live omp with expired lease surfaces desktop-access-lost');
     processStillAlive = false;
     assert.equal(abortTargets[abortTargets.length - 1].isStillValid(), false, 'dead process invalidates command target');
+    assert.equal(leases.isDesktopAccessLost(sid), false, 'dead process does not report access_lost');
 });
-test('unit: restart reconciliation releases dead active orphans, cancels dead displaced orphans, re-adopts live ones, and handles cancel-preempted 409 lease_active race', async (t) => {
+test('unit: P1-2 zero force:true and P1-5 restart reconciliation (live claimed peer routing vs access_lost, plus cancel-preempted 409 lease_active race)', async (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-reconcile-'));
     const sockPath = path.join(tmpDir, 'broker.sock');
     const claimDir = path.join(tmpDir, 'claims');
@@ -939,7 +1261,7 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
     const client = createCuBrokerClient({ socketPath: () => sockPath });
-    // Case 1: Dead active orphan -> persisted before crash, fresh manager reconciles and releases it.
+    // Case 1 (P1-2): Dead active orphan across restart -> dropped locally with ZERO force:true broker mutations.
     {
         const first = createCuAgentLeases({
             broker: client,
@@ -954,7 +1276,6 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
         await first.bindSpawnedProcess(h, { pid: 55001, startTime: '111111' });
         first.attachSpawnedSession(h, { sessionId: '~sk1_omp_private_never_persisted', pid: 55001, pidStartTime: '111111' });
         first.stop();
-        // Verify durable store exists (0600) and contains NO secrets, NO nonces, NO route session IDs.
         const stat = fs.statSync(storePath);
         assert.equal(stat.mode & 0o777, 0o600);
         const rawStore = fs.readFileSync(storePath, 'utf8');
@@ -964,6 +1285,7 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
             assert.equal(rawStore.includes(nonce), false);
         assert.equal(rawStore.includes('private_never_persisted'), false);
         assert.equal(rawStore.includes((0, test_types_js_1.present)(h.leaseOwnerId)), true);
+        const releaseBefore = broker.releaseCalls.length;
         const restarted = createCuAgentLeases({
             broker: client,
             storeFile: () => storePath,
@@ -974,10 +1296,12 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
             resumeSession: async () => true,
         });
         await restarted.reconcile();
-        assert.equal(broker.state, 'idle', 'dead active orphan released on startup reconcile');
+        assert.equal(broker.releaseCalls.length, releaseBefore, 'P1-2: reconcile never issues release for secretless dead orphan');
+        assert.equal(broker.forcedMutationCalls.length, 0, 'P1-2: zero force:true calls');
         restarted.stop();
+        broker.resetIdleForTest();
     }
-    // Case 2: Dead displaced orphan while human holds seat -> cancel-preempted leaves human lease intact!
+    // Case 2 (P1-2): Dead displaced orphan across restart -> dropped locally with ZERO force:true; human lease untouched.
     {
         const first = createCuAgentLeases({
             broker: client,
@@ -992,8 +1316,9 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
         await first.bindSpawnedProcess(h, { pid: 55002, startTime: '222222' });
         await client.requestJson('POST', '/v1/lease/takeover', { label: 'pi-dish', ttlSec: 600 });
         assert.equal(broker.state, 'human');
-        assert.ok(broker.preempted, 'agent is displaced before restart');
+        assert.ok(broker.preempted);
         first.stop();
+        const cancelBefore = broker.cancelPreemptedCalls.length;
         const restarted = createCuAgentLeases({
             broker: client,
             storeFile: () => storePath,
@@ -1004,14 +1329,13 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
             resumeSession: async () => true,
         });
         await restarted.reconcile();
-        assert.equal(broker.state, 'human', 'human lease untouched after cancelling dead displaced orphan');
-        assert.equal(broker.preempted, null, 'dead displaced orphan removed from preempted slot');
+        assert.equal(broker.state, 'human', 'human lease untouched');
+        assert.equal(broker.cancelPreemptedCalls.length, cancelBefore, 'P1-2: reconcile never calls force cancel-preempted');
+        assert.equal(broker.forcedMutationCalls.length, 0, 'P1-2: zero force:true calls');
         restarted.stop();
-        // Release human seat cleanly for Case 3.
-        await client.requestJson('POST', '/v1/lease/release', { leaseId: broker.lease.leaseId, force: true });
-        assert.equal(broker.state, 'idle');
+        broker.resetIdleForTest();
     }
-    // Case 3: Live active process -> re-adopted across restart, exposes ownerIdForSession, and close releases it.
+    // Case 3 (P1-5 + P1-2): Live omp WITH live already-claimed MCP peer -> re-adopted ONLY for abort/nudge routing (zero heartbeats, zero force:true)!
     {
         const first = createCuAgentLeases({
             broker: client,
@@ -1025,27 +1349,131 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
         const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: null }));
         await first.bindSpawnedProcess(h, { pid: 55003, startTime: '333333' });
         const ownerId = (0, test_types_js_1.present)(h.leaseOwnerId);
+        broker.simulateMcpClaim(55099);
         first.stop();
+        const aborts = [];
+        const nudges = [];
+        const hbBefore = broker.heartbeatCalls.length;
         const restarted = createCuAgentLeases({
             broker: client,
             storeFile: () => storePath,
             processAlive: proc => proc.pid === 55003 && proc.startTime === '333333',
-            findSessionIdByProcess: proc => (proc.pid === 55003 && proc.startTime === '333333' ? '~sk1_omp_live_adopted' : null),
+            pidAlive: pid => pid === 55099,
+            findSessionIdByProcess: proc => (proc.pid === 55003 && proc.startTime === '333333' ? '~sk1_omp_live_claimed' : null),
+            heartbeatIntervalMs: 25, // even with a short interval configured, re-adopted records MUST NOT heartbeat!
+            livenessCheckMs: 0,
+            abortSession: async (target) => { aborts.push(target); return true; },
+            resumeSession: async (target) => { nudges.push(target); return true; },
+        });
+        await restarted.reconcile();
+        assert.equal(restarted.ownerIdForSession('~sk1_omp_live_claimed'), ownerId, 'P1-5: live claimed peer re-adopted');
+        assert.equal(restarted.isDesktopAccessLost('~sk1_omp_live_claimed'), false);
+        await new Promise(resolve => setTimeout(resolve, 75));
+        assert.equal(broker.heartbeatCalls.length, hbBefore, 'P1-5: re-adopted session sends ZERO heartbeats');
+        // Takeover routes abort cleanly, hand-back routes nudge cleanly.
+        const to = await client.requestJson('POST', '/v1/lease/takeover', { label: 'pi-dish', ttlSec: 600 });
+        restarted.handleBrokerEvent({
+            eventName: 'preempted',
+            authoritativeHello: false,
+            generation: broker.generation,
+            cursor: broker.cursor,
+            payload: {
+                ...broker.snapshotPayload(),
+                displaced: broker.publicLease(broker.preempted),
+            },
+        });
+        await waitFor(() => aborts.length === 1, 're-adopted live claimed session receives abort on takeover');
+        const toBody = (0, test_types_js_1.record)(to.body);
+        await client.requestJson('POST', '/v1/lease/release', {
+            leaseId: String(toBody.leaseId),
+            leaseToken: String(toBody.leaseToken),
+            handBack: true,
+        });
+        restarted.handleBrokerEvent({
+            eventName: 'hand_back',
+            authoritativeHello: false,
+            generation: broker.generation,
+            cursor: broker.cursor,
+            payload: {
+                ...broker.snapshotPayload(),
+                handedBackTo: broker.publicLease(broker.lease),
+            },
+        });
+        await waitFor(() => nudges.length === 1, 're-adopted live claimed session receives nudge on hand-back');
+        // P1-2: Closing a secretless re-adopted session drops local record with ZERO force:true mutations!
+        const releaseBefore = broker.releaseCalls.length;
+        await restarted.releaseSession('~sk1_omp_live_claimed');
+        assert.equal(broker.releaseCalls.length, releaseBefore, 'P1-2: secretless close never calls force release');
+        assert.equal(broker.forcedMutationCalls.length, 0, 'P1-2: zero force:true calls');
+        restarted.stop();
+        broker.resetIdleForTest();
+    }
+    // Case 4 (P1-5): Live omp WITHOUT live claimed MCP peer (unredeemed warm-cache omp across deploy) -> access_lost!
+    {
+        const first = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: () => true,
+            heartbeatIntervalMs: 0,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: null }));
+        await first.bindSpawnedProcess(h, { pid: 55004, startTime: '444444' });
+        // Note: broker.lease.mcpClaimed is FALSE (unredeemed lazy MCP claim).
+        first.stop();
+        const hbBefore = broker.heartbeatCalls.length;
+        const restarted = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: proc => proc.pid === 55004 && proc.startTime === '444444',
+            findSessionIdByProcess: proc => (proc.pid === 55004 && proc.startTime === '444444' ? '~sk1_omp_unredeemed' : null),
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        await restarted.reconcile();
+        assert.equal(restarted.isDesktopAccessLost('~sk1_omp_unredeemed'), true, 'P1-5: unredeemed lease across restart reports desktop-access-lost');
+        assert.equal(restarted.ownerIdForSession('~sk1_omp_unredeemed'), null, 'P1-5: unredeemed session is not shown as holding seat');
+        await new Promise(resolve => setTimeout(resolve, 70));
+        assert.equal(broker.heartbeatCalls.length, hbBefore, 'P1-5: zero heartbeats on access_lost session');
+        assert.equal(broker.forcedMutationCalls.length, 0, 'P1-2: zero force:true calls');
+        restarted.stop();
+        broker.resetIdleForTest();
+    }
+    // Case 5 (P1-5): Live omp whose lease expired while pi-dish was down -> access_lost!
+    {
+        const first = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: () => true,
+            heartbeatIntervalMs: 0,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: null }));
+        await first.bindSpawnedProcess(h, { pid: 55005, startTime: '555555' });
+        first.stop();
+        broker.resetIdleForTest(); // lease expired in broker while pi-dish restarted
+        const restarted = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: proc => proc.pid === 55005 && proc.startTime === '555555',
+            findSessionIdByProcess: proc => (proc.pid === 55005 && proc.startTime === '555555' ? '~sk1_omp_expired' : null),
             heartbeatIntervalMs: 0,
             livenessCheckMs: 0,
             abortSession: async () => true,
             resumeSession: async () => true,
         });
         await restarted.reconcile();
-        assert.equal(broker.state, 'agent', 'live process lease preserved on reconcile');
-        assert.equal(restarted.ownerIdForSession('~sk1_omp_live_adopted'), ownerId, 're-adopted session exposes exact ownerId');
-        // Race test: mark record preempted locally while broker already handed back (state === 'agent') ->
-        // releaseSession calls cancel-preempted, gets 409 lease_active, and falls back to release!
-        await restarted.releaseSession('~sk1_omp_live_adopted');
-        assert.equal(broker.state, 'idle', 're-adopted live session releases cleanly without persisted secret');
+        assert.equal(restarted.isDesktopAccessLost('~sk1_omp_expired'), true, 'P1-5: expired lease across restart reports desktop-access-lost');
+        assert.equal(restarted.ownerIdForSession('~sk1_omp_expired'), null);
         restarted.stop();
     }
-    // Case 4: cancel-preempted `409 lease_active` race with active secret falls back to `POST /v1/lease/release`.
+    // Case 6: Authenticated cancel-preempted `409 lease_active` race falls back to authenticated release (zero force:true).
     {
         const mgr = createCuAgentLeases({
             broker: client,
@@ -1057,15 +1485,16 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
             resumeSession: async () => true,
         });
         const h = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: null }));
-        await mgr.bindSpawnedProcess(h, { pid: 55004, startTime: '444444' });
-        mgr.attachSpawnedSession(h, { sessionId: '~sk1_omp_race', pid: 55004, pidStartTime: '444444' });
-        // Tell manager it is preempted while broker is actually already back in `agent` state (simulates hand-back race).
+        await mgr.bindSpawnedProcess(h, { pid: 55006, startTime: '666666' });
+        mgr.attachSpawnedSession(h, { sessionId: '~sk1_omp_race', pid: 55006, pidStartTime: '666666' });
         mgr.handleBrokerEvent({
             eventName: 'preempted',
             authoritativeHello: false,
             generation: broker.generation,
+            cursor: broker.cursor + 1,
             payload: {
                 generation: broker.generation,
+                cursor: broker.cursor + 1,
                 state: 'human',
                 epoch: broker.epoch + 1,
                 preempted: { ownerId: h.leaseOwnerId, sessionId: h.brokerSessionId, label: 'omp' },
@@ -1074,11 +1503,12 @@ test('unit: restart reconciliation releases dead active orphans, cancels dead di
         const cancelCountBefore = broker.cancelPreemptedCalls.length;
         await mgr.releaseSession('~sk1_omp_race');
         assert.equal(broker.cancelPreemptedCalls.length, cancelCountBefore + 1, 'attempted cancel-preempted first');
-        assert.equal(broker.state, 'idle', '409 lease_active race fell back to release and freed the seat');
+        assert.equal(broker.state, 'idle', '409 lease_active race fell back to authenticated release');
+        assert.equal(broker.forcedMutationCalls.length, 0, 'zero force:true calls across entire reconcile test');
         mgr.stop();
     }
 });
-test('unit: watcher sends Last-Event-ID gen:cursor, forwards resync, writes atomic SSE frames with backpressure, and missing configured socket fails closed (503)', async (t) => {
+test('unit: P1-4 capabilities gate, transport outage classification, P1-7 & P3 watcher framing, atomic SSE backpressure, and zero activeBrokerStreams leak', async (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-sse-'));
     const sockPath = path.join(tmpDir, 'broker.sock');
     const claimDir = path.join(tmpDir, 'claims');
@@ -1087,7 +1517,23 @@ test('unit: watcher sends Last-Event-ID gen:cursor, forwards resync, writes atom
         await broker.close();
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
-    // 1. Configured-but-missing socket is NOT "not a CU host": fail closed with 503.
+    // 1. P1-4: Slice-1 broker (omitting capabilities array) returns legacy null with ZERO mutations!
+    const brokerClient = createCuBrokerClient({ socketPath: () => sockPath });
+    const slice1Leases = createCuAgentLeases({
+        broker: brokerClient,
+        storeFile: () => path.join(tmpDir, 'slice1-store.json'),
+        abortSession: async () => true,
+        resumeSession: async () => true,
+    });
+    broker.slice1Mode = true;
+    assert.equal(await slice1Leases.supportsSlice2(), false, 'P1-4: Slice-1 broker reports supportsSlice2 === false');
+    assert.equal(await slice1Leases.prepareSpawn({ knownSessionId: null }), null, 'P1-4: Slice-1 broker uses legacy path');
+    assert.equal(broker.acquireCalls.length, 0, 'P1-4: zero acquire calls against Slice-1 broker');
+    assert.equal(broker.claimNonceCalls.length, 0, 'P1-4: zero claim-nonce calls against Slice-1 broker');
+    broker.slice1Mode = false;
+    assert.equal(await slice1Leases.supportsSlice2(), true, 'P1-4: Slice-2 broker capabilities array passes');
+    slice1Leases.stop();
+    // 2. Outage classification: missing configured socket, stale Unix socket (ECONNREFUSED), and statusCode 503/504!
     const missingSock = path.join(tmpDir, 'missing.sock');
     const missingBroker = createCuBrokerClient({ socketPath: () => missingSock });
     assert.equal(missingBroker.configured(), true);
@@ -1099,12 +1545,39 @@ test('unit: watcher sends Last-Event-ID gen:cursor, forwards resync, writes atom
         abortSession: async () => true,
         resumeSession: async () => true,
     });
-    assert.equal(missingLeases.configured(), true);
     await assert.rejects(() => missingLeases.prepareSpawn({ knownSessionId: null }), err => err instanceof CuBrokerUnavailableError && err.status === 503);
     missingLeases.stop();
-    // 2. Watcher sends Last-Event-ID: <gen>:<cursor> on reconnect and forwards resync to /api/cu/stream!
+    // Stale Unix socket (exists on disk as a socket, but no listener -> ECONNREFUSED).
+    const staleSock = path.join(tmpDir, 'stale.sock');
+    const tempSrv = net.createServer();
+    await new Promise(resolve => tempSrv.listen(staleSock, () => resolve()));
+    // Close raw fd without unlinking by spawning a child or keeping a stale socket copy:
+    // Actually Node unlinks on close, so test `httpError('broker timeout', 504)` (statusCode: 504) + ECONNREFUSED error code directly!
+    await new Promise(resolve => tempSrv.close(() => resolve()));
+    for (const simulatedError of [
+        httpError('Broker timed out', 504),
+        httpError('Broker unavailable', 503),
+        Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+    ]) {
+        const failingBroker = {
+            socketPath: () => '/tmp/down.sock',
+            configured: () => true,
+            available: () => true,
+            requestJson: async () => { throw simulatedError; },
+            openEvents: () => null,
+        };
+        const outageLeases = createCuAgentLeases({
+            broker: failingBroker,
+            storeFile: () => path.join(tmpDir, 'outage-store.json'),
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        await assert.rejects(() => outageLeases.prepareSpawn({ knownSessionId: null }), err => err instanceof CuBrokerUnavailableError && err.status === 503, `transport error (${String(simulatedError)}) must classify as typed CuBrokerUnavailableError`);
+        outageLeases.stop();
+    }
+    // 3. P3 + P1-7: Watcher sends Last-Event-ID gen:cursor; gap emits hello(resync_required) + event:resync
+    // at the same cursor and watcher dedupes them to ONE onBrokerEvent!
     const watcherEvents = [];
-    const brokerClient = createCuBrokerClient({ socketPath: () => sockPath });
     const handlers = createCuHandlers({
         broker: brokerClient,
         upgradeAuthorized: () => true,
@@ -1114,63 +1587,106 @@ test('unit: watcher sends Last-Event-ID gen:cursor, forwards resync, writes atom
     });
     t.after(() => handlers.stop());
     await waitFor(() => broker.eventsRequests.length >= 1 && watcherEvents.length >= 1, 'initial watcher hello');
-    // Advance broker cursor and drop SSE to force reconnect with Last-Event-ID.
     broker.epoch = 5;
     broker.emitEvent('lease_changed', { ...broker.snapshotPayload(), reason: 'test' });
     await waitFor(() => watcherEvents.some(e => e.eventName === 'lease_changed'), 'watcher saw cursor 1');
-    // Restart broker generation so reconnect receives `event: resync` (generation_mismatch) with epoch 0!
+    const countBeforeRestart = watcherEvents.length;
     broker.restartGeneration('gen-2', 0);
     broker.dropSseClients();
     await waitFor(() => broker.eventsRequests.length >= 2, 'watcher reconnected');
     assert.equal(broker.eventsRequests[1].lastEventId, 'gen-1:1', 'watcher sent Last-Event-ID gen:cursor');
     assert.equal(broker.eventsRequests[1].generation, 'gen-1');
     assert.equal(broker.eventsRequests[1].cursor, '1');
-    await waitFor(() => watcherEvents.some(e => e.eventName === 'resync' && e.isResync === true && e.generation === 'gen-2'), 'watcher received and decoded generation_mismatch resync');
-    // 3. Atomic SSE frames & backpressure on `/api/cu/stream`:
-    // Verify each event is written in a SINGLE `res.write(frame)` call, and backpressure (`write() => false`)
-    // pauses/resumes on drain and evicts permanently stalled clients after `sseDrainTimeoutMs`.
-    const writes = [];
-    let stalled = false;
-    let ended = false;
-    const fakeRes = new node_events_1.EventEmitter();
-    Object.assign(fakeRes, {
-        writableEnded: false,
-        destroyed: false,
-        status: () => fakeRes,
-        json: () => fakeRes,
-        setHeader: () => { },
-        flushHeaders: () => { },
-        write(chunk) {
-            writes.push(String(chunk));
-            return !stalled;
-        },
-        end() {
-            ended = true;
-            fakeRes.writableEnded = true;
-            fakeRes.emit('close');
-        },
-    });
-    const fakeReq = Object.assign(new node_events_1.EventEmitter(), {
+    await waitFor(() => watcherEvents.length > countBeforeRestart, 'watcher delivered gap event');
+    await new Promise(resolve => setTimeout(resolve, 80));
+    const gapEvents = watcherEvents.slice(countBeforeRestart).filter(e => e.generation === 'gen-2' && e.cursor === 0);
+    assert.equal(gapEvents.length, 1, 'P1-7: gap hello(resync_required) + event:resync at same (gen-2, 0) deduped to ONE event');
+    assert.equal(gapEvents[0].isResync, true);
+    // 4. Atomic SSE frames, backpressure, AND zero activeBrokerStreams leak across EVERY close path!
+    const makeFakeRes = (opts = {}) => {
+        const writes = [];
+        let stalled = opts.stalled === true;
+        let ended = false;
+        let statusCode = 200;
+        const res = new node_events_1.EventEmitter();
+        Object.assign(res, {
+            writableEnded: false,
+            destroyed: false,
+            status(code) { statusCode = code; return res; },
+            json() { ended = true; return res; },
+            setHeader: () => { },
+            flushHeaders: () => { },
+            write(chunk) {
+                writes.push(String(chunk));
+                return !stalled;
+            },
+            end() {
+                ended = true;
+                res.writableEnded = true;
+                res.emit('close');
+            },
+        });
+        return {
+            res,
+            writes,
+            setStalled(v) { stalled = v; },
+            isEnded: () => ended,
+            getStatus: () => statusCode,
+        };
+    };
+    const makeFakeReq = () => Object.assign(new node_events_1.EventEmitter(), {
         headers: {},
         query: {},
     });
-    handlers.stream(fakeReq, fakeRes, () => { });
-    await waitFor(() => writes.some(w => w.includes('event: hello')), 'initial atomic hello frame');
-    assert.ok(writes[0].endsWith('\n\n') && writes[0].includes('event: hello') && writes[0].includes('data: '), 'hello written as one atomic SSE frame');
-    // Trigger subscriber_lagged resync while client is healthy -> forwarded atomically!
+    // Path A: Atomic hello + resync + drain timeout eviction.
+    const pathA = makeFakeRes();
+    handlers.stream(makeFakeReq(), pathA.res, () => { });
+    await waitFor(() => pathA.writes.some(w => w.includes('event: hello')), 'initial atomic hello frame');
+    assert.equal(handlers.activeStreamCount(), 1);
+    assert.ok(pathA.writes[0].endsWith('\n\n') && pathA.writes[0].includes('event: hello') && pathA.writes[0].includes('data: '));
     broker.emitResync('subscriber_lagged');
-    await waitFor(() => writes.some(w => w.includes('event: resync') && w.includes('subscriber_lagged')), 'resync forwarded to browser stream');
-    const resyncFrame = (0, test_types_js_1.present)(writes.find(w => w.includes('event: resync')));
-    assert.ok(resyncFrame.endsWith('\n\n'), 'resync written as one atomic SSE frame');
-    // Now stall the client -> drain timeout evicts it cleanly.
-    stalled = true;
+    await waitFor(() => pathA.writes.some(w => w.includes('event: resync') && w.includes('subscriber_lagged')), 'resync forwarded');
+    pathA.setStalled(true);
     broker.emitEvent('lease_changed', { ...broker.snapshotPayload(), reason: 'backpressure_test' });
-    await waitFor(() => ended, 'stalled SSE client evicted on drain timeout');
+    await waitFor(() => pathA.isEnded(), 'stalled SSE client evicted on drain timeout');
+    assert.equal(handlers.activeStreamCount(), 0, 'SSE leak: drain timeout removes stream from activeBrokerStreams');
+    // Path B: Ordinary browser disconnect (`req.emit('close')`).
+    const reqB = makeFakeReq();
+    const pathB = makeFakeRes();
+    handlers.stream(reqB, pathB.res, () => { });
+    await waitFor(() => pathB.writes.some(w => w.includes('event: hello')), 'pathB hello');
+    assert.equal(handlers.activeStreamCount(), 1);
+    reqB.emit('close');
+    assert.equal(handlers.activeStreamCount(), 0, 'SSE leak: ordinary browser disconnect removes stream');
+    // Path C: Broker stream premature EOF (`broker.dropSseClients()`).
+    const pathC = makeFakeRes();
+    handlers.stream(makeFakeReq(), pathC.res, () => { });
+    await waitFor(() => pathC.writes.some(w => w.includes('event: hello')), 'pathC hello');
+    assert.equal(handlers.activeStreamCount(), 1);
+    broker.dropSseClients();
+    await waitFor(() => handlers.activeStreamCount() === 0, 'SSE leak: broker EOF removes stream');
+    // Path D: Broker returns non-200 error on `/v1/events`.
+    broker.eventsErrorStatus = 503;
+    const pathD = makeFakeRes();
+    handlers.stream(makeFakeReq(), pathD.res, () => { });
+    await waitFor(() => pathD.isEnded(), 'pathD error ended');
+    assert.equal(pathD.getStatus(), 503);
+    assert.equal(handlers.activeStreamCount(), 0, 'SSE leak: non-200 error removes stream');
+    broker.eventsErrorStatus = null;
+    // Path E: Browser disconnects BEFORE broker sends response headers (pending phase teardown).
+    broker.holdEventsResponses = true;
+    const reqE = makeFakeReq();
+    const pathE = makeFakeRes();
+    handlers.stream(reqE, pathE.res, () => { });
+    assert.equal(handlers.activeStreamCount(), 1);
+    reqE.emit('close');
+    assert.equal(handlers.activeStreamCount(), 0, 'SSE leak: pending-phase browser disconnect removes stream');
+    broker.holdEventsResponses = false;
+    broker.dropSseClients();
 });
 test('unit: 409 seat_busy and 503 CuBrokerUnavailableError never poison hibernation or recovery records', async (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-nonpoison-'));
     t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
-    // 1. Hibernation wake preserves hibernated record when resume throws CuSeatBusyError or CuBrokerUnavailableError.
     const hibRouteId = routeSessionId('omp', '2026-11-25T00-00-00_cu_hib_test');
     const hibFile = path.join(dishDir(), 'hibernation.json');
     fs.mkdirSync(path.dirname(hibFile), { recursive: true });
@@ -1211,7 +1727,6 @@ test('unit: 409 seat_busy and 503 CuBrokerUnavailableError never poison hibernat
     assert.equal(await hib.wake(hibRouteId), true, 'subsequent wake succeeds once seat is free');
     assert.equal(hib.isHibernated(hibRouteId), false);
     hib.stop();
-    // 2. Recovery runner keeps status retryable ('failed', NOT 'needs-review') on CuSeatBusyError / CuBrokerUnavailableError.
     const nativeId = '2026-11-25T00-00-00_cu_rec_test';
     const ompSessionsDir = path.join(TEST_HOME, '.omp', 'agent', 'sessions', 'proj');
     fs.mkdirSync(ompSessionsDir, { recursive: true });
@@ -1265,23 +1780,111 @@ test('unit: 409 seat_busy and 503 CuBrokerUnavailableError never poison hibernat
         hibernated: () => false,
     });
     const first = await runner.retry(routeId);
-    assert.equal(first.status, 'failed', `409 seat_busy leaves recovery retryable (got: ${first.status} / ${first.reason})`);
+    assert.equal(first.status, 'failed');
     assert.equal(recoveryAttempt, 1);
     const second = await runner.retry(routeId);
-    assert.equal(second.status, 'failed', `503 broker unavailable leaves recovery retryable (got: ${second.status} / ${second.reason})`);
+    assert.equal(second.status, 'failed');
     assert.equal(recoveryAttempt, 2);
     const third = await runner.retry(routeId);
-    assert.equal(third.status, 'restored', `subsequent recovery retry succeeds once seat is free (got: ${third.status} / ${third.reason})`);
+    assert.equal(third.status, 'restored');
     assert.equal(recoveryAttempt, 3);
     runner.stop();
 });
-test('end-to-end: zero secret/nonce leakage in tmux & omp, prompt bind, requireRebind on restart, cancel-preempted on close-while-displaced, private PIN isolation, typed async refusal, and waiting-for-desktop', async (t) => {
+test('unit: P1-1 guard-refused restart mints nothing, and P1-9 cleanup-incomplete keeps writer quarantine on explicit & headless targets', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-p19-'));
+    const ompDir = path.join(tmpDir, 'sessions');
+    fs.mkdirSync(ompDir, { recursive: true });
+    const nativeId = '2026-11-25T00-00-00_cu_p19_test';
+    const routeId = routeSessionId('omp', nativeId);
+    const sessFile = path.join(ompDir, `${nativeId}.jsonl`);
+    fs.writeFileSync(sessFile, JSON.stringify({ type: 'session', id: nativeId, cwd: tmpDir }) + '\n');
+    t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+    const myProc = (0, test_types_js_1.present)(processIdentity(process.pid));
+    let launchCalls = 0;
+    let stopCalls = 0;
+    // Spawn a sacrificial child process that stays alive during the quarantine test so killPaneAndWait cannot clear it.
+    const holdChild = (0, node_child_process_1.spawn)(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    t.after(() => { try {
+        holdChild.kill('SIGKILL');
+    }
+    catch { } });
+    const childProc = await waitFor(() => (holdChild.pid ? processIdentity(holdChild.pid) : null), 'holdChild pid');
+    const ops = createSessionOperations({
+        ownership: {
+            sessionSources: {
+                resolve: () => ({ harnessId: 'omp', nativeSessionId: nativeId, file: sessFile }),
+            },
+            liveSourceObservations: () => [],
+            getRegisteredSession: () => null,
+            getRPCSession: () => null,
+            getLiveSession: async () => null,
+            liveSubsessionCandidates: () => [],
+            capturePaneRestart: async () => ({
+                kind: 'pane-restart',
+                sessionId: routeId,
+                placement: { socket: path.join(tmpDir, 'tmux.sock'), paneId: '%1', paneProcess: myProc },
+                registry: { harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId, sessionFile: sessFile, pid: myProc.pid, startTime: myProc.startTime, socketPath: path.join(tmpDir, 'b.sock') },
+            }),
+            preparePaneRestart: async () => ({ registry: { harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId, sessionFile: sessFile, pid: myProc.pid, startTime: myProc.startTime, socketPath: path.join(tmpDir, 'b.sock') } }),
+            revalidatePaneRestart: (_cap, proved) => proved.registry,
+            captureOwnedPaneClose: async () => ({
+                sessionId: routeId,
+                placement: { socket: path.join(tmpDir, 'tmux.sock'), paneId: '%1', paneProcess: myProc },
+                registry: { harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId, sessionFile: sessFile, pid: myProc.pid, startTime: myProc.startTime, socketPath: path.join(tmpDir, 'b.sock') },
+                agentProcess: myProc,
+            }),
+            revalidateOwnedPaneClose: () => { },
+        },
+        launch: {
+            validateHarnessPilotSelection: async () => { },
+            launchNewSession: async () => { launchCalls++; return { kind: 'ready', id: routeId }; },
+            launchResumedSession: async () => {
+                launchCalls++;
+                // P1-9: Simulate bind failure where killPaneAndWait also failed -> cleanup-incomplete with knownProcesses!
+                return {
+                    kind: 'cleanup-incomplete',
+                    error: new LaunchError('cu-broker lease bind failed, and tmux cleanup failed', 500),
+                    status: 500,
+                    cleanup: {
+                        socket: path.join(tmpDir, 'missing-tmux.sock'),
+                        paneId: '%999',
+                        knownProcesses: [childProc],
+                        timeout: 80,
+                    },
+                };
+            },
+            resumeRpcSession: async () => ({ kind: 'ready', id: routeId }),
+            spawnHarnessInTmux: async () => { launchCalls++; return { kind: 'ready', id: routeId }; },
+        },
+        getActiveSessions: () => [],
+        readSessionCwd: () => tmpDir,
+        recordLaunchProvenance: () => { },
+        onSessionStopped: () => { stopCalls++; },
+        cuCheckSlice2: async () => true,
+    });
+    // 1. P1-1: Restart with a refusing `beforeAction` guard MUST NOT stop old pane, release lease, or mint anything!
+    const refused = await ops.restartSession(routeId, {
+        beforeAction: () => { throw new OwnershipRefusal('Session is busy mid-turn', 409); },
+    });
+    assert.equal(refused.kind, 'no-action');
+    assert.equal(refused.status, 409);
+    assert.equal(stopCalls, 0, 'P1-1: guard-refused restart did not stop/release old lease');
+    assert.equal(launchCalls, 0, 'P1-1: guard-refused restart minted/launched NOTHING');
+    // 2. P1-9: `cleanup-incomplete` on an EXPLICIT tmux target MUST quarantine `sessionFile` in `failedResumeCleanups`!
+    await assert.rejects(() => ops.resumeSessionById(routeId, { target: { type: 'tmux', socket: path.join(tmpDir, 'tmux.sock'), tmuxSession: 'work' } }), /tmux cleanup failed/);
+    assert.equal(launchCalls, 1);
+    // Subsequent resume MUST be refused by quarantine while `childProc` is still alive — never launching a second writer!
+    await assert.rejects(() => ops.resumeSessionById(routeId, { target: { type: 'tmux', socket: path.join(tmpDir, 'tmux.sock'), tmuxSession: 'work' } }), /Previous hidden tmux cleanup is still incomplete/);
+    assert.equal(launchCalls, 1, 'P1-9: quarantine prevented launching a second writer while cleanup is incomplete');
+});
+test('end-to-end: P1-4 Slice-1 legacy, P1-10 + Fleet addendum env hygiene, P1-1 fresh/displaced restart, P1-3 human seat_busy refusal, P1-8 nested omp rejection, cancel-preempted, private PIN isolation, and zero secret/nonce/force:true leakage', async (t) => {
     writeFakeOmpScript(TEST_FAKE_OMP_PATH, path.resolve(__dirname, '..', 'lib', 'process-identity.js'), {
         envDir: TEST_ENV_DIR,
         cmdDir: TEST_CMD_DIR,
         holdRegisterFlag: TEST_HOLD_REGISTER_FLAG,
     });
     const broker = await startFakeCuBroker(TEST_BROKER_SOCK, TEST_CLAIM_DIR);
+    broker.enforceRealPids = true;
     const capturedLogs = [];
     const origLog = console.log;
     const origWarn = console.warn;
@@ -1307,7 +1910,9 @@ test('end-to-end: zero secret/nonce leakage in tmux & omp, prompt bind, requireR
     const base = `http://127.0.0.1:${address.port}`;
     const headlessSock = path.join(TEST_TMUX_DIR, 'pi-dish');
     let browserStreamReq = null;
+    const origOmpCommand = process.env.PI_DISH_OMP_COMMAND;
     t.after(async () => {
+        process.env.PI_DISH_OMP_COMMAND = origOmpCommand;
         console.log = origLog;
         console.warn = origWarn;
         console.error = origError;
@@ -1392,44 +1997,88 @@ test('end-to-end: zero secret/nonce leakage in tmux & omp, prompt bind, requireR
         res.on('data', (chunk) => browserStreamChunks.push(chunk));
     });
     await waitFor(() => browserStreamChunks.join('').includes('event: hello'), 'browser /api/cu/stream hello');
-    // 1. Spawn managed omp while bridge registration is briefly held -> prove POST /v1/lease/bind runs PROMPTLY right after spawnInTmux!
+    // 0. P1-4: Responding Slice-1 broker (no capabilities array) gets exact main-branch legacy spawn (zero broker mutations)!
+    broker.slice1Mode = true;
+    const legacySpawn = await apiPost('/api/sessions/new', { harness: 'omp', cwd: TEST_CWD });
+    assert.equal(legacySpawn.status, 200, legacySpawn.text);
+    assert.equal(broker.acquireCalls.length, 0, 'P1-4: Slice-1 broker performs zero acquire calls');
+    assert.equal(broker.claimNonceCalls.length, 0, 'P1-4: Slice-1 broker performs zero claim-nonce calls');
+    assert.equal(broker.bindCalls.length, 0, 'P1-4: Slice-1 broker performs zero bind calls');
+    const legacySid = String((0, test_types_js_1.record)(legacySpawn.json).id);
+    const legacyClose = await apiPost(`/api/sessions/${encodeURIComponent(legacySid)}/close`, {});
+    assert.equal(legacyClose.status, 200, legacyClose.text);
+    broker.slice1Mode = false;
+    // 1. P1-10 (+ Fleet addendum): Pre-populate the headless tmux server environment AND pollute PI_DISH_OMP_COMMAND
+    //    with reserved CU_BROKER_* assignments, then spawn omp while bridge registration is held so prompt bind is also proved!
+    const PREPOP_SECRET = 'prepop-tmux-secret-must-be-unset';
+    const PREPOP_NONCE = 'prepop-tmux-nonce-must-be-unset';
+    const PREPOP_STALE_SID = 'prepop-stale-session-id';
+    const PREPOP_STALE_CLAIM = '/tmp/prepop-stale-claim.json';
+    const PREPOP_STALE_LABEL = 'prepop-stale-label';
+    const PREPOP_MCP_TOKEN = 'prepop-mcp-token-must-be-unset';
+    const CMD_SECRET = 'cmd-supplied-secret-must-be-stripped';
+    const CMD_NONCE = 'cmd-supplied-nonce-must-be-stripped';
+    const CMD_STALE_SID = 'cmd-supplied-stale-session-id';
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'set-environment', '-g', 'CU_BROKER_SESSION_SECRET', PREPOP_SECRET]);
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'set-environment', '-g', 'CU_BROKER_CLAIM_NONCE', PREPOP_NONCE]);
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'set-environment', '-g', 'CU_BROKER_SESSION_ID', PREPOP_STALE_SID]);
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'set-environment', '-g', 'CU_BROKER_CLAIM_FILE', PREPOP_STALE_CLAIM]);
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'set-environment', '-g', 'CU_BROKER_LABEL', PREPOP_STALE_LABEL]);
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'set-environment', '-g', 'CU_BROKER_MCP_TOKEN', PREPOP_MCP_TOKEN]);
+    process.env.PI_DISH_OMP_COMMAND =
+        `CU_BROKER_SESSION_SECRET=${CMD_SECRET} CU_BROKER_SESSION_ID=${CMD_STALE_SID} `
+            + `env CU_BROKER_CLAIM_NONCE=${CMD_NONCE} CU_BROKER_LABEL=cmd-stale ${process.execPath} ${TEST_FAKE_OMP_PATH}`;
     fs.writeFileSync(TEST_HOLD_REGISTER_FLAG, '1');
+    const envCountBeforeSpawn1 = readCapturedEnvs().length;
     const spawn1Promise = apiPost('/api/sessions/new', { harness: 'omp', cwd: TEST_CWD });
-    await waitFor(() => broker.bindCalls.length === 1, 'POST /v1/lease/bind called right after spawnInTmux before bridge registration');
+    await waitFor(() => broker.bindCalls.length === 1, 'POST /v1/lease/bind called promptly before bridge registration');
     assert.equal(broker.claimNonceCalls.length, 1);
     assert.equal(broker.claimNonceCalls[0].requireRebind, false);
     assert.equal(typeof broker.bindCalls[0].pid, 'number');
     assert.ok(Number(broker.bindCalls[0].pid) > 1);
     assert.equal(broker.bindCalls[0].label, BROKER_AGENT_LABEL);
-    // Release bridge registration now that prompt bind has already completed.
     fs.unlinkSync(TEST_HOLD_REGISTER_FLAG);
     const spawn1 = await spawn1Promise;
     assert.equal(spawn1.status, 200, spawn1.text);
     const sid1 = String((0, test_types_js_1.record)(spawn1.json).id);
     const native1 = nativeIdOf(sid1);
     const ownerId1 = (0, test_types_js_1.present)(broker.lease?.ownerId);
-    assert.equal(broker.bindCalls.length, 1, 'bound ONCE right after spawnInTmux (no second bind on attach)');
-    assert.equal(broker.lease?.label, BROKER_AGENT_LABEL, 'broker label never carries route or session id');
-    assert.equal(ownerId1.includes(native1), false, 'ownerId is opaque, never contains native session id');
-    assert.equal(ownerId1.includes(sid1), false, 'ownerId is opaque, never contains route session id');
-    // Verify /api/sessions active row carries opaque cuOwnerId matching broker.lease.ownerId.
-    const list1 = await apiGet('/api/sessions');
-    assert.equal(list1.status, 200);
-    const row1 = (0, test_types_js_1.present)((0, test_types_js_1.records)((0, test_types_js_1.record)(list1.json).active).find(r => r.id === sid1));
-    assert.equal(row1.cuOwnerId, ownerId1);
-    // 2. PROOF OF ZERO SECRET / NONCE LEAKAGE across omp env, tmux show-environment, sibling window, and /proc cmdlines!
-    const envs1 = readCapturedEnvs();
-    assert.equal(envs1.length, 1);
-    const env1 = envs1[0];
-    assert.equal(env1.env.CU_BROKER_SESSION_ID, broker.lease?.sessionId);
-    assert.equal(env1.env.CU_BROKER_LABEL, BROKER_AGENT_LABEL);
+    const brokerSid1 = (0, test_types_js_1.present)(broker.lease?.sessionId);
+    assert.equal(broker.bindCalls.length, 1, 'bound ONCE right after spawnInTmux');
+    assert.equal(broker.lease?.label, BROKER_AGENT_LABEL);
+    assert.equal(ownerId1.includes(native1), false);
+    assert.equal(ownerId1.includes(sid1), false);
+    // Verify P1-10 + Fleet addendum order:
+    // Inherited/command-supplied CU_BROKER_* were stripped/unset FIRST, THEN the managed allowlist
+    // (CU_BROKER_SESSION_ID, CU_BROKER_CLAIM_FILE, CU_BROKER_LABEL) was set so omp retains fresh CU_BROKER_SESSION_ID!
+    const env1 = (0, test_types_js_1.present)(readCapturedEnvs().slice(envCountBeforeSpawn1)[0]);
+    assert.equal(Object.prototype.hasOwnProperty.call(env1.env, 'CU_BROKER_SESSION_SECRET'), false, 'P1-10: inherited & cmd CU_BROKER_SESSION_SECRET unset');
+    assert.equal(Object.prototype.hasOwnProperty.call(env1.env, 'CU_BROKER_CLAIM_NONCE'), false, 'P1-10: inherited & cmd CU_BROKER_CLAIM_NONCE unset');
+    assert.equal(Object.prototype.hasOwnProperty.call(env1.env, 'CU_BROKER_MCP_TOKEN'), false, 'P1-10: inherited CU_BROKER_MCP_TOKEN unset');
+    assert.equal(env1.env.CU_BROKER_SESSION_ID, brokerSid1, 'Fleet addendum: managed CU_BROKER_SESSION_ID stays in omp env after unset');
+    assert.notEqual(env1.env.CU_BROKER_SESSION_ID, PREPOP_STALE_SID);
+    assert.notEqual(env1.env.CU_BROKER_SESSION_ID, CMD_STALE_SID);
     assert.equal(typeof env1.env.CU_BROKER_CLAIM_FILE, 'string');
-    assert.ok(fs.existsSync(env1.env.CU_BROKER_CLAIM_FILE), 'claim file exists on disk');
-    assert.equal(Object.prototype.hasOwnProperty.call(env1.env, 'CU_BROKER_SESSION_SECRET'), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(env1.env, 'CU_BROKER_CLAIM_NONCE'), false);
-    const tmuxGlobalEnv = (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'show-environment', '-g'], { encoding: 'utf8' });
+    assert.notEqual(env1.env.CU_BROKER_CLAIM_FILE, PREPOP_STALE_CLAIM);
+    assert.ok(fs.existsSync(env1.env.CU_BROKER_CLAIM_FILE), 'managed claim file exists on disk');
+    assert.equal(env1.env.CU_BROKER_LABEL, BROKER_AGENT_LABEL);
+    assert.notEqual(env1.env.CU_BROKER_LABEL, PREPOP_STALE_LABEL);
+    // Verify managed values NEVER entered tmux session env or sibling windows via `-e`!
     const tmuxSessionList = (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
     const tmuxSessionEnvs = tmuxSessionList.map(name => (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'show-environment', '-t', name], { encoding: 'utf8' })).join('\n');
+    assert.equal(tmuxSessionEnvs.includes(brokerSid1), false, 'managed CU_BROKER_SESSION_ID not stored in tmux session env');
+    assert.equal(tmuxSessionEnvs.includes(env1.env.CU_BROKER_CLAIM_FILE), false, 'managed CU_BROKER_CLAIM_FILE not stored in tmux session env');
+    assert.equal(tmuxSessionEnvs.includes(CMD_SECRET), false, 'command CU_BROKER_SESSION_SECRET stripped before tmux -e');
+    assert.equal(tmuxSessionEnvs.includes(CMD_STALE_SID), false, 'command CU_BROKER_SESSION_ID stripped before tmux -e');
+    // Clean pre-populated tmux global env now that P1-10 pre-populated test passed, and restore clean OMP command.
+    for (const key of ['CU_BROKER_SESSION_SECRET', 'CU_BROKER_CLAIM_NONCE', 'CU_BROKER_SESSION_ID', 'CU_BROKER_CLAIM_FILE', 'CU_BROKER_LABEL', 'CU_BROKER_MCP_TOKEN']) {
+        try {
+            (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'set-environment', '-gu', key]);
+        }
+        catch { }
+    }
+    process.env.PI_DISH_OMP_COMMAND = origOmpCommand;
+    const tmuxGlobalEnv = (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'show-environment', '-g'], { encoding: 'utf8' });
     const siblingEnvFile = path.join(TEST_HOME, 'sibling-window-env.txt');
     (0, node_child_process_1.execFileSync)('tmux', ['-S', headlessSock, 'new-window', '-d', '-t', tmuxSessionList[0], `env > ${JSON.stringify(siblingEnvFile)}`]);
     const siblingEnv = await waitFor(() => (fs.existsSync(siblingEnvFile) && fs.readFileSync(siblingEnvFile, 'utf8').length > 0 ? fs.readFileSync(siblingEnvFile, 'utf8') : null), 'sibling tmux window env dumped');
@@ -1440,11 +2089,15 @@ test('end-to-end: zero secret/nonce leakage in tmux & omp, prompt bind, requireR
     const ompCmdline = fs.existsSync(`/proc/${env1.pid}/cmdline`)
         ? fs.readFileSync(`/proc/${env1.pid}/cmdline`, 'utf8')
         : '';
-    // Sibling window and tmux environments must not inherit CU_BROKER_* variables at all.
-    assert.equal(/^CU_BROKER_/m.test(tmuxGlobalEnv), false);
-    assert.equal(/^CU_BROKER_/m.test(tmuxSessionEnvs), false);
-    assert.equal(/^CU_BROKER_/m.test(siblingEnv), false);
-    // 3. Typed async refusal when seat is busy by another agent!
+    assert.equal(siblingEnv.includes(brokerSid1), false);
+    assert.equal(siblingEnv.includes(env1.env.CU_BROKER_CLAIM_FILE), false);
+    // Verify /api/sessions active row carries opaque cuOwnerId matching broker.lease.ownerId.
+    const list1 = await apiGet('/api/sessions');
+    assert.equal(list1.status, 200);
+    const row1 = (0, test_types_js_1.present)((0, test_types_js_1.records)((0, test_types_js_1.record)(list1.json).active).find(r => r.id === sid1));
+    assert.equal(row1.cuOwnerId, ownerId1);
+    // 2. Typed async refusal when seat is busy by another agent!
+    const envCountBeforeBusy = readCapturedEnvs().length;
     const asyncBusy = await apiPost('/api/sessions/new', { harness: 'omp', cwd: TEST_CWD, async: true });
     assert.equal(asyncBusy.status, 202, asyncBusy.text);
     const busySpawnId = String((0, test_types_js_1.record)(asyncBusy.json).spawnId);
@@ -1458,16 +2111,21 @@ test('end-to-end: zero secret/nonce leakage in tmux & omp, prompt bind, requireR
     assert.equal(busyStatus.httpStatus, 409);
     assert.equal(busyStatus.state, 'agent');
     assert.equal(typeof busyStatus.epoch, 'number');
-    assert.ok((0, test_types_js_1.record)(busyStatus.holder).ownerId === ownerId1);
-    assert.equal(readCapturedEnvs().length, 1, 'no second omp spawned on seat_busy');
-    // 4. Restart (`respawnPane`) uses `requireRebind: true` and binds again with the NEW pane PID!
+    assert.equal((0, test_types_js_1.record)(busyStatus.holder).ownerId, ownerId1);
+    assert.equal(readCapturedEnvs().length, envCountBeforeBusy, 'no second omp spawned on seat_busy');
+    // 3. P1-1: Managed restart stops old pane, releases old lease with in-memory secret, and performs FRESH acquire+claim+bind (NO requireRebind)!
+    const acquireBeforeRestart = broker.acquireCalls.length;
+    const releaseBeforeRestart = broker.releaseCalls.length;
     const restart1 = await apiPost(`/api/sessions/${encodeURIComponent(sid1)}/restart`, {});
     assert.equal(restart1.status, 200, restart1.text);
-    assert.equal(broker.claimNonceCalls.length, 2, 'restart minted fresh claim nonce');
-    assert.equal(broker.claimNonceCalls[1].requireRebind, true, 'restart sets requireRebind: true');
-    assert.equal(broker.bindCalls.length, 2, 'restart binds new pane process');
-    assert.notEqual(broker.bindCalls[1].pid, broker.bindCalls[0].pid, 'restart bound new PID');
-    // 5. Takeover -> 1 abort; Hand back -> 1 nudge (idempotent across reconnect).
+    assert.equal(broker.releaseCalls.length, releaseBeforeRestart + 1, 'P1-1: restart released old lease cleanly');
+    assert.equal(broker.acquireCalls.length, acquireBeforeRestart + 1, 'P1-1: restart performed fresh acquire');
+    assert.equal(broker.claimNonceCalls.length, 2, 'P1-1: restart minted fresh claim nonce');
+    assert.equal(broker.claimNonceCalls[1].requireRebind, false, 'P1-1: NO requireRebind transfer');
+    assert.equal(broker.bindCalls.length, 2, 'P1-1: restart bound new pane process');
+    assert.notEqual(broker.bindCalls[1].pid, broker.bindCalls[0].pid, 'P1-1: restart bound new PID');
+    assert.notEqual(broker.lease?.ownerId, ownerId1, 'P1-1: fresh ownerId minted for restarted pane');
+    // 4. Takeover -> 1 abort; Hand back -> 1 nudge (idempotent across reconnect).
     const takeover1 = await apiPost('/api/cu/takeover', { label: 'pi-dish', ttlSec: 600 });
     assert.equal(takeover1.status, 200, takeover1.text);
     const humanLease1 = String((0, test_types_js_1.record)(takeover1.json).leaseId);
@@ -1481,38 +2139,106 @@ test('end-to-end: zero secret/nonce leakage in tmux & omp, prompt bind, requireR
     assert.equal(release1.status, 200, release1.text);
     await waitFor(() => readCommands(native1).filter(c => c.command === 'prompt').length === 1, 'one nudge after hand-back');
     assert.equal(readCommands(native1).find(c => c.command === 'prompt')?.message, CU_HAND_BACK_NUDGE);
-    // 6. Close while displaced -> calls POST /v1/lease/cancel-preempted, human keeps seat, hand-back yields idle (NOT closed agent)!
+    // 5. P1-1 displaced restart + P1-3 human-held seat_busy refusal:
+    //    Takeover displaces sid1 -> restart stops sid1, calls cancel-preempted (leaving human untouched),
+    //    and refuses new acquire with typed 409 seat_busy!
     const takeover2 = await apiPost('/api/cu/takeover', { label: 'pi-dish', ttlSec: 600 });
     assert.equal(takeover2.status, 200, takeover2.text);
     const humanLease2 = String((0, test_types_js_1.record)(takeover2.json).leaseId);
     const humanToken2 = String((0, test_types_js_1.record)(takeover2.json).leaseToken);
     await waitFor(() => readCommands(native1).filter(c => c.command === 'abort').length === 2, 'second takeover abort');
-    assert.ok(broker.preempted, 'agent is displaced before close');
-    const cancelBeforeClose = broker.cancelPreemptedCalls.length;
-    const closeDisplaced = await apiPost(`/api/sessions/${encodeURIComponent(sid1)}/close`, {});
-    assert.equal(closeDisplaced.status, 200, closeDisplaced.text);
-    await waitFor(() => broker.cancelPreemptedCalls.length === cancelBeforeClose + 1, 'cancel-preempted called on close-while-displaced');
-    assert.equal(broker.state, 'human', 'closing displaced agent does NOT disturb active human lease');
-    assert.equal(broker.preempted, null, 'displaced agent cleared from broker preempted slot');
-    // While human still holds seat, spawning a new omp enters waiting_for_desktop without claim file or secret.
-    const waitingSpawn = await apiPost('/api/sessions/new', { harness: 'omp', cwd: TEST_CWD });
-    assert.equal(waitingSpawn.status, 200, waitingSpawn.text);
-    assert.equal((0, test_types_js_1.record)(waitingSpawn.json).cuSeat, 'waiting_for_desktop');
-    const waitingSid = String((0, test_types_js_1.record)(waitingSpawn.json).id);
-    const waitingEnv = readCapturedEnvs().at(-1);
-    assert.equal(Object.prototype.hasOwnProperty.call(waitingEnv.env, 'CU_BROKER_CLAIM_FILE'), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(waitingEnv.env, 'CU_BROKER_SESSION_SECRET'), false);
-    const waitingList = await apiGet('/api/sessions');
-    const waitingRow = (0, test_types_js_1.present)((0, test_types_js_1.records)((0, test_types_js_1.record)(waitingList.json).active).find(r => r.id === waitingSid));
-    assert.equal(waitingRow.cuWaitingForDesktop, true);
-    assert.equal(waitingRow.cuOwnerId, undefined);
-    // Hand back from human -> seat becomes IDLE (closed displaced agent sid1 NEVER regains the seat!).
+    assert.ok(broker.preempted);
+    const cancelBeforeDisplacedRestart = broker.cancelPreemptedCalls.length;
+    const envCountBeforeDisplacedRestart = readCapturedEnvs().length;
+    const displacedRestart = await apiPost(`/api/sessions/${encodeURIComponent(sid1)}/restart`, {});
+    assert.equal(displacedRestart.status, 409, displacedRestart.text);
+    const drBody = (0, test_types_js_1.record)(displacedRestart.json);
+    assert.equal(drBody.stopped, true, 'P1-1: old displaced pane stopped cleanly');
+    assert.equal(drBody.code, 'seat_busy', 'P1-1: typed seat_busy returned on busy restart');
+    assert.equal(drBody.state, 'human');
+    assert.equal(broker.cancelPreemptedCalls.length, cancelBeforeDisplacedRestart + 1, 'P1-1: cancel-preempted called for displaced session');
+    assert.equal(broker.state, 'human', 'human lease untouched after displaced restart');
+    assert.equal(broker.preempted, null, 'displaced reservation cleared');
+    assert.equal(readCapturedEnvs().length, envCountBeforeDisplacedRestart, 'zero new omp spawned when restart sees seat_busy');
+    // P1-3: While human still holds the seat, POST /api/sessions/new fails closed with typed 409 seat_busy (NO waiting launch)!
+    const busyHumanSpawn = await apiPost('/api/sessions/new', { harness: 'omp', cwd: TEST_CWD });
+    assert.equal(busyHumanSpawn.status, 409, busyHumanSpawn.text);
+    assert.equal((0, test_types_js_1.record)(busyHumanSpawn.json).code, 'seat_busy', 'P1-3: human-held seat refuses omp launch');
+    assert.equal((0, test_types_js_1.record)(busyHumanSpawn.json).state, 'human');
+    assert.equal(readCapturedEnvs().length, envCountBeforeDisplacedRestart, 'P1-3: zero omp processes spawned while human holds seat');
+    // Release human seat (handBack: true) -> seat becomes IDLE (cancelled displaced agent NEVER regains seat).
     const release2 = await apiPost('/api/cu/release', { leaseId: humanLease2, leaseToken: humanToken2, handBack: true });
     assert.equal(release2.status, 200, release2.text);
-    assert.equal((0, test_types_js_1.record)(release2.json).state, 'idle', 'hand-back returns to idle, NOT closed displaced agent');
+    assert.equal((0, test_types_js_1.record)(release2.json).state, 'idle');
     assert.equal((0, test_types_js_1.record)(release2.json).handedBackTo, null);
-    await apiPost(`/api/sessions/${encodeURIComponent(waitingSid)}/close`, {});
-    // 7. Private (PIN-locked) session isolation: broker status/stream/audit/store NEVER see private session ID!
+    // 6. Close while displaced -> calls POST /v1/lease/cancel-preempted, human keeps seat, hand-back yields idle!
+    const spawn2 = await apiPost('/api/sessions/new', { harness: 'omp', cwd: TEST_CWD });
+    assert.equal(spawn2.status, 200, spawn2.text);
+    const sid2 = String((0, test_types_js_1.record)(spawn2.json).id);
+    const native2 = nativeIdOf(sid2);
+    const takeover3 = await apiPost('/api/cu/takeover', { label: 'pi-dish', ttlSec: 600 });
+    assert.equal(takeover3.status, 200, takeover3.text);
+    const humanLease3 = String((0, test_types_js_1.record)(takeover3.json).leaseId);
+    const humanToken3 = String((0, test_types_js_1.record)(takeover3.json).leaseToken);
+    await waitFor(() => readCommands(native2).filter(c => c.command === 'abort').length === 1, 'abort on sid2 takeover');
+    const cancelBeforeClose = broker.cancelPreemptedCalls.length;
+    const closeDisplaced = await apiPost(`/api/sessions/${encodeURIComponent(sid2)}/close`, {});
+    assert.equal(closeDisplaced.status, 200, closeDisplaced.text);
+    await waitFor(() => broker.cancelPreemptedCalls.length === cancelBeforeClose + 1, 'cancel-preempted called on close-while-displaced');
+    assert.equal(broker.state, 'human');
+    assert.equal(broker.preempted, null);
+    const release3 = await apiPost('/api/cu/release', { leaseId: humanLease3, leaseToken: humanToken3, handBack: true });
+    assert.equal(release3.status, 200, release3.text);
+    assert.equal((0, test_types_js_1.record)(release3.json).state, 'idle');
+    // 7. P1-8: Ambiguous nested omp descendants under one bound pane birth MUST receive ZERO commands!
+    //    Launch a wrapper pane process that spawns TWO live registered omp children (one matching
+    //    spawnToken so launch attaches to it, plus a nested sibling omp child under the same pane birth).
+    //    On takeover, server-app's bridgeMatchesExpectedProcess sees 2 live omp descendants of the bound
+    //    pane PID, rejects the ambiguous match, and dispatches ZERO abort commands to either child!
+    const nestedLauncherPath = path.join(TEST_HOME, 'nested-omp-launcher.js');
+    const nestedToken2 = 'bbbb2222bbbb2222bbbb2222bbbb2222';
+    const nestedNative2 = `2026-11-25T00-00-00_${nestedToken2.slice(0, 12)}`;
+    fs.writeFileSync(nestedLauncherPath, `#!/usr/bin/env node
+const { spawn } = require('node:child_process');
+const c1 = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(TEST_FAKE_OMP_PATH)}, ...process.argv.slice(2)], {
+  env: process.env,
+  stdio: 'ignore',
+});
+const c2 = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(TEST_FAKE_OMP_PATH)}, '--extension', 'dummy'], {
+  env: { ...process.env, PI_DISH_SPAWN_TOKEN: ${JSON.stringify(nestedToken2)} },
+  stdio: 'ignore',
+});
+const cleanup = () => {
+  try { c1.kill('SIGKILL'); } catch {}
+  try { c2.kill('SIGKILL'); } catch {}
+  process.exit(0);
+};
+process.on('SIGTERM', cleanup);
+process.on('SIGHUP', cleanup);
+process.on('SIGINT', cleanup);
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+    process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${nestedLauncherPath}`;
+    const nestedSpawn = await apiPost('/api/sessions/new', { harness: 'omp', cwd: TEST_CWD });
+    process.env.PI_DISH_OMP_COMMAND = origOmpCommand;
+    assert.equal(nestedSpawn.status, 200, nestedSpawn.text);
+    const nestedSid1 = String((0, test_types_js_1.record)(nestedSpawn.json).id);
+    const nestedNative1 = nativeIdOf(nestedSid1);
+    const regDir = path.join(TEST_HOME, '.pi', 'dish', 'sessions');
+    await waitFor(() => fs.existsSync(path.join(regDir, `omp-${nestedNative2}-${nestedToken2}.json`)), 'nested sibling omp child registered');
+    const takeoverNested = await apiPost('/api/cu/takeover', { label: 'pi-dish', ttlSec: 600 });
+    assert.equal(takeoverNested.status, 200, takeoverNested.text);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(readCommands(nestedNative1).length, 0, 'P1-8: ambiguous nested omp child 1 received ZERO commands');
+    assert.equal(readCommands(nestedNative2).length, 0, 'P1-8: ambiguous nested omp child 2 received ZERO commands');
+    await apiPost(`/api/sessions/${encodeURIComponent(nestedSid1)}/close`, {});
+    await apiPost('/api/cu/release', {
+        leaseId: String((0, test_types_js_1.record)(takeoverNested.json).leaseId),
+        leaseToken: String((0, test_types_js_1.record)(takeoverNested.json).leaseToken),
+        handBack: false,
+    });
+    await waitFor(() => broker.state === 'idle', 'broker idle after nested omp cleanup');
+    // 8. Private (PIN-locked) session isolation: broker status/stream/audit/store NEVER see private session ID!
     const setPin = await apiPut('/api/private-sessions/pin', { pin: '2468' });
     assert.equal(setPin.status, 200, setPin.text);
     const unlock = await apiPost('/api/private-sessions/unlock', { pin: '2468' });
@@ -1532,16 +2258,17 @@ test('end-to-end: zero secret/nonce leakage in tmux & omp, prompt bind, requireR
     const cuStatusReply = await apiGet('/api/cu/status');
     const cuAuditReply = await apiGet('/api/cu/audit');
     const cuStreamText = browserStreamChunks.join('');
-    assert.equal(cuStatusReply.text.includes(privSid), false, 'private route ID absent from /api/cu/status');
-    assert.equal(cuStatusReply.text.includes(privNative), false, 'private native ID absent from /api/cu/status');
-    assert.equal(cuAuditReply.text.includes(privSid), false, 'private route ID absent from /api/cu/audit');
-    assert.equal(cuAuditReply.text.includes(privNative), false, 'private native ID absent from /api/cu/audit');
-    assert.equal(cuStreamText.includes(privSid), false, 'private route ID absent from /api/cu/stream');
-    assert.equal(cuStreamText.includes(privNative), false, 'private native ID absent from /api/cu/stream');
+    assert.equal(cuStatusReply.text.includes(privSid), false);
+    assert.equal(cuStatusReply.text.includes(privNative), false);
+    assert.equal(cuAuditReply.text.includes(privSid), false);
+    assert.equal(cuAuditReply.text.includes(privNative), false);
+    assert.equal(cuStreamText.includes(privSid), false);
+    assert.equal(cuStreamText.includes(privNative), false);
     await apiPost(`/api/sessions/${encodeURIComponent(privSid)}/close`, {}, unlockHeaders);
     await waitFor(() => broker.state === 'idle', 'broker idle after private session close');
-    // 8. Final exhaustive secret + nonce sweep across ALL artifacts!
-    assert.ok(broker.issuedSecrets.size >= 2, 'broker issued agent secrets');
+    // 9. Final exhaustive secret + nonce + force:true sweep across ALL artifacts!
+    assert.equal(broker.forcedMutationCalls.length, 0, 'P1-2: ZERO force:true broker mutations across entire E2E run');
+    assert.ok(broker.issuedSecrets.size >= 3, 'broker issued agent secrets');
     assert.ok(broker.issuedNonces.size >= 3, 'broker issued claim nonces');
     const dishFilesContent = [
         ...collectFilesRecursively(path.join(TEST_HOME, '.pi', 'dish')),

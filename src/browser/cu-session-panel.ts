@@ -32,7 +32,7 @@ export interface CuSessionPanelOptions {
     id?: string | null;
     host?: string | null;
     cuOwnerId?: string | null;
-    cuWaitingForDesktop?: boolean;
+    cuDesktopAccessLost?: boolean;
   } | null;
   supports: (host: CuPanelHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
@@ -154,11 +154,11 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
   }
 
   function sessionCueContext(
-    session: { cuOwnerId?: string | null; cuWaitingForDesktop?: boolean } | null | undefined,
+    session: { cuOwnerId?: string | null; cuDesktopAccessLost?: boolean } | null | undefined,
   ): CuSeatSessionContext {
     return {
       cuOwnerId: session?.cuOwnerId ?? null,
-      waitingForDesktop: session?.cuWaitingForDesktop === true,
+      desktopAccessLost: session?.cuDesktopAccessLost === true,
       sessionScoped: true,
     };
   }
@@ -318,13 +318,14 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
       return;
     }
     const entry = displayHosts.get(keyOf(host));
-    if (!entry || entry.disconnected) {
+    const status = entry && !entry.disconnected ? entry.status : null;
+    if (!status && !session.cuDesktopAccessLost) {
       summaryEl.hidden = true;
       summaryEl.textContent = '';
       delete summaryEl.dataset.owner;
       return;
     }
-    const cue = cuSessionListCue(entry.status, options.paneLocalLease(host), sessionCueContext(session));
+    const cue = cuSessionListCue(status, options.paneLocalLease(host), sessionCueContext(session));
     if (!cue) {
       summaryEl.hidden = true;
       summaryEl.textContent = '';
@@ -883,8 +884,9 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     const host = options.host(hostId ?? null);
     if (!hostSupported(host)) return null;
     const entry = displayHosts.get(keyOf(host));
-    if (!entry || entry.disconnected) return null;
-    return cuSessionListCue(entry.status, options.paneLocalLease(host), context);
+    const status = entry && !entry.disconnected ? entry.status : null;
+    if (!status && !context?.desktopAccessLost) return null;
+    return cuSessionListCue(status, options.paneLocalLease(host), context);
   }
 
   function dispose(): void {

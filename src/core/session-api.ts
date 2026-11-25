@@ -62,8 +62,8 @@ export interface SessionFields<Timestamp = string | number> {
   private?: boolean;
   /** Opaque computer-use agent lease owner ID for exact per-session UI matching (never a private route). */
   cuOwnerId?: string;
-  /** True while a CU-host session was spawned during a human takeover and awaits desktop release. */
-  cuWaitingForDesktop?: boolean;
+  /** True when a CU-host session lost desktop access (e.g. unredeemed lease across pi-dish restart or expired lease) and must restart to regain it. */
+  cuDesktopAccessLost?: boolean;
 }
 /** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>,
@@ -158,7 +158,7 @@ const fieldDecoders: FieldDecoders = {
   familyParentId: nullableString, routine: optionalString, routineId: optionalString,
   routineInvocationId: optionalString, searchSnippet: optionalString, searchScore: optionalNumber,
   hibernation: optionalHibernation, private: optionalBoolean,
-  cuOwnerId: optionalString, cuWaitingForDesktop: optionalBoolean,
+  cuOwnerId: optionalString, cuDesktopAccessLost: optionalBoolean,
 };
 function decodeCapabilities(value: unknown): SessionFields['capabilities'] {
   if (value === undefined) return undefined;

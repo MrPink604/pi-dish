@@ -838,6 +838,7 @@ export interface CuHandlersPorts {
 
 export interface CuHandlers {
   available(): boolean;
+  activeStreamCount(): number;
   status: TransportHandler;
   stream: TransportHandler;
   takeover: TransportHandler;
@@ -1073,6 +1074,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     let eventBytes = 0;
     let sawFirstEvent = false;
     let failed = false;
+    let lastGapResyncKey: string | null = null;
 
     const failWatcher = (req: http.ClientRequest | null, res?: http.IncomingMessage | null) => {
       if (failed) return;
@@ -1123,6 +1125,19 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
 
       sawFirstEvent = true;
 
+      // P1-7: On a gap, §9.5 emits `hello(resync_required)` immediately followed by `event: resync`
+      // at the exact same `(generation, cursor)`. Dedupe the trailing `resync` so one gap reconciles once.
+      const gapKey = generation !== null && cursor !== null ? `${generation}:${cursor}` : null;
+      if (isResync && gapKey !== null && lastGapResyncKey === gapKey) {
+        lastGapResyncKey = null;
+        return;
+      }
+      if (helloResyncRequired && gapKey !== null) {
+        lastGapResyncKey = gapKey;
+      } else {
+        lastGapResyncKey = null;
+      }
+
       if (shouldReset) {
         if (generation !== null) watchGeneration = generation;
         watchCursor = cursor !== null ? cursor : (generationChanged ? 0 : watchCursor);
@@ -1146,6 +1161,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         authoritativeHello: isHello,
         isResync: isResync || helloResyncRequired,
         resyncReason,
+        resumeStatus,
         generation,
         cursor,
         generationChanged,
@@ -1271,6 +1287,44 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   const stream: TransportHandler = (req, res) => {
     if (!ensureAvailable(res)) return;
     let closed = false;
+    let activeBrokerRes: http.IncomingMessage | null = null;
+    let upstream: http.ClientRequest | null = null;
+    let drainTimer: NodeJS.Timeout | null = null;
+    let onDrainListener: (() => void) | null = null;
+
+    const clearDrainTimer = () => {
+      if (drainTimer) {
+        clearTimeout(drainTimer);
+        drainTimer = null;
+      }
+    };
+
+    // Single teardown shared across pending and established stream phases.
+    // Registry deletion is unconditional so ordinary browser disconnects never leak entries.
+    const teardown = () => {
+      activeBrokerStreams.delete(teardown);
+      if (closed) return;
+      closed = true;
+      req.removeListener('close', teardown);
+      res.removeListener('close', teardown);
+      clearDrainTimer();
+      if (onDrainListener) {
+        res.removeListener('drain', onDrainListener);
+        onDrainListener = null;
+      }
+      if (activeBrokerRes) {
+        try { activeBrokerRes.destroy(); } catch {}
+        activeBrokerRes = null;
+      }
+      if (upstream) {
+        try { upstream.destroy(); } catch {}
+        upstream = null;
+      }
+      if (!res.writableEnded && !res.destroyed) {
+        try { res.end(); } catch {}
+      }
+    };
+
     const rawGen = typeof req.query.generation === 'string' && req.query.generation.trim()
       ? req.query.generation.trim()
       : null;
@@ -1282,16 +1336,29 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       ? req.headers['last-event-id'].trim()
       : null;
 
-    const upstream = broker.openEvents(
+    activeBrokerStreams.add(teardown);
+    req.on('close', teardown);
+    res.on('close', teardown);
+
+    upstream = broker.openEvents(
       (brokerRes) => {
-        if (closed) { brokerRes.destroy(); return; }
+        if (closed) {
+          activeBrokerStreams.delete(teardown);
+          try { brokerRes.destroy(); } catch {}
+          return;
+        }
+        activeBrokerRes = brokerRes;
         if (brokerRes.statusCode !== 200) {
           const chunks: Buffer[] = [];
           let totalBytes = 0;
           let settled = false;
           const finishError = (statusCode: number, body: unknown) => {
+            activeBrokerStreams.delete(teardown);
+            req.removeListener('close', teardown);
+            res.removeListener('close', teardown);
             if (settled || closed || res.headersSent) return;
             settled = true;
+            closed = true;
             sendBrokerReply(res, statusCode, body);
           };
           brokerRes.on('data', (chunk: Buffer) => {
@@ -1326,44 +1393,25 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         let frameDataLines: string[] = [];
         let frameBytes = 0;
         let waitingDrain = false;
-        let drainTimer: NodeJS.Timeout | null = null;
-
-        const clearDrainTimer = () => {
-          if (drainTimer) {
-            clearTimeout(drainTimer);
-            drainTimer = null;
-          }
-        };
-
-        const closeClient = () => {
-          if (closed) return;
-          closed = true;
-          clearDrainTimer();
-          res.removeListener('drain', onDrain);
-          activeBrokerStreams.delete(closeClient);
-          try { brokerRes.destroy(); } catch {}
-          if (!res.writableEnded && !res.destroyed) {
-            try { res.end(); } catch {}
-          }
-        };
 
         const onDrain = () => {
           waitingDrain = false;
           clearDrainTimer();
-          if (!closed) {
-            try { brokerRes.resume(); } catch {}
+          if (!closed && activeBrokerRes) {
+            try { activeBrokerRes.resume(); } catch {}
           }
         };
+        onDrainListener = onDrain;
 
         const writeAtomicFrame = (frame: string): boolean => {
           if (closed || res.writableEnded || res.destroyed) {
-            closeClient();
+            teardown();
             return false;
           }
           const frameLen = Buffer.byteLength(frame, 'utf8');
           const buffered = typeof res.writableLength === 'number' ? res.writableLength : 0;
           if (buffered + frameLen > sseMaxBufferedBytes) {
-            closeClient();
+            teardown();
             return false;
           }
           let ok: boolean;
@@ -1371,7 +1419,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
             ok = res.write(frame);
             res.flush?.();
           } catch {
-            closeClient();
+            teardown();
             return false;
           }
           if (!ok && !waitingDrain) {
@@ -1379,7 +1427,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
             try { brokerRes.pause(); } catch {}
             res.once('drain', onDrain);
             if (sseDrainTimeoutMs > 0) {
-              drainTimer = setTimeout(closeClient, sseDrainTimeoutMs);
+              drainTimer = setTimeout(teardown, sseDrainTimeoutMs);
               drainTimer.unref();
             }
           }
@@ -1406,13 +1454,12 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
           return writeAtomicFrame(`${outLines.join('\n')}\n\n`);
         };
 
-        activeBrokerStreams.add(closeClient);
         brokerRes.setEncoding('utf8');
         brokerRes.on('data', (chunk: string) => {
           if (closed) return;
           sseBuffer += chunk;
           if (Buffer.byteLength(sseBuffer, 'utf8') > maxSseEventBytes) {
-            closeClient();
+            teardown();
             return;
           }
           for (;;) {
@@ -1429,26 +1476,27 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
               const value = line.slice(5).replace(/^ /, '');
               frameBytes += Buffer.byteLength(value, 'utf8') + 6;
               if (frameBytes > maxSseEventBytes) {
-                closeClient();
+                teardown();
                 return;
               }
               frameDataLines.push(value);
             } else {
               frameBytes += Buffer.byteLength(line, 'utf8') + 1;
               if (frameBytes > maxSseEventBytes) {
-                closeClient();
+                teardown();
                 return;
               }
               frameHeaderLines.push(line);
             }
           }
         });
-        brokerRes.on('end', closeClient);
-        brokerRes.on('error', closeClient);
-        res.on('close', closeClient);
+        brokerRes.on('end', teardown);
+        brokerRes.on('error', teardown);
       },
       (error) => {
+        activeBrokerStreams.delete(teardown);
         if (closed) return;
+        closed = true;
         sendBrokerFailure(res, Object.assign(error, { statusCode: 503 }));
       },
       {
@@ -1458,14 +1506,12 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       },
     );
     if (!upstream) {
+      activeBrokerStreams.delete(teardown);
+      closed = true;
+      res.removeListener('close', teardown);
       res.status(404).json({ error: 'Computer-use is not available on this host' });
       return;
     }
-    res.on('close', () => {
-      if (closed) return;
-      closed = true;
-      try { upstream.destroy(); } catch {}
-    });
   };
 
   async function compensateDroppedTakeover(takeoverBody: Record<string, unknown>): Promise<void> {
@@ -2243,6 +2289,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
 
   return {
     available: () => broker.available(),
+    activeStreamCount: () => activeBrokerStreams.size,
     status,
     stream,
     takeover,

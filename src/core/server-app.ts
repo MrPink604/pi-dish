@@ -230,52 +230,77 @@ export function startServer(rootDirectory: string): Server {
   } = ownership;
 
   function findLiveOmpSessionByProcess(expected: { readonly pid: number; readonly startTime: string }): string | null {
-    const scanRegistry = (): string | null => {
+    if (!processIdentityAlive(expected)) return null;
+    const scanRegistry = (): { exact: string[]; descendants: string[] } => {
+      const exact: string[] = [];
+      const descendants: string[] = [];
       for (const entry of listRegisteredSessions()) {
         const identity = registryIdentity(entry);
         if (!identity || identity.harnessId !== 'omp') continue;
         const regPid = Number(entry.pid);
         if (!Number.isInteger(regPid) || regPid <= 1) continue;
         const regProc = processIdentity(regPid);
-        if (regProc && processBelongsToPane(regProc, expected)) {
-          return routeSessionId('omp', identity.nativeSessionId);
+        if (!regProc) continue;
+        if (entry.startTime !== undefined && entry.startTime !== null && String(entry.startTime) !== regProc.startTime) {
+          continue;
+        }
+        const routeId = routeSessionId('omp', identity.nativeSessionId);
+        if (sameProcessIdentity(regProc, expected)) {
+          exact.push(routeId);
+        } else if (processBelongsToPane(regProc, expected)) {
+          descendants.push(routeId);
         }
       }
-      return null;
+      return { exact, descendants };
     };
-    const found = scanRegistry();
-    if (found) return found;
+    const resolveMatches = (matches: { exact: string[]; descendants: string[] }): { decided: boolean; routeId: string | null } => {
+      const uniqueExact = [...new Set(matches.exact)];
+      if (uniqueExact.length === 1) return { decided: true, routeId: uniqueExact[0] };
+      if (uniqueExact.length > 1) return { decided: true, routeId: null };
+      const uniqueDesc = [...new Set(matches.descendants)];
+      if (uniqueDesc.length === 1) return { decided: true, routeId: uniqueDesc[0] };
+      if (uniqueDesc.length > 1) return { decided: true, routeId: null };
+      return { decided: false, routeId: null };
+    };
+    const first = resolveMatches(scanRegistry());
+    if (first.decided) return first.routeId;
     invalidateRegistryCache();
-    const afterRefresh = scanRegistry();
-    if (afterRefresh) return afterRefresh;
-    for (const [routeId, placement] of Object.entries(tmux.listSpawns())) {
-      const identity = routeIdentity(routeId);
-      if (!identity || identity.harnessId !== 'omp') continue;
-      if (isRecord(placement.paneProcess) && sameProcessIdentity(placement.paneProcess, expected) && getRegisteredSession(routeId)) {
-        return routeId;
-      }
-    }
-    return null;
+    return resolveMatches(scanRegistry()).routeId;
   }
 
-  function bridgeMatchesExpectedProcess(sessionId: string, expected: ProcessIdentity | null): boolean {
-    if (!expected) return true;
+  function bridgeMatchesExpectedProcess(live: LiveSession, expected: ProcessIdentity): boolean {
     if (!processIdentityAlive(expected)) return false;
-    let reg = getRegisteredSession(sessionId);
-    if (!reg) {
-      invalidateRegistryCache();
-      reg = getRegisteredSession(sessionId);
+    if (!(live instanceof BridgeSession)) return false;
+    const claim = live.registryClaim;
+    const claimPid = Number(claim?.pid);
+    if (!Number.isInteger(claimPid) || claimPid <= 1) return false;
+    const liveProc = processIdentity(claimPid);
+    if (!liveProc) return false;
+    if (claim.startTime !== undefined && claim.startTime !== null && String(claim.startTime) !== liveProc.startTime) {
+      return false;
     }
-    const regPid = Number(reg?.pid);
-    if (Number.isInteger(regPid) && regPid > 1) {
-      const liveProc = processIdentity(regPid);
-      return !!liveProc && processBelongsToPane(liveProc, expected);
+    if (sameProcessIdentity(liveProc, expected)) return true;
+    if (!processBelongsToPane(liveProc, expected)) return false;
+    // P1-8: Descendant match (e.g. shell wrapper -> omp) must be unambiguous;
+    // reject nested omp processes and send nothing rather than misrouting.
+    invalidateRegistryCache();
+    const matchedBirths = new Set<string>();
+    for (const entry of listRegisteredSessions()) {
+      const identity = registryIdentity(entry);
+      if (!identity || identity.harnessId !== 'omp') continue;
+      const regPid = Number(entry.pid);
+      if (!Number.isInteger(regPid) || regPid <= 1) continue;
+      const regProc = processIdentity(regPid);
+      if (!regProc) continue;
+      if (entry.startTime !== undefined && entry.startTime !== null && String(entry.startTime) !== regProc.startTime) {
+        continue;
+      }
+      if (sameProcessIdentity(regProc, expected)) return false;
+      if (processBelongsToPane(regProc, expected)) {
+        matchedBirths.add(`${regProc.pid}:${regProc.startTime}`);
+      }
     }
-    const spawn = tmux.getSpawn(sessionId);
-    if (spawn && isRecord(spawn.paneProcess) && sameProcessIdentity(spawn.paneProcess, expected)) {
-      return true;
-    }
-    return false;
+    return matchedBirths.size === 1 && matchedBirths.has(`${liveProc.pid}:${liveProc.startTime}`);
   }
 
   const cuAgentLeases = createCuAgentLeases({
@@ -283,16 +308,15 @@ export function startServer(rootDirectory: string): Server {
     findSessionIdByProcess: findLiveOmpSessionByProcess,
     abortSession: async (target: CuCommandTarget) => {
       if (!target.isStillValid()) return false;
-      const expected = target.pid !== null && target.pidStartTime
-        ? { pid: target.pid, startTime: target.pidStartTime }
-        : null;
+      const expected: ProcessIdentity = { pid: target.pid, startTime: target.pidStartTime };
+      if (!processIdentityAlive(expected)) return false;
       const live = await getLiveSession(target.sessionId).catch(() => null);
       if (!live || !live.alive || !liveSessionSupports(live, 'abort')) return false;
       if (live instanceof BridgeSession) {
         await live.waitForHello({ timeout: 2000 }).catch(() => {});
       }
-      // Recheck owner and OS process identity right before sending abort.
-      if (!live.alive || !target.isStillValid() || !bridgeMatchesExpectedProcess(target.sessionId, expected)) {
+      // Recheck owner and actual destination bridge process birth right before sending abort.
+      if (!live.alive || !target.isStillValid() || !bridgeMatchesExpectedProcess(live, expected)) {
         return false;
       }
       await live.abort();
@@ -300,9 +324,8 @@ export function startServer(rootDirectory: string): Server {
     },
     resumeSession: async (target: CuCommandTarget, nudgeText: string) => {
       if (!target.isStillValid()) return false;
-      const expected = target.pid !== null && target.pidStartTime
-        ? { pid: target.pid, startTime: target.pidStartTime }
-        : null;
+      const expected: ProcessIdentity = { pid: target.pid, startTime: target.pidStartTime };
+      if (!processIdentityAlive(expected)) return false;
       // Never wake a closed or hibernated session on hand-back.
       const live = await getLiveSession(target.sessionId).catch(() => null);
       if (!live || !live.alive) return false;
@@ -310,8 +333,8 @@ export function startServer(rootDirectory: string): Server {
         await live.waitForHello({ timeout: 2000 }).catch(() => {});
       }
       if (!live.alive || !liveSessionSupports(live, 'prompt')) return false;
-      // Recheck owner and OS process identity right before sending nudge.
-      if (!target.isStillValid() || !bridgeMatchesExpectedProcess(target.sessionId, expected)) {
+      // Recheck owner and actual destination bridge process birth right before sending nudge.
+      if (!target.isStillValid() || !bridgeMatchesExpectedProcess(live, expected)) {
         return false;
       }
       if (live instanceof BridgeSession) {
@@ -538,7 +561,7 @@ export function startServer(rootDirectory: string): Server {
     readSessionCwd,
     recordLaunchProvenance: (id, sourceId, operationId, sourceBasis) => sessionProvenance.recordLaunch(id, sourceId, operationId, sourceBasis),
     onSessionStopped: id => cuAgentLeases.releaseSession(id),
-    cuSeatState: id => cuAgentLeases.getSessionSeatState(id),
+    cuCheckSlice2: () => cuAgentLeases.supportsSlice2(),
   });
   const featureHandlers = createFeatureHandlers({
     catalog, ownership, findSessionSource,
@@ -575,7 +598,7 @@ export function startServer(rootDirectory: string): Server {
     hibernated: () => hibernation.records(),
     privateUnlocked,
     cuOwnerId: id => cuAgentLeases.ownerIdForSession(id),
-    cuWaitingForDesktop: id => cuAgentLeases.isWaitingForDesktop(id),
+    cuDesktopAccessLost: id => cuAgentLeases.isDesktopAccessLost(id),
   });
   const relationHandlers = createSessionRelationHandlers({ catalog, resolveSessionCandidate, privateUnlocked });
   const agySessionHandlers = createAgySessionHandlers({ ownership, findSessionSource });
@@ -846,7 +869,6 @@ export function startServer(rootDirectory: string): Server {
     sessionOperations,
     sessionLaunch,
     sessionKnown,
-    cuSeatState: id => cuAgentLeases.getSessionSeatState(id),
   });
   app.post('/api/sessions/new', createHandlers.create);
   app.get('/api/session-spawns/:id', createHandlers.spawnStatus);
@@ -858,8 +880,7 @@ export function startServer(rootDirectory: string): Server {
         model: body.model,
         target: body.target as HarnessLaunchTarget | null | undefined,
       });
-      const cuSeat = cuAgentLeases.getSessionSeatState(result.id);
-      res.json(cuSeat ? { ...result, cuSeat } : result);
+      res.json(result);
       hibernation.forget(req.params.id);
       messageHold.wake(req.params.id);
     } catch (error) {

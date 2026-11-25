@@ -88,7 +88,7 @@ export interface CuLocalHumanLease {
 
 export interface CuSeatSessionContext {
   readonly cuOwnerId?: string | null;
-  readonly waitingForDesktop?: boolean;
+  readonly desktopAccessLost?: boolean;
   readonly sessionScoped?: boolean;
 }
 
@@ -317,10 +317,15 @@ export function cuSeatPresentation(
   nowMs: number,
   context?: CuSeatSessionContext,
 ): CuSeatPresentation {
+  if (context?.desktopAccessLost) {
+    return {
+      tone: 'waiting',
+      badge: 'Desktop access lost — restart session',
+      detail: 'Desktop lease was lost; restart this session to restore desktop access',
+      ownControl: false,
+    };
+  }
   if (!status) {
-    if (context?.waitingForDesktop) {
-      return { tone: 'waiting', badge: 'Waiting for desktop', detail: 'Desktop held by human', ownControl: false };
-    }
     return { tone: 'idle', badge: 'Connecting…', detail: 'Checking seat status', ownControl: false };
   }
   const ownControl = isOwnHumanLease(status, localLease);
@@ -339,14 +344,6 @@ export function cuSeatPresentation(
       return { tone: 'self', badge: 'You have control', detail: parts.join(' · '), ownControl: true };
     }
     const holder = formatLeaseHolder(status.lease, 'human');
-    if (context?.waitingForDesktop) {
-      return {
-        tone: 'waiting',
-        badge: 'Waiting for desktop',
-        detail: [holder, remaining].filter(Boolean).join(' · ') || 'Desktop held by human',
-        ownControl: false,
-      };
-    }
     return {
       tone: 'human',
       badge: 'Human',
@@ -407,21 +404,21 @@ export function cuSpacesViewerUrl(base: string, ticket: Pick<CuTicketResult, 'ti
 
 /**
  * Session-scoped or host-level sidebar seat cue while a computer-use host's
- * seat is held (agent, waiting_for_human, or human) or while a session is
- * waiting for a human-held desktop. Returns null when unknown or idle.
+ * seat is held (agent, waiting_for_human, or human) or when a session has lost
+ * desktop access and needs a restart. Returns null when unknown or idle.
  */
 export function cuSessionListCue(
   status: CuStatus | null,
   localLease: Pick<CuLocalHumanLease, 'leaseId' | 'epoch'> | null = null,
   context?: CuSeatSessionContext,
 ): CuSessionListCue | null {
-  if (context?.waitingForDesktop && (!status || status.state === 'human')) {
+  if (context?.desktopAccessLost) {
     return {
-      state: 'human',
-      holderKind: 'human',
+      state: status && status.state !== 'idle' ? status.state : 'agent',
+      holderKind: 'agent',
       tone: 'waiting',
-      label: 'waiting for desktop',
-      title: 'Session waiting for desktop while human holds control',
+      label: 'desktop access lost — restart session',
+      title: 'Desktop access lost — restart session to restore desktop access',
     };
   }
   if (!status || status.state === 'idle') return null;

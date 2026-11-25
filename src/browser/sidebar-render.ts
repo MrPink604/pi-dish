@@ -121,7 +121,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
     for (const session of list) {
       const rowCue = options.cuSeat?.(session.host || options.selfHostId || null, {
         cuOwnerId: session.cuOwnerId ?? null,
-        waitingForDesktop: session.cuWaitingForDesktop === true,
+        desktopAccessLost: session.cuDesktopAccessLost === true,
         sessionScoped: true,
       }) ?? null;
       parts.push(
@@ -132,7 +132,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
         sessionSupports(session, 'close') ? 1 : 0, session.closeMode,
         session.contextPercent, session.contextTokens, session.cwd, session.routine, session.routineId,
         session.private ? 1 : 0,
-        session.cuOwnerId ?? '', session.cuWaitingForDesktop ? 1 : 0,
+        session.cuOwnerId ?? '', session.cuDesktopAccessLost ? 1 : 0,
         rowCue ? `${rowCue.state}\0${rowCue.tone}\0${rowCue.owner ?? ''}\0${rowCue.label}\0${rowCue.title}` : '',
         session.parentId, session.parentSource, session.familyParentId, session.searchScore,
         session.searchSnippet, session.lastActivity, relativeTimeFingerprint(session.lastActivity, now),
@@ -262,7 +262,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   // Session-scoped or host-level computer-use seat cue while the host's seat is held.
   const cuSeat = options.cuSeat?.(session.host || options.selfHostId || null, {
     cuOwnerId: session.cuOwnerId ?? null,
-    waitingForDesktop: session.cuWaitingForDesktop === true,
+    desktopAccessLost: session.cuDesktopAccessLost === true,
     sessionScoped: true,
   }) ?? null;
   const cuSeatOwnerAttr = cuSeat?.owner ? ` data-owner="${escapeHtml(cuSeat.owner)}"` : '';

@@ -588,7 +588,7 @@ test('sidebar renders host-level computer-use seat cue, invalidates memo on seat
   assert.deepEqual([...(collapsedHost.visibleHostIds ?? [])], [SELF], 'collapsed CU host section leaves visibleHostIds');
 });
 
-test('sidebar renders per-session opaque ownerId cues with full-string matching and waiting-for-desktop state', () => {
+test('sidebar renders per-session opaque ownerId cues with full-string matching and desktop-access-lost state', () => {
   const CU = '44444444-4444-4444-8444-444444444444';
   const SELF = '11111111-1111-4111-8111-111111111111';
   const { cuSessionListCue } = context.PiDishBrowser;
@@ -601,7 +601,7 @@ test('sidebar renders per-session opaque ownerId cues with full-string matching 
   const active = [
     { id: 's-cu-1', host: CU, name: 'CU One', cwd: '/work', isActive: true, lastActivity: 2000, cuOwnerId: fullOwnerA },
     { id: 's-cu-2', host: CU, name: 'CU Two', cwd: '/work', isActive: true, lastActivity: 1500, cuOwnerId: nearMissOwnerB },
-    { id: 's-cu-3', host: CU, name: 'CU Waiting', cwd: '/work', isActive: true, lastActivity: 1200, cuWaitingForDesktop: true },
+    { id: 's-cu-3', host: CU, name: 'CU Access Lost', cwd: '/work', isActive: true, lastActivity: 1200, cuDesktopAccessLost: true },
   ];
   const agentStatus = {
     state: 'agent' as const,
@@ -630,33 +630,23 @@ test('sidebar renders per-session opaque ownerId cues with full-string matching 
   }), memo);
   assert.match(rendered.html, /data-id="s-cu-1"[\s\S]*?data-owner="this"[^>]*>agent: this session<\/span>/);
   assert.match(rendered.html, /data-id="s-cu-2"[\s\S]*?data-owner="other"[^>]*>agent: other session<\/span>/, 'near-miss prefix ownerId must NOT match');
+  assert.match(rendered.html, /data-id="s-cu-3"[\s\S]*?data-tone="waiting"[^>]*>desktop access lost — restart session<\/span>/);
 
-  const humanStatus = {
-    state: 'human' as const,
+  const idleStatus = {
+    state: 'idle' as const,
     epoch: 6,
-    lease: {
-      leaseId: 'h6',
-      sessionId: null,
-      ownerId: null,
-      holderKind: 'human',
-      holderId: 'jacob',
-      label: 'pi-dish',
-      reason: null,
-      acquiredAt: null,
-      expiresAt: null,
-      hardExpiresAt: null,
-      reservedUntil: null,
-    },
-    preempted: { sessionId: 'cu-agent-opaque', ownerId: fullOwnerA, label: 'omp' },
+    lease: null,
+    preempted: null,
     health: null,
   };
-  const waitingRendered = renderSidebar(options({
+  const idleRendered = renderSidebar(options({
     active, tab: 'active', multiHost: true, hosts, selfHostId: SELF,
     cuSeat: (hostId?: string | null, ctx?: Parameters<typeof cuSessionListCue>[2]) =>
-      hostId === CU ? cuSessionListCue(humanStatus, null, ctx) : null,
+      hostId === CU ? cuSessionListCue(idleStatus, null, ctx) : null,
   }), memo);
-  assert.notEqual(waitingRendered, rendered, 'changing to human + waitingForDesktop invalidates memo');
-  assert.match(waitingRendered.html, /data-id="s-cu-3"[\s\S]*?data-tone="waiting"[^>]*>waiting for desktop<\/span>/);
+  assert.notEqual(idleRendered, rendered, 'changing to idle invalidates memo');
+  assert.match(idleRendered.html, /data-id="s-cu-3"[\s\S]*?data-tone="waiting"[^>]*>desktop access lost — restart session<\/span>/,
+    'desktop-access-lost cue stays visible even when host seat is idle');
 });
 
 export {};

@@ -115,6 +115,7 @@ export interface CuHandlersPorts {
 }
 export interface CuHandlers {
     available(): boolean;
+    activeStreamCount(): number;
     status: TransportHandler;
     stream: TransportHandler;
     takeover: TransportHandler;
