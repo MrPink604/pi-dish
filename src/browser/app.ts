@@ -722,7 +722,7 @@ function renderSessions() {
       expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
       closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
       bots: bots.list, botRetireArmed: bots.armed, botsHostId: bots.hostId, selfHostId: hostDirectory.self.hostId,
-      unread: sidebarActivity.unread, hostChip,
+      unread: sidebarActivity.unread, hostChip, cuSeat: hostId => cuViewerController.seatCue(hostId),
       hosts: effectiveHosts().map(host => {
         const cache = hostSessionLoader.getCache(host);
         return { ...host, state: hostConnections.stateOf(host), key: hostKeyOf(host), color: hostPresentation.colorFor(host.hostId || null),
@@ -732,6 +732,7 @@ function renderSessions() {
     const countEl = (document.getElementById('countActive') as HTMLElement);
     if (countEl) countEl.textContent = projection.count ? String(projection.count) : '';
     sidebarControls.updateList(projection);
+    cuViewerController.syncVisibleHosts(projection.visibleHostIds);
   });
 }
 
@@ -741,6 +742,7 @@ function refreshSessionControls() {
   sessionActivity.syncComposerButtons();
   terminalController.updateButtons();
   composerSpeech.updateButton();
+  cuViewerController.syncSessionChip();
 }
 
 const sessionView: ReturnType<typeof createSessionView> = createSessionView({ document, sessionState, storage: localStorage, endpoint: resolveHost,
@@ -913,6 +915,7 @@ const cuViewerController: ReturnType<typeof createCuViewer> = createCuViewer({
   ticket: host => mintHostTicket(host, 'stream'),
   closeOtherViews: () => mainPane.beforeTakeover('cuViewer'),
   toggleSidebar: () => sidebarQuery.open(),
+  onSeatChange: () => renderSessions(),
 });
 
 const searchViewController: ReturnType<typeof createSearchView> = createSearchView({

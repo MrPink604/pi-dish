@@ -1,6 +1,8 @@
 import { errorMessage, readJson, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import {
+  cuPanelStorageKey,
   cuSeatPresentation,
+  cuSessionListCue,
   cuSpacesViewerUrl,
   decodeCuBusyError,
   decodeCuRelease,
@@ -11,9 +13,10 @@ import {
   isOwnHumanLease,
   type CuBusyInfo,
   type CuLocalHumanLease,
+  type CuSessionListCue,
   type CuStatus,
 } from './cu-viewer-data';
-import { hostDisplayLabel } from './helper-identity';
+import { hostDisplayLabel, sessionKey } from './helper-identity';
 import { escapeHtml } from '../core/helper-format';
 
 export interface CuViewerHost extends HostEndpoint {
@@ -29,59 +32,155 @@ export interface CuViewerOptions {
   request: ApiRequest;
   hosts: () => readonly CuViewerHost[];
   host: (id: string | null | undefined) => CuViewerHost | null;
-  currentSession: () => { host?: string | null } | null;
+  currentSession: () => { id?: string | null; host?: string | null } | null;
   supports: (host: CuViewerHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
   ticket: (host: HostEndpoint) => Promise<string>;
   source?: (url: string) => EventSource;
   closeOtherViews: () => void;
   toggleSidebar?: () => void;
+  onSeatChange?: () => void;
+  storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
   now?: () => number;
   streamRetryMs?: number;
 }
 
 type NoticeKind = 'info' | 'busy' | 'error';
+type ViewerSurface = 'none' | 'pane' | 'panel';
+type HostStatusSubscriber = 'list' | 'viewer';
 
 interface ViewerNotice {
   kind: NoticeKind;
   text: string;
 }
 
+interface ViewerSurfaceRefs {
+  readonly hostDot?: HTMLElement | null;
+  readonly hostLabel?: HTMLElement | null;
+  readonly modePill: HTMLElement | null;
+  readonly seatBadge: HTMLElement | null;
+  readonly seatDetail: HTMLElement | null;
+  readonly takeoverBtn: HTMLButtonElement | null;
+  readonly handBackBtn: HTMLButtonElement | null;
+  readonly noticeEl: HTMLElement | null;
+  readonly stage: HTMLElement | null;
+  readonly placeholder: HTMLElement | null;
+}
+
+interface HostStatusEntry {
+  readonly hostKey: string;
+  readonly hostId: string | null;
+  endpoint: Readonly<HostEndpoint>;
+  readonly subscribers: Set<HostStatusSubscriber>;
+  status: CuStatus | null;
+  latestEpoch: number;
+  statusFlight: Promise<CuStatus | null> | null;
+  eventSource: EventSource | null;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  retryAttempt: number;
+  generation: number;
+}
+
 const SSE_EVENTS = ['hello', 'lease_changed', 'preempted', 'hand_back', 'seat_idle', 'attention_needed'] as const;
+const TAKEOVER_CLASSES = [
+  'usage-open',
+  'recovery-open',
+  'fleet-open',
+  'cu-viewer-open',
+  'search-open',
+  'subagents-open',
+  'new-session-open',
+  'skills-open',
+  'routines-open',
+] as const;
 // Outermost deadline in the CU call chain:
 // browser (25s) > hub relay (15s) > guest spaces proxy (10s) > broker (8s).
 const CU_REQUEST_TIMEOUT_MS = 25_000;
+
+function defaultSessionStorage(doc: Document): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
+  try {
+    return doc.defaultView?.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export function createCuViewer(options: CuViewerOptions) {
   const doc = options.root.ownerDocument;
   const now = options.now ?? (() => Date.now());
   const openSource = options.source ?? ((url: string) => new EventSource(url));
+  const storage = options.storage !== undefined ? options.storage : defaultSessionStorage(doc);
   const localLeases = new Map<string, CuLocalHumanLease>();
+  const hostStatuses = new Map<string, HostStatusEntry>();
+  const visibleListHostKeys = new Set<string>();
+  const lastCueFingerprints = new Map<string, string>();
 
   let disposed = false;
+  let surface: ViewerSurface = 'none';
   let generation = 0;
   let ticketSequence = 0;
-  let latestEpoch = -1;
   let activeHost: CuViewerHost | null = null;
   let activeHostKey: string | null = null;
+  let panelSessionKey: string | null = null;
+  let restoredPanelSessionKey: string | null = null;
   let status: CuStatus | null = null;
   let mode: 'view-only' | 'interactive' = 'view-only';
   let notice: ViewerNotice | null = null;
   let actionBusy = false;
-  let eventSource: EventSource | null = null;
-  let streamRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  let streamRetryAttempt = 0;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let countdownTimer: ReturnType<typeof setInterval> | null = null;
   let containerMounted = false;
+  let panelMounted = false;
   let chipBound = false;
   let iframeUrl: string | null = null;
   let iframeError: string | null = null;
 
   const keyOf = (host: CuViewerHost) => `${host.hostId || ''}\0${host.base}\0${host.token || ''}`;
-  const isOpen = () => !disposed && options.root.classList.contains('cu-viewer-open');
+  const isOpen = () => !disposed && surface === 'pane' && options.root.classList.contains('cu-viewer-open');
+  const isPanelOpen = () => !disposed && surface === 'panel';
+  const isViewerActive = () => !disposed && surface !== 'none';
   const hostSupported = (host: CuViewerHost | null | undefined): host is CuViewerHost =>
     !!host && options.supports(host);
+  const isAnyTakeoverOpen = () => TAKEOVER_CLASSES.some(cls => options.root.classList.contains(cls));
+
+  function sessionIdentityKey(
+    session: { id?: string | null; host?: string | null } | null,
+    host: CuViewerHost | null,
+  ): string | null {
+    if (!session?.id) return null;
+    return sessionKey(host?.hostId ?? session.host ?? null, session.id);
+  }
+
+  function readPanelOpenPref(sKey: string): boolean {
+    if (!storage) return false;
+    try {
+      return storage.getItem(cuPanelStorageKey(sKey)) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function writePanelOpenPref(sKey: string | null, open: boolean): void {
+    if (!storage || !sKey) return;
+    try {
+      const storageKey = cuPanelStorageKey(sKey);
+      if (open) storage.setItem(storageKey, '1');
+      else storage.removeItem(storageKey);
+    } catch {}
+  }
+
+  function cueFingerprint(cue: CuSessionListCue | null): string {
+    return cue ? `${cue.state}\0${cue.tone}\0${cue.label}\0${cue.title}` : '';
+  }
+
+  function notifySeatCueIfChanged(hostKey: string, nextStatus: CuStatus | null): void {
+    const cue = cuSessionListCue(nextStatus, localLeases.get(hostKey) ?? null);
+    const nextFp = cueFingerprint(cue);
+    const prevFp = lastCueFingerprints.get(hostKey) ?? '';
+    if (nextFp) lastCueFingerprints.set(hostKey, nextFp);
+    else lastCueFingerprints.delete(hostKey);
+    if (prevFp !== nextFp) options.onSeatChange?.();
+  }
 
   function ensureContainer(): HTMLElement {
     let el = doc.getElementById('cuViewerView');
@@ -141,6 +240,154 @@ export function createCuViewer(options: CuViewerOptions) {
     return el;
   }
 
+  function ensurePanel(): HTMLElement | null {
+    const sessionView = doc.getElementById('sessionView');
+    if (!sessionView) return null;
+    let el = doc.getElementById('cuSessionPanel');
+    if (!el) {
+      el = doc.createElement('section');
+      el.id = 'cuSessionPanel';
+      el.className = 'cu-session-panel';
+      el.setAttribute('aria-label', 'Desktop viewer');
+      el.hidden = true;
+      const anchor = sessionView.querySelector('#resumeBar') ?? sessionView.querySelector('.input-area');
+      if (anchor) sessionView.insertBefore(el, anchor);
+      else sessionView.appendChild(el);
+    }
+    if (!panelMounted) {
+      panelMounted = true;
+      el.innerHTML =
+        '<div class="cu-panel-header">' +
+          '<button type="button" class="cu-panel-toggle" id="cuSessionPanelToggle" aria-expanded="false" aria-controls="cuSessionPanelBody">' +
+            '<span class="cu-panel-chevron" id="cuPanelChevron" aria-hidden="true">▸</span>' +
+            '<span class="cu-panel-title">Desktop</span>' +
+            '<span class="cu-seat-badge cu-panel-summary" id="cuPanelSummary" data-tone="idle" hidden></span>' +
+          '</button>' +
+          '<span class="cu-viewer-mode cu-panel-open-only" id="cuPanelModePill" data-mode="view-only" hidden>View only</span>' +
+          '<button type="button" class="btn-icon cu-panel-open-only" id="cuPanelRefreshBtn" title="Refresh desktop" aria-label="Refresh desktop" hidden>' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-2.636-6.364"/><path d="M21 3v6h-6"/></svg>' +
+          '</button>' +
+          '<button type="button" class="btn-icon cu-panel-open-only" id="cuPanelExpandBtn" title="Open full-pane desktop viewer" aria-label="Open full-pane desktop viewer" hidden>⤢</button>' +
+        '</div>' +
+        '<div class="cu-panel-body" id="cuSessionPanelBody" hidden>' +
+          '<div class="cu-viewer-bar cu-panel-bar">' +
+            '<div class="cu-seat-status" id="cuPanelSeatStatus" role="status" aria-live="polite">' +
+              '<span class="cu-seat-badge" id="cuPanelSeatBadge" data-tone="idle">Idle</span>' +
+              '<span class="cu-seat-detail" id="cuPanelSeatDetail"></span>' +
+            '</div>' +
+            '<div class="cu-viewer-actions" id="cuPanelActions">' +
+              '<button type="button" class="btn btn-small btn-primary" id="cuPanelTakeoverBtn">Take Over</button>' +
+              '<button type="button" class="btn btn-small btn-primary" id="cuPanelHandBackBtn" hidden>Hand Back</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="cu-viewer-notice" id="cuPanelNotice" role="alert" hidden></div>' +
+          '<div class="cu-viewer-stage cu-panel-stage" id="cuPanelStage">' +
+            '<div class="cu-viewer-placeholder" id="cuPanelPlaceholder">Loading desktop viewer…</div>' +
+          '</div>' +
+        '</div>';
+
+      el.addEventListener('click', (event) => {
+        if (disposed) return;
+        const target = event.target instanceof Element ? event.target.closest<HTMLElement>('button') : null;
+        if (!target) return;
+        if (target.id === 'cuSessionPanelToggle') { togglePanel(); return; }
+        if (target.id === 'cuPanelRefreshBtn') { void refresh(); return; }
+        if (target.id === 'cuPanelExpandBtn') {
+          const session = options.currentSession();
+          const host = activeHost ?? (session ? options.host(session.host ?? null) : null);
+          if (hostSupported(host)) open(host);
+          return;
+        }
+        if (target.id === 'cuPanelTakeoverBtn') { void performTakeover(); return; }
+        if (target.id === 'cuPanelHandBackBtn') { void performRelease(); }
+      });
+    }
+    return el;
+  }
+
+  function setPanelExpandedDom(expanded: boolean): void {
+    const panel = doc.getElementById('cuSessionPanel');
+    const sessionView = doc.getElementById('sessionView');
+    if (sessionView) sessionView.classList.toggle('cu-panel-open', expanded);
+    if (!panel) return;
+    panel.classList.toggle('open', expanded);
+    const toggle = doc.getElementById('cuSessionPanelToggle');
+    if (toggle) toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    const chevron = doc.getElementById('cuPanelChevron');
+    if (chevron) chevron.textContent = expanded ? '▾' : '▸';
+    const body = doc.getElementById('cuSessionPanelBody');
+    if (body) body.hidden = !expanded;
+    for (const id of ['cuPanelModePill', 'cuPanelRefreshBtn', 'cuPanelExpandBtn']) {
+      const node = doc.getElementById(id);
+      if (node) node.hidden = !expanded;
+    }
+    renderPanelSummary();
+  }
+
+  function renderPanelSummary(): void {
+    const summary = doc.getElementById('cuPanelSummary');
+    if (!summary) return;
+    if (surface === 'panel') {
+      summary.hidden = true;
+      summary.textContent = '';
+      return;
+    }
+    const session = options.currentSession();
+    const host = session ? options.host(session.host ?? null) : null;
+    if (!hostSupported(host)) {
+      summary.hidden = true;
+      summary.textContent = '';
+      return;
+    }
+    const hostKey = keyOf(host);
+    const entry = hostStatuses.get(hostKey);
+    const cue = cuSessionListCue(entry?.status ?? null, localLeases.get(hostKey) ?? null);
+    if (!cue) {
+      summary.hidden = true;
+      summary.textContent = '';
+      return;
+    }
+    summary.hidden = false;
+    summary.dataset.tone = cue.tone;
+    summary.textContent = cue.tone === 'self'
+      ? 'You have control'
+      : cue.tone === 'waiting'
+        ? 'Waiting for you'
+        : cue.holderKind === 'human'
+          ? 'Human'
+          : 'Agent';
+  }
+
+  function activeSurfaceRefs(): ViewerSurfaceRefs | null {
+    if (surface === 'pane') {
+      return {
+        hostDot: doc.getElementById('cuViewerHostDot'),
+        hostLabel: doc.getElementById('cuViewerHostLabel'),
+        modePill: doc.getElementById('cuViewerModePill'),
+        seatBadge: doc.getElementById('cuSeatBadge'),
+        seatDetail: doc.getElementById('cuSeatDetail'),
+        takeoverBtn: doc.getElementById('cuTakeoverBtn') as HTMLButtonElement | null,
+        handBackBtn: doc.getElementById('cuHandBackBtn') as HTMLButtonElement | null,
+        noticeEl: doc.getElementById('cuViewerNotice'),
+        stage: doc.getElementById('cuViewerStage'),
+        placeholder: doc.getElementById('cuViewerPlaceholder'),
+      };
+    }
+    if (surface === 'panel') {
+      return {
+        modePill: doc.getElementById('cuPanelModePill'),
+        seatBadge: doc.getElementById('cuPanelSeatBadge'),
+        seatDetail: doc.getElementById('cuPanelSeatDetail'),
+        takeoverBtn: doc.getElementById('cuPanelTakeoverBtn') as HTMLButtonElement | null,
+        handBackBtn: doc.getElementById('cuPanelHandBackBtn') as HTMLButtonElement | null,
+        noticeEl: doc.getElementById('cuPanelNotice'),
+        stage: doc.getElementById('cuPanelStage'),
+        placeholder: doc.getElementById('cuPanelPlaceholder'),
+      };
+    }
+    return null;
+  }
+
   function ensureSessionChip(): HTMLButtonElement | null {
     let chip = doc.getElementById('sessionDesktopChip') as HTMLButtonElement | null;
     if (!chip) {
@@ -166,19 +413,55 @@ export function createCuViewer(options: CuViewerOptions) {
     return chip;
   }
 
+  function syncSessionPanel(): void {
+    if (disposed) return;
+    const session = options.currentSession();
+    const host = session ? options.host(session.host ?? null) : null;
+    if (!session || !hostSupported(host)) {
+      if (surface === 'panel') close();
+      else setPanelExpandedDom(false);
+      const existing = doc.getElementById('cuSessionPanel');
+      if (existing) existing.hidden = true;
+      restoredPanelSessionKey = null;
+      return;
+    }
+
+    const panel = ensurePanel();
+    if (!panel) return;
+    panel.hidden = false;
+
+    const sKey = sessionIdentityKey(session, host);
+    if (surface === 'panel' && panelSessionKey !== null && panelSessionKey !== sKey) {
+      close();
+    }
+
+    renderPanelSummary();
+
+    if (sKey && restoredPanelSessionKey !== sKey) {
+      restoredPanelSessionKey = sKey;
+      if (surface === 'none' && !isAnyTakeoverOpen() && readPanelOpenPref(sKey)) {
+        openSurface('panel', host, sKey);
+      } else if (surface !== 'panel') {
+        setPanelExpandedDom(false);
+      }
+    }
+  }
+
   function syncSessionChip(): void {
     if (disposed) return;
     const chip = ensureSessionChip();
-    if (!chip) return;
     const session = options.currentSession();
     const host = session ? options.host(session.host ?? null) : null;
     const show = hostSupported(host);
-    chip.style.display = show ? '' : 'none';
-    if (show) {
-      const label = hostDisplayLabel(host);
-      chip.title = `Open ${label} desktop viewer`;
-      chip.setAttribute('aria-label', `Open ${label} desktop`);
+    if (chip) {
+      chip.style.display = show ? '' : 'none';
+      if (show) {
+        const label = hostDisplayLabel(host);
+        chip.title = `Open ${label} desktop viewer`;
+        chip.setAttribute('aria-label', `Open ${label} desktop`);
+      }
     }
+    syncSessionPanel();
   }
 
   function isInteractiveMounted(): boolean {
@@ -203,105 +486,81 @@ export function createCuViewer(options: CuViewerOptions) {
     }
   }
 
-  function clearStreamRetry(): void {
-    if (streamRetryTimer !== null) {
-      clearTimeout(streamRetryTimer);
-      streamRetryTimer = null;
-    }
-  }
-
-  function disconnectStream(): void {
-    clearStreamRetry();
-    if (eventSource) {
-      try { eventSource.close(); } catch {}
-      eventSource = null;
-    }
-  }
-
-  function clearIframe(): void {
+  function clearAllIframes(): void {
     iframeUrl = null;
-    const stage = doc.getElementById('cuViewerStage');
-    if (!stage) return;
-    const existing = stage.querySelector('iframe.cu-viewer-frame');
-    if (existing) existing.remove();
+    for (const id of ['cuViewerStage', 'cuPanelStage']) {
+      const stage = doc.getElementById(id);
+      const existing = stage?.querySelector('iframe.cu-viewer-frame');
+      if (existing) existing.remove();
+    }
   }
 
   function mountIframe(url: string): void {
+    const refs = activeSurfaceRefs();
+    if (!refs?.stage) return;
+    clearAllIframes();
     iframeUrl = url;
     iframeError = null;
-    const stage = doc.getElementById('cuViewerStage');
-    if (!stage) return;
-    const placeholder = doc.getElementById('cuViewerPlaceholder');
-    if (placeholder) placeholder.hidden = true;
+    if (refs.placeholder) refs.placeholder.hidden = true;
     // Replace the iframe element so switching #ticket=... always performs a
     // clean document reload (hash-only updates on the same URL do not reboot viewer.js).
-    const existing = stage.querySelector('iframe.cu-viewer-frame');
-    if (existing) existing.remove();
     const frame = doc.createElement('iframe');
     frame.className = 'cu-viewer-frame';
     frame.title = activeHost ? `${hostDisplayLabel(activeHost)} desktop viewer` : 'Computer-use desktop viewer';
     frame.setAttribute('allow', 'clipboard-read; clipboard-write');
     frame.src = url;
-    stage.appendChild(frame);
+    refs.stage.appendChild(frame);
   }
 
   function showPlaceholder(text: string): void {
-    clearIframe();
-    const placeholder = doc.getElementById('cuViewerPlaceholder');
-    if (placeholder) {
-      placeholder.textContent = text;
-      placeholder.hidden = false;
+    clearAllIframes();
+    const refs = activeSurfaceRefs();
+    if (refs?.placeholder) {
+      refs.placeholder.textContent = text;
+      refs.placeholder.hidden = false;
     }
   }
 
   function renderHeaderAndControls(): void {
-    if (!isOpen() || !activeHost) return;
-    const dotEl = doc.getElementById('cuViewerHostDot');
-    if (dotEl) dotEl.innerHTML = options.dot(activeHost.hostId);
-    const labelEl = doc.getElementById('cuViewerHostLabel');
-    if (labelEl) labelEl.textContent = hostDisplayLabel(activeHost);
+    const refs = activeSurfaceRefs();
+    if (!refs || !activeHost) return;
+    if (refs.hostDot) refs.hostDot.innerHTML = options.dot(activeHost.hostId);
+    if (refs.hostLabel) refs.hostLabel.textContent = hostDisplayLabel(activeHost);
 
     const localLease = currentLocalLease();
     const presentation = cuSeatPresentation(status, localLease, now());
 
-    const modePill = doc.getElementById('cuViewerModePill');
-    if (modePill) {
-      modePill.textContent = mode === 'interactive' && presentation.ownControl ? 'Interactive' : 'View only';
-      modePill.dataset.mode = mode === 'interactive' && presentation.ownControl ? 'interactive' : 'view-only';
+    if (refs.modePill) {
+      refs.modePill.textContent = mode === 'interactive' && presentation.ownControl ? 'Interactive' : 'View only';
+      refs.modePill.dataset.mode = mode === 'interactive' && presentation.ownControl ? 'interactive' : 'view-only';
     }
 
-    const badgeEl = doc.getElementById('cuSeatBadge');
-    if (badgeEl) {
-      badgeEl.textContent = presentation.badge;
-      badgeEl.dataset.tone = presentation.tone;
+    if (refs.seatBadge) {
+      refs.seatBadge.textContent = presentation.badge;
+      refs.seatBadge.dataset.tone = presentation.tone;
     }
-    const detailEl = doc.getElementById('cuSeatDetail');
-    if (detailEl) detailEl.textContent = presentation.detail;
+    if (refs.seatDetail) refs.seatDetail.textContent = presentation.detail;
 
-    const takeoverBtn = doc.getElementById('cuTakeoverBtn') as HTMLButtonElement | null;
-    const handBackBtn = doc.getElementById('cuHandBackBtn') as HTMLButtonElement | null;
-
-    if (takeoverBtn) {
-      takeoverBtn.hidden = presentation.ownControl;
-      takeoverBtn.disabled = actionBusy;
+    if (refs.takeoverBtn) {
+      refs.takeoverBtn.hidden = presentation.ownControl;
+      refs.takeoverBtn.disabled = actionBusy;
     }
-    if (handBackBtn) {
-      handBackBtn.hidden = !presentation.ownControl;
-      handBackBtn.disabled = actionBusy;
-      handBackBtn.title = status?.preempted
+    if (refs.handBackBtn) {
+      refs.handBackBtn.hidden = !presentation.ownControl;
+      refs.handBackBtn.disabled = actionBusy;
+      refs.handBackBtn.title = status?.preempted
         ? 'Release control and hand back to the paused agent'
         : 'Release control and return to view-only';
     }
 
-    const noticeEl = doc.getElementById('cuViewerNotice');
-    if (noticeEl) {
+    if (refs.noticeEl) {
       if (!notice) {
-        noticeEl.hidden = true;
-        noticeEl.textContent = '';
+        refs.noticeEl.hidden = true;
+        refs.noticeEl.textContent = '';
       } else {
-        noticeEl.hidden = false;
-        noticeEl.dataset.kind = notice.kind;
-        noticeEl.innerHTML = `<span class="cu-viewer-notice-text">${escapeHtml(notice.text)}</span>`;
+        refs.noticeEl.hidden = false;
+        refs.noticeEl.dataset.kind = notice.kind;
+        refs.noticeEl.innerHTML = `<span class="cu-viewer-notice-text">${escapeHtml(notice.text)}</span>`;
       }
     }
 
@@ -311,22 +570,243 @@ export function createCuViewer(options: CuViewerOptions) {
   }
 
   function renderCountdownOnly(): void {
-    if (!isOpen() || !activeHost) return;
+    const refs = activeSurfaceRefs();
+    if (!refs || !activeHost) return;
     const presentation = cuSeatPresentation(status, currentLocalLease(), now());
-    const detailEl = doc.getElementById('cuSeatDetail');
-    if (detailEl) detailEl.textContent = presentation.detail;
+    if (refs.seatDetail) refs.seatDetail.textContent = presentation.detail;
   }
 
   function startCountdown(): void {
     clearCountdown();
     countdownTimer = setInterval(() => {
-      if (!isOpen()) { clearCountdown(); return; }
+      if (!isViewerActive()) { clearCountdown(); return; }
       renderCountdownOnly();
     }, 1000);
   }
 
   function owns(ownerGen: number, ownerHostKey: string): boolean {
-    return !disposed && isOpen() && ownerGen === generation && activeHostKey === ownerHostKey;
+    return !disposed && isViewerActive() && ownerGen === generation && activeHostKey === ownerHostKey;
+  }
+
+  function clearHostRetry(entry: HostStatusEntry): void {
+    if (entry.retryTimer !== null) {
+      clearTimeout(entry.retryTimer);
+      entry.retryTimer = null;
+    }
+  }
+
+  function disconnectHostStream(entry: HostStatusEntry): void {
+    clearHostRetry(entry);
+    if (entry.eventSource) {
+      try { entry.eventSource.close(); } catch {}
+      entry.eventSource = null;
+    }
+  }
+
+  function hostEntryAlive(entry: HostStatusEntry, entryGen: number): boolean {
+    return !disposed && hostStatuses.get(entry.hostKey) === entry && entry.generation === entryGen;
+  }
+
+  function scheduleHostReconnect(entry: HostStatusEntry, entryGen: number): void {
+    if (!hostEntryAlive(entry, entryGen) || entry.retryTimer !== null) return;
+    const delayMs = options.streamRetryMs ?? Math.min(10_000, 1_000 * 2 ** Math.min(entry.retryAttempt, 4));
+    entry.retryAttempt += 1;
+    entry.retryTimer = setTimeout(() => {
+      entry.retryTimer = null;
+      if (hostEntryAlive(entry, entryGen)) void connectHostStream(entry, entryGen);
+    }, delayMs);
+  }
+
+  async function connectHostStream(entry: HostStatusEntry, entryGen: number): Promise<void> {
+    disconnectHostStream(entry);
+    let streamUrl = `${entry.endpoint.base}/api/cu/stream`;
+    if (entry.endpoint.token) {
+      try {
+        const ticket = await options.ticket(entry.endpoint);
+        if (!hostEntryAlive(entry, entryGen)) return;
+        streamUrl += `?ticket=${encodeURIComponent(ticket)}`;
+      } catch {
+        scheduleHostReconnect(entry, entryGen);
+        return;
+      }
+    }
+    if (!hostEntryAlive(entry, entryGen)) return;
+    let source: EventSource;
+    try {
+      source = openSource(streamUrl);
+    } catch {
+      scheduleHostReconnect(entry, entryGen);
+      return;
+    }
+    entry.eventSource = source;
+    const handleEvent = (event: MessageEvent) => {
+      if (!hostEntryAlive(entry, entryGen) || entry.eventSource !== source) return;
+      entry.retryAttempt = 0;
+      let parsed: unknown;
+      try { parsed = JSON.parse(String(event.data || '')); } catch { return; }
+      const decoded = decodeCuStatus(parsed);
+      if (decoded) acceptHostStatus(entry, decoded);
+    };
+    for (const type of SSE_EVENTS) {
+      source.addEventListener(type, handleEvent as EventListener);
+    }
+    source.onmessage = handleEvent;
+    source.onopen = () => {
+      if (hostEntryAlive(entry, entryGen) && entry.eventSource === source) entry.retryAttempt = 0;
+    };
+    // Close on error and reconnect through connectHostStream so a fresh stream
+    // ticket is minted on every reconnect instead of looping on an expired one.
+    source.onerror = () => {
+      if (!hostEntryAlive(entry, entryGen) || entry.eventSource !== source) return;
+      try { source.close(); } catch {}
+      entry.eventSource = null;
+      scheduleHostReconnect(entry, entryGen);
+    };
+  }
+
+  function acceptHostStatus(entry: HostStatusEntry, next: CuStatus): void {
+    if (disposed || hostStatuses.get(entry.hostKey) !== entry) return;
+    // Ignore stale status/SSE snapshots from an older epoch so a delayed poll
+    // response cannot discard a newly acquired takeover lease.
+    if (next.epoch < entry.latestEpoch) return;
+    entry.latestEpoch = next.epoch;
+    entry.status = next;
+
+    if (isViewerActive() && activeHostKey === entry.hostKey) {
+      applyStatusUpdate(next, generation, entry.hostKey, entry.endpoint);
+    } else {
+      const localLease = localLeases.get(entry.hostKey) ?? null;
+      if (localLease && !isOwnHumanLease(next, localLease)) {
+        localLeases.delete(entry.hostKey);
+      } else if (localLease && next.lease?.expiresAt) {
+        localLease.expiresAt = next.lease.expiresAt;
+      }
+    }
+    notifySeatCueIfChanged(entry.hostKey, next);
+    renderPanelSummary();
+  }
+
+  async function fetchHostStatus(entry: HostStatusEntry, force = false): Promise<CuStatus | null> {
+    if (disposed || hostStatuses.get(entry.hostKey) !== entry) return null;
+    if (!force) {
+      if (entry.statusFlight) return entry.statusFlight;
+      if (entry.status !== null && entry.eventSource !== null && entry.eventSource.readyState !== 2) {
+        return entry.status;
+      }
+    }
+    const entryGen = entry.generation;
+    const endpoint = entry.endpoint;
+    let flight: Promise<CuStatus | null> | null = null;
+    flight = (async (): Promise<CuStatus | null> => {
+      try {
+        const response = await options.request(endpoint, '/api/cu/status', { timeoutMs: CU_REQUEST_TIMEOUT_MS });
+        const data = await readJson(response);
+        if (!hostEntryAlive(entry, entryGen)) return null;
+        if (!response.ok) {
+          if (isViewerActive() && activeHostKey === entry.hostKey) {
+            notice = { kind: 'error', text: responseError(response, data, `Status failed (${response.status})`) };
+            renderHeaderAndControls();
+          }
+          return null;
+        }
+        const decoded = decodeCuStatus(data);
+        if (decoded) acceptHostStatus(entry, decoded);
+        return entry.status;
+      } catch (error) {
+        if (!hostEntryAlive(entry, entryGen)) return null;
+        if (isViewerActive() && activeHostKey === entry.hostKey) {
+          notice = { kind: 'error', text: `Could not reach computer-use broker: ${errorMessage(error)}` };
+          renderHeaderAndControls();
+        }
+        return null;
+      } finally {
+        if (entry.statusFlight === flight) entry.statusFlight = null;
+      }
+    })();
+    entry.statusFlight = flight;
+    return flight;
+  }
+
+  function subscribeHost(host: CuViewerHost, sub: HostStatusSubscriber): HostStatusEntry {
+    const hostKey = keyOf(host);
+    const endpoint = Object.freeze({ ...host });
+    let entry = hostStatuses.get(hostKey);
+    if (!entry) {
+      entry = {
+        hostKey,
+        hostId: host.hostId,
+        endpoint,
+        subscribers: new Set([sub]),
+        status: null,
+        latestEpoch: -1,
+        statusFlight: null,
+        eventSource: null,
+        retryTimer: null,
+        retryAttempt: 0,
+        generation: 1,
+      };
+      hostStatuses.set(hostKey, entry);
+      void connectHostStream(entry, entry.generation);
+      void fetchHostStatus(entry, false);
+      return entry;
+    }
+    entry.endpoint = endpoint;
+    entry.subscribers.add(sub);
+    if (!entry.eventSource && entry.retryTimer === null) {
+      void connectHostStream(entry, entry.generation);
+    }
+    if (entry.status === null && !entry.statusFlight) {
+      void fetchHostStatus(entry, false);
+    }
+    return entry;
+  }
+
+  function teardownHostEntry(entry: HostStatusEntry): void {
+    entry.generation += 1;
+    disconnectHostStream(entry);
+    entry.statusFlight = null;
+    hostStatuses.delete(entry.hostKey);
+    notifySeatCueIfChanged(entry.hostKey, null);
+    renderPanelSummary();
+  }
+
+  function unsubscribeHost(hostKey: string, sub: HostStatusSubscriber): void {
+    const entry = hostStatuses.get(hostKey);
+    if (!entry) return;
+    entry.subscribers.delete(sub);
+    if (entry.subscribers.size === 0) {
+      teardownHostEntry(entry);
+    }
+  }
+
+  function syncVisibleHosts(hostIds?: readonly (string | null)[]): void {
+    if (disposed) return;
+    const nextHosts = new Map<string, CuViewerHost>();
+    for (const hostId of hostIds ?? []) {
+      const host = options.host(hostId ?? null);
+      if (hostSupported(host)) nextHosts.set(keyOf(host), host);
+    }
+    for (const oldKey of [...visibleListHostKeys]) {
+      if (!nextHosts.has(oldKey)) {
+        visibleListHostKeys.delete(oldKey);
+        unsubscribeHost(oldKey, 'list');
+      }
+    }
+    for (const [hostKey, host] of nextHosts) {
+      if (!visibleListHostKeys.has(hostKey)) {
+        visibleListHostKeys.add(hostKey);
+        subscribeHost(host, 'list');
+      }
+    }
+  }
+
+  function seatCue(hostId?: string | null): CuSessionListCue | null {
+    if (disposed) return null;
+    const host = options.host(hostId ?? null);
+    if (!hostSupported(host)) return null;
+    const hostKey = keyOf(host);
+    const entry = hostStatuses.get(hostKey);
+    return cuSessionListCue(entry?.status ?? null, localLeases.get(hostKey) ?? null);
   }
 
   function startHeartbeat(ownerGen: number, ownerHostKey: string, endpoint: Readonly<HostEndpoint>, intervalSec: number): void {
@@ -353,13 +833,13 @@ export function createCuViewer(options: CuViewerOptions) {
       if (!owns(ownerGen, ownerHostKey)) return;
       if (response.ok) {
         const updated = decodeCuStatus(data);
-        if (updated && updated.epoch >= latestEpoch) {
-          latestEpoch = updated.epoch;
+        const entry = hostStatuses.get(ownerHostKey);
+        if (updated && entry && updated.epoch >= entry.latestEpoch) {
           if (updated.lease?.expiresAt) lease.expiresAt = updated.lease.expiresAt;
-          if (status) {
-            status = { ...status, state: updated.state, epoch: updated.epoch, lease: updated.lease ?? status.lease };
-          }
-          renderHeaderAndControls();
+          const merged: CuStatus = status
+            ? { ...status, state: updated.state, epoch: updated.epoch, lease: updated.lease ?? status.lease }
+            : updated;
+          acceptHostStatus(entry, merged);
         }
         return;
       }
@@ -387,9 +867,11 @@ export function createCuViewer(options: CuViewerOptions) {
       kind: busy?.holder ? 'busy' : 'info',
       text: busy ? formatBusyMessage(busy, now()) : 'Control ended — returned to view-only',
     };
+    const entry = hostStatuses.get(ownerHostKey);
+    notifySeatCueIfChanged(ownerHostKey, entry?.status ?? status);
     renderHeaderAndControls();
     if (wasInteractive) void loadViewerTicket(ownerGen, ownerHostKey, endpoint, 'view-only');
-    void loadStatus(ownerGen, ownerHostKey, endpoint);
+    if (entry) void fetchHostStatus(entry, true);
   }
 
   function applyStatusUpdate(
@@ -399,10 +881,6 @@ export function createCuViewer(options: CuViewerOptions) {
     endpoint: Readonly<HostEndpoint>,
   ): void {
     if (!owns(ownerGen, ownerHostKey)) return;
-    // Ignore stale status/SSE snapshots from an older epoch so a delayed poll
-    // response cannot discard a newly acquired takeover lease.
-    if (next.epoch < latestEpoch) return;
-    latestEpoch = next.epoch;
     const localLease = localLeases.get(ownerHostKey) ?? null;
     const hadOwnControl = !!localLease && mode === 'interactive';
     status = next;
@@ -423,27 +901,6 @@ export function createCuViewer(options: CuViewerOptions) {
       localLease.expiresAt = next.lease.expiresAt;
     }
     renderHeaderAndControls();
-  }
-
-  async function loadStatus(ownerGen: number, ownerHostKey: string, endpoint: Readonly<HostEndpoint>): Promise<CuStatus | null> {
-    try {
-      const response = await options.request(endpoint, '/api/cu/status', { timeoutMs: CU_REQUEST_TIMEOUT_MS });
-      const data = await readJson(response);
-      if (!owns(ownerGen, ownerHostKey)) return null;
-      if (!response.ok) {
-        notice = { kind: 'error', text: responseError(response, data, `Status failed (${response.status})`) };
-        renderHeaderAndControls();
-        return null;
-      }
-      const decoded = decodeCuStatus(data);
-      if (decoded) applyStatusUpdate(decoded, ownerGen, ownerHostKey, endpoint);
-      return status;
-    } catch (error) {
-      if (!owns(ownerGen, ownerHostKey)) return null;
-      notice = { kind: 'error', text: `Could not reach computer-use broker: ${errorMessage(error)}` };
-      renderHeaderAndControls();
-      return null;
-    }
   }
 
   async function loadViewerTicket(
@@ -483,6 +940,7 @@ export function createCuViewer(options: CuViewerOptions) {
         showPlaceholder(iframeError);
         return;
       }
+      const latestEpoch = hostStatuses.get(ownerHostKey)?.latestEpoch ?? -1;
       if (ticket.epoch !== null && ticket.epoch < latestEpoch) return;
       if (ticketMode === 'view-only' && isOwnHumanLease(status, localLeases.get(ownerHostKey) ?? null)) return;
       mode = ticket.mode;
@@ -493,63 +951,6 @@ export function createCuViewer(options: CuViewerOptions) {
       iframeError = `Viewer unavailable: ${errorMessage(error)}`;
       showPlaceholder(iframeError);
     }
-  }
-
-  function scheduleStreamReconnect(ownerGen: number, ownerHostKey: string, endpoint: Readonly<HostEndpoint>): void {
-    if (!owns(ownerGen, ownerHostKey) || streamRetryTimer !== null) return;
-    const delayMs = options.streamRetryMs ?? Math.min(10_000, 1_000 * 2 ** Math.min(streamRetryAttempt, 4));
-    streamRetryAttempt += 1;
-    streamRetryTimer = setTimeout(() => {
-      streamRetryTimer = null;
-      if (owns(ownerGen, ownerHostKey)) void connectStream(ownerGen, ownerHostKey, endpoint);
-    }, delayMs);
-  }
-
-  async function connectStream(ownerGen: number, ownerHostKey: string, endpoint: Readonly<HostEndpoint>): Promise<void> {
-    disconnectStream();
-    let streamUrl = `${endpoint.base}/api/cu/stream`;
-    if (endpoint.token) {
-      try {
-        const ticket = await options.ticket(endpoint);
-        if (!owns(ownerGen, ownerHostKey)) return;
-        streamUrl += `?ticket=${encodeURIComponent(ticket)}`;
-      } catch {
-        scheduleStreamReconnect(ownerGen, ownerHostKey, endpoint);
-        return;
-      }
-    }
-    if (!owns(ownerGen, ownerHostKey)) return;
-    let source: EventSource;
-    try {
-      source = openSource(streamUrl);
-    } catch {
-      scheduleStreamReconnect(ownerGen, ownerHostKey, endpoint);
-      return;
-    }
-    eventSource = source;
-    const handleEvent = (event: MessageEvent) => {
-      if (!owns(ownerGen, ownerHostKey) || eventSource !== source) return;
-      streamRetryAttempt = 0;
-      let parsed: unknown;
-      try { parsed = JSON.parse(String(event.data || '')); } catch { return; }
-      const decoded = decodeCuStatus(parsed);
-      if (decoded) applyStatusUpdate(decoded, ownerGen, ownerHostKey, endpoint);
-    };
-    for (const type of SSE_EVENTS) {
-      source.addEventListener(type, handleEvent as EventListener);
-    }
-    source.onmessage = handleEvent;
-    source.onopen = () => {
-      if (owns(ownerGen, ownerHostKey) && eventSource === source) streamRetryAttempt = 0;
-    };
-    // Close on error and reconnect through connectStream so a fresh stream
-    // ticket is minted on every reconnect instead of looping on an expired one.
-    source.onerror = () => {
-      if (!owns(ownerGen, ownerHostKey) || eventSource !== source) return;
-      try { source.close(); } catch {}
-      eventSource = null;
-      scheduleStreamReconnect(ownerGen, ownerHostKey, endpoint);
-    };
   }
 
   async function performTakeover(): Promise<void> {
@@ -570,6 +971,8 @@ export function createCuViewer(options: CuViewerOptions) {
       });
       const data = await readJson(response);
       if (!owns(ownerGen, ownerHostKey)) return;
+      const entry = hostStatuses.get(ownerHostKey);
+      const latestEpoch = entry?.latestEpoch ?? -1;
       if (response.status === 409) {
         const busy = decodeCuBusyError(data);
         notice = {
@@ -577,16 +980,18 @@ export function createCuViewer(options: CuViewerOptions) {
           text: formatBusyMessage(busy, now()),
         };
         if (busy.holder && (busy.epoch === null || busy.epoch >= latestEpoch)) {
-          if (busy.epoch !== null) latestEpoch = busy.epoch;
-          status = {
+          const nextStatus: CuStatus = {
             state: busy.state === 'human' ? 'human' : (status?.state ?? 'human'),
             epoch: busy.epoch ?? (status?.epoch ?? 0),
             lease: busy.holder,
             preempted: status?.preempted ?? null,
             health: status?.health ?? null,
           };
+          if (entry) acceptHostStatus(entry, nextStatus);
+          else { status = nextStatus; renderHeaderAndControls(); }
+        } else {
+          renderHeaderAndControls();
         }
-        renderHeaderAndControls();
         return;
       }
       if (!response.ok) {
@@ -601,7 +1006,6 @@ export function createCuViewer(options: CuViewerOptions) {
         return;
       }
       if (result.epoch < latestEpoch) return;
-      latestEpoch = result.epoch;
       // Invalidate any earlier in-flight view-only ticket fetch before mounting
       // interactive control so a late view-only reply cannot replace the iframe.
       ++ticketSequence;
@@ -612,7 +1016,7 @@ export function createCuViewer(options: CuViewerOptions) {
         heartbeatIntervalSec: result.heartbeatIntervalSec,
         expiresAt: result.lease?.expiresAt ?? null,
       });
-      status = {
+      const nextStatus: CuStatus = {
         state: result.state,
         epoch: result.epoch,
         lease: result.lease,
@@ -621,6 +1025,8 @@ export function createCuViewer(options: CuViewerOptions) {
       };
       mode = 'interactive';
       notice = null;
+      if (entry) acceptHostStatus(entry, nextStatus);
+      else status = nextStatus;
       startHeartbeat(ownerGen, ownerHostKey, endpoint, result.heartbeatIntervalSec);
       if (result.viewer) {
         mountIframe(cuSpacesViewerUrl(endpoint.base, result.viewer));
@@ -669,23 +1075,28 @@ export function createCuViewer(options: CuViewerOptions) {
         return;
       }
       const released = decodeCuRelease(data);
+      const entry = hostStatuses.get(ownerHostKey);
+      const latestEpoch = entry?.latestEpoch ?? -1;
       localLeases.delete(ownerHostKey);
       clearHeartbeat();
       mode = 'view-only';
       if (released && released.epoch >= latestEpoch) {
-        latestEpoch = released.epoch;
-        status = {
+        notice = released.handedBackTo
+          ? { kind: 'info', text: `Handed back to ${released.handedBackTo.label || released.handedBackTo.sessionId || 'agent'}.` }
+          : null;
+        const nextStatus: CuStatus = {
           state: released.state,
           epoch: released.epoch,
           lease: released.lease,
           preempted: null,
           health: status?.health ?? null,
         };
-        notice = released.handedBackTo
-          ? { kind: 'info', text: `Handed back to ${released.handedBackTo.label || released.handedBackTo.sessionId || 'agent'}.` }
-          : null;
+        if (entry) acceptHostStatus(entry, nextStatus);
+        else { status = nextStatus; renderHeaderAndControls(); }
+      } else {
+        notifySeatCueIfChanged(ownerHostKey, entry?.status ?? status);
+        renderHeaderAndControls();
       }
-      renderHeaderAndControls();
       void loadViewerTicket(ownerGen, ownerHostKey, endpoint, 'view-only');
     } catch (error) {
       if (!owns(ownerGen, ownerHostKey)) return;
@@ -700,17 +1111,139 @@ export function createCuViewer(options: CuViewerOptions) {
   }
 
   async function refresh(): Promise<void> {
-    if (!isOpen() || !activeHost || !activeHostKey) return;
+    if (!isViewerActive() || !activeHost || !activeHostKey) return;
     const ownerGen = generation;
     const ownerHostKey = activeHostKey;
     const endpoint = Object.freeze({ ...activeHost });
     notice = null;
     renderHeaderAndControls();
-    await loadStatus(ownerGen, ownerHostKey, endpoint);
+    const entry = hostStatuses.get(ownerHostKey);
+    if (entry) await fetchHostStatus(entry, true);
     if (!owns(ownerGen, ownerHostKey)) return;
     const localLease = localLeases.get(ownerHostKey) ?? null;
     const own = isOwnHumanLease(status, localLease);
     await loadViewerTicket(ownerGen, ownerHostKey, endpoint, own ? 'interactive' : 'view-only');
+  }
+
+  function hidePaneDom(): void {
+    options.root.classList.remove('cu-viewer-open');
+    const el = doc.getElementById('cuViewerView');
+    if (el) el.hidden = true;
+  }
+
+  function openSurface(targetSurface: 'pane' | 'panel', host: CuViewerHost, sessionKeyForPanel: string | null): void {
+    const hostKey = keyOf(host);
+
+    // Same-host handoff between the inline session panel and the main-pane
+    // viewer keeps the single active controller, lease, heartbeat, and stream.
+    if (surface !== 'none' && surface !== targetSurface && activeHostKey === hostKey) {
+      const prevUrl = iframeUrl;
+      const prevError = iframeError;
+      clearAllIframes();
+      if (targetSurface === 'pane') {
+        const container = ensureContainer();
+        options.closeOtherViews();
+        panelSessionKey = null;
+        surface = 'pane';
+        setPanelExpandedDom(false);
+        container.hidden = false;
+        options.root.classList.add('cu-viewer-open');
+      } else {
+        const panel = ensurePanel();
+        if (!panel) return;
+        hidePaneDom();
+        panel.hidden = false;
+        panelSessionKey = sessionKeyForPanel;
+        surface = 'panel';
+        setPanelExpandedDom(true);
+      }
+      activeHost = host;
+      if (prevUrl) {
+        mountIframe(prevUrl);
+      } else {
+        showPlaceholder(prevError || 'Loading desktop viewer…');
+      }
+      renderHeaderAndControls();
+      return;
+    }
+
+    if (targetSurface === 'panel' && surface === 'panel' && activeHostKey === hostKey) {
+      panelSessionKey = sessionKeyForPanel;
+      const panel = ensurePanel();
+      if (panel) panel.hidden = false;
+      setPanelExpandedDom(true);
+      return;
+    }
+
+    // Tear down any prior active surface / host before mounting fresh.
+    const prevHostKey = activeHostKey;
+    clearHeartbeat();
+    clearCountdown();
+    clearAllIframes();
+    if (surface === 'pane' && targetSurface !== 'pane') hidePaneDom();
+    if (surface === 'panel' && targetSurface !== 'panel') {
+      panelSessionKey = null;
+      setPanelExpandedDom(false);
+    }
+    if (prevHostKey && prevHostKey !== hostKey) {
+      unsubscribeHost(prevHostKey, 'viewer');
+    }
+
+    if (targetSurface === 'pane') {
+      const container = ensureContainer();
+      options.closeOtherViews();
+      container.hidden = false;
+      options.root.classList.add('cu-viewer-open');
+      panelSessionKey = null;
+    } else {
+      const panel = ensurePanel();
+      if (!panel) return;
+      panel.hidden = false;
+      panelSessionKey = sessionKeyForPanel;
+    }
+
+    surface = targetSurface;
+    if (targetSurface === 'panel') setPanelExpandedDom(true);
+
+    const ownerGen = ++generation;
+    ++ticketSequence;
+    const endpoint = Object.freeze({ ...host });
+
+    activeHost = host;
+    activeHostKey = hostKey;
+    mode = 'view-only';
+    notice = null;
+    actionBusy = false;
+    iframeError = null;
+
+    const entry = subscribeHost(host, 'viewer');
+    status = entry.status;
+    const initialLease = localLeases.get(hostKey) ?? null;
+    mode = initialLease && isOwnHumanLease(status, initialLease) ? 'interactive' : 'view-only';
+
+    showPlaceholder('Loading desktop viewer…');
+    renderHeaderAndControls();
+    startCountdown();
+
+    void (async () => {
+      await fetchHostStatus(entry, false);
+      if (!owns(ownerGen, hostKey)) return;
+      // Decide from the controller's accepted status and current lease so a
+      // delayed initial status reply can never discard a newer Take Over.
+      const localLease = localLeases.get(hostKey) ?? null;
+      if (localLease && isOwnHumanLease(status, localLease)) {
+        mode = 'interactive';
+        startHeartbeat(ownerGen, hostKey, endpoint, localLease.heartbeatIntervalSec);
+        if (!isInteractiveMounted()) {
+          await loadViewerTicket(ownerGen, hostKey, endpoint, 'interactive');
+        }
+      } else {
+        if (localLease) localLeases.delete(hostKey);
+        if (!isInteractiveMounted()) {
+          await loadViewerTicket(ownerGen, hostKey, endpoint, 'view-only');
+        }
+      }
+    })();
   }
 
   function open(target?: CuViewerHost | string | null): void {
@@ -720,72 +1253,72 @@ export function createCuViewer(options: CuViewerOptions) {
     else if (typeof target === 'string') host = options.host(target);
     else host = options.hosts().find(candidate => hostSupported(candidate)) ?? null;
     if (!hostSupported(host)) return;
+    openSurface('pane', host, null);
+  }
 
-    const container = ensureContainer();
-    options.closeOtherViews();
-    const ownerGen = ++generation;
-    ++ticketSequence;
-    latestEpoch = -1;
-    streamRetryAttempt = 0;
-    const hostKey = keyOf(host);
-    const endpoint = Object.freeze({ ...host });
+  function openPanel(opts: { persist?: boolean } = {}): void {
+    if (disposed) return;
+    const session = options.currentSession();
+    const host = session ? options.host(session.host ?? null) : null;
+    if (!session || !hostSupported(host)) return;
+    const sKey = sessionIdentityKey(session, host);
+    if (opts.persist !== false) writePanelOpenPref(sKey, true);
+    restoredPanelSessionKey = sKey;
+    openSurface('panel', host, sKey);
+  }
 
-    disconnectStream();
-    clearHeartbeat();
-    clearCountdown();
-    clearIframe();
+  function closePanel(persist = true): void {
+    if (disposed) return;
+    if (persist) {
+      const session = options.currentSession();
+      const host = session ? options.host(session.host ?? null) : null;
+      writePanelOpenPref(panelSessionKey ?? sessionIdentityKey(session, host), false);
+    }
+    if (surface === 'panel') {
+      close();
+    } else {
+      setPanelExpandedDom(false);
+    }
+  }
 
-    activeHost = host;
-    activeHostKey = hostKey;
-    status = null;
-    mode = 'view-only';
-    notice = null;
-    actionBusy = false;
-    iframeError = null;
-
-    container.hidden = false;
-    options.root.classList.add('cu-viewer-open');
-    showPlaceholder('Loading desktop viewer…');
-    renderHeaderAndControls();
-    startCountdown();
-
-    void connectStream(ownerGen, hostKey, endpoint);
-    void (async () => {
-      await loadStatus(ownerGen, hostKey, endpoint);
-      if (!owns(ownerGen, hostKey)) return;
-      // Decide from the controller's accepted status and current lease so a
-      // delayed initial status reply can never discard a newer Take Over.
-      const localLease = localLeases.get(hostKey) ?? null;
-      if (localLease && isOwnHumanLease(status, localLease)) {
-        startHeartbeat(ownerGen, hostKey, endpoint, localLease.heartbeatIntervalSec);
-        if (!isInteractiveMounted()) {
-          await loadViewerTicket(ownerGen, hostKey, endpoint, 'interactive');
-        }
-      } else {
-        if (localLease) localLeases.delete(hostKey);
-        await loadViewerTicket(ownerGen, hostKey, endpoint, 'view-only');
-      }
-    })();
+  function togglePanel(): void {
+    if (disposed) return;
+    if (surface === 'panel') closePanel(true);
+    else openPanel({ persist: true });
   }
 
   function close(): void {
-    if (disposed || !isOpen()) return;
+    if (disposed || surface === 'none') return;
+    const prevHostKey = activeHostKey;
+    surface = 'none';
+    panelSessionKey = null;
     ++generation;
     ++ticketSequence;
-    latestEpoch = -1;
-    disconnectStream();
     clearHeartbeat();
     clearCountdown();
-    clearIframe();
+    clearAllIframes();
     actionBusy = false;
     notice = null;
-    options.root.classList.remove('cu-viewer-open');
-    const el = doc.getElementById('cuViewerView');
-    if (el) el.hidden = true;
+    iframeError = null;
+    activeHost = null;
+    activeHostKey = null;
+    status = null;
+    mode = 'view-only';
+    hidePaneDom();
+    setPanelExpandedDom(false);
+    if (prevHostKey) unsubscribeHost(prevHostKey, 'viewer');
   }
 
   function dispose(): void {
     close();
+    for (const entry of [...hostStatuses.values()]) {
+      entry.generation += 1;
+      disconnectHostStream(entry);
+      entry.statusFlight = null;
+    }
+    hostStatuses.clear();
+    visibleListHostKeys.clear();
+    lastCueFingerprints.clear();
     disposed = true;
     localLeases.clear();
   }
@@ -793,14 +1326,22 @@ export function createCuViewer(options: CuViewerOptions) {
   return {
     open,
     close,
+    openPanel,
+    closePanel,
+    togglePanel,
     refresh,
     isOpen,
+    isPanelOpen,
     syncSessionChip,
+    syncSessionPanel,
+    syncVisibleHosts,
+    seatCue,
     takeover: () => performTakeover(),
     release: () => performRelease(),
     get activeHost() { return activeHost; },
     get status() { return status; },
     get mode() { return mode; },
+    get surface() { return surface; },
     dispose,
   };
 }

@@ -10,6 +10,7 @@ import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, 
 import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
 import { hibernationSummary } from './hibernation';
 import { botClosedKey, botCollapseKey, buildBotSessionTree, type BotSessionTree, type BotTreeNode, type SidebarBot } from './bots';
+import type { CuSessionListCue } from './cu-viewer-data';
 export interface SidebarHost extends HelperHost { state: string; key: string; color: string; dot: string; hasCache: boolean }
 export interface SidebarRenderOptions {
   active: readonly SessionEntry[]; previous: readonly SessionEntry[]; selected: SessionEntry | null;
@@ -24,12 +25,15 @@ export interface SidebarRenderOptions {
   /** Legacy fallback when a caller assumes bots live on `self` and omits `botsHostId`. */
   selfHostId?: string | null;
   unread: (row: SessionEntry) => boolean; hostChip: (id?: string | null) => string;
+  /** Host-level computer-use seat cue (agent/human) while the host's seat is held. */
+  cuSeat?: (hostId?: string | null) => CuSessionListCue | null;
 }
 export interface SidebarProjection {
   readonly layout: string;
   readonly rows: readonly { key: string; html: string }[];
   readonly count: number;
   readonly mode?: string;
+  readonly visibleHostIds?: readonly (string | null)[];
   readonly html: string;
 }
 const MAX_VISUAL_INDENT_DEPTH = 3;
@@ -100,8 +104,18 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
   }
   for (const list of [options.active, options.previous]) for (const session of list) chipHosts.add(session.host || null);
   for (const [, spawn] of options.pending) chipHosts.add(spawn.host || null);
-  // The chip's formatted output is itself a render input.
-  for (const host of chipHosts) parts.push(host, options.hostChip(host));
+  // The chip's formatted output and host-level CU seat cue are render inputs.
+  const cueHosts = new Set<string | null>();
+  for (const host of chipHosts) {
+    parts.push(host, options.hostChip(host));
+    cueHosts.add(host || options.selfHostId || null);
+  }
+  if (options.cuSeat) {
+    for (const host of cueHosts) {
+      const cue = options.cuSeat(host);
+      parts.push(host, cue ? `${cue.state}\0${cue.tone}\0${cue.label}\0${cue.title}` : '');
+    }
+  }
   for (const list of [options.active, options.previous]) {
     parts.push(list.length);
     for (const session of list) {
@@ -237,6 +251,11 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const privateChip = session.private
     ? '<span class="private-chip" title="Private session — hidden until the PIN is entered; stored outside backed-up session folders">private</span>'
     : '';
+  // Host-level computer-use seat cue while the host's seat is held (agent or human).
+  const cuSeat = options.cuSeat?.(session.host || options.selfHostId || null) ?? null;
+  const cuSeatChip = cuSeat
+    ? `<span class="cu-seat-cue" data-state="${escapeHtml(cuSeat.state)}" data-holder="${escapeHtml(cuSeat.holderKind)}" data-tone="${escapeHtml(cuSeat.tone)}" title="${escapeHtml(cuSeat.title)}" aria-label="${escapeHtml(cuSeat.title)}">${escapeHtml(cuSeat.label)}</span>`
+    : '';
   const bridgeChip = opts.bridge
     ? '<span class="session-bridge-chip" title="Closed intermediate parent kept visible to anchor active descendants">closed</span>'
     : '';
@@ -273,7 +292,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
         ${cacheHtml}<span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
       </div>
       <div class="session-item-tags${hostChip ? ' with-host' : ''}">
-        ${hostChip}${harnessBadge}${bridgeChip}${routineChip}${hibernationChip}${privateChip}${cwdHint}
+        ${hostChip}${harnessBadge}${bridgeChip}${routineChip}${hibernationChip}${privateChip}${cuSeatChip}${cwdHint}
       </div>
       ${snippetLine}
     </div>
@@ -558,8 +577,11 @@ function renderSessions() {
     html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
   }
 
+  const visibleHostSet = new Set<string | null>();
+  for (const session of filtered) visibleHostSet.add(session.host || options.selfHostId || null);
+  const visibleHostIds = [...visibleHostSet];
   const mode = `${options.tab}\0${options.view}\0${options.query}\0${options.scope}`;
-  return { layout: html, rows, count: active.length + pending.length, mode,
+  return { layout: html, rows, count: active.length + pending.length, mode, visibleHostIds,
     // String consumers get complete markup; the DOM controller only parses changed rows.
     get html() { let index = 0; return html.replace(/<template data-sidebar-row="[^"]*"><\/template>/g, () => rows[index++].html); } };
 }

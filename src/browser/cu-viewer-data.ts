@@ -89,6 +89,16 @@ export interface CuSeatPresentation {
   readonly ownControl: boolean;
 }
 
+export interface CuSessionListCue {
+  readonly state: Exclude<CuSeatState, 'idle'>;
+  readonly holderKind: 'agent' | 'human';
+  readonly tone: 'agent' | 'waiting' | 'human' | 'self';
+  readonly label: string;
+  readonly title: string;
+}
+
+export const CU_PANEL_STORAGE_PREFIX = 'pi-dish-cu-panel:';
+
 const VALID_STATES = new Set<CuSeatState>(['idle', 'agent', 'waiting_for_human', 'human']);
 const CANONICAL_RELAY_BASE_RE = /^\/hosts\/[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -330,4 +340,56 @@ export function formatBusyMessage(busy: CuBusyInfo, nowMs: number): string {
 export function cuSpacesViewerUrl(base: string, ticket: Pick<CuTicketResult, 'ticket'>): string {
   const cleanBase = base.replace(/\/+$/, '');
   return `${cleanBase}/api/cu/spaces/viewer/#ticket=${encodeURIComponent(ticket.ticket)}`;
+}
+
+/**
+ * Host-level session-list cue shown while a computer-use host's seat is held
+ * (agent, waiting_for_human, or human). Returns null when unknown or idle.
+ */
+export function cuSessionListCue(
+  status: CuStatus | null,
+  localLease: Pick<CuLocalHumanLease, 'leaseId' | 'epoch'> | null = null,
+): CuSessionListCue | null {
+  if (!status || status.state === 'idle') return null;
+  if (status.state === 'human') {
+    if (isOwnHumanLease(status, localLease)) {
+      return {
+        state: 'human',
+        holderKind: 'human',
+        tone: 'self',
+        label: 'desktop: you',
+        title: 'Desktop seat held by you (host-level)',
+      };
+    }
+    const holder = formatLeaseHolder(status.lease, 'human');
+    return {
+      state: 'human',
+      holderKind: 'human',
+      tone: 'human',
+      label: 'desktop: human',
+      title: `Desktop seat held by ${holder} (host-level)`,
+    };
+  }
+  if (status.state === 'waiting_for_human') {
+    const holder = formatLeaseHolder(status.lease, 'agent');
+    return {
+      state: 'waiting_for_human',
+      holderKind: 'agent',
+      tone: 'waiting',
+      label: 'desktop: waiting',
+      title: `Desktop waiting for you (${holder}, host-level)`,
+    };
+  }
+  const holder = formatLeaseHolder(status.lease, 'agent');
+  return {
+    state: 'agent',
+    holderKind: 'agent',
+    tone: 'agent',
+    label: 'desktop: agent',
+    title: `Desktop seat held by ${holder} (host-level)`,
+  };
+}
+
+export function cuPanelStorageKey(sessionIdentityKey: string): string {
+  return `${CU_PANEL_STORAGE_PREFIX}${sessionIdentityKey}`;
 }

@@ -414,6 +414,7 @@ test/browser/composer-drafts.spec.js linguist-generated=true
 test/browser/composer-ownership.spec.js linguist-generated=true
 test/browser/composer-refs.spec.js linguist-generated=true
 test/browser/composer-speech.spec.js linguist-generated=true
+test/browser/cu-session-panel.spec.js linguist-generated=true
 test/browser/cu-viewer.spec.js linguist-generated=true
 test/browser/directories.spec.js linguist-generated=true
 test/browser/display.spec.js linguist-generated=true

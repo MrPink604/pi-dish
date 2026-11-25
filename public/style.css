@@ -7064,6 +7064,7 @@ img.msg-image {
 .session-view.file-open .messages,
 .session-view.file-open .search-bar,
 .session-view.file-open .terminal-panel,
+.session-view.file-open .cu-session-panel,
 .session-view.file-open .resume-bar,
 .session-view.file-open .input-area { display: none !important; }
 
@@ -7566,6 +7567,7 @@ body.standalone-file-page {
 .session-view.diff-open .messages,
 .session-view.diff-open .search-bar,
 .session-view.diff-open .terminal-panel,
+.session-view.diff-open .cu-session-panel,
 .session-view.diff-open .resume-bar,
 .session-view.diff-open .input-area { display: none !important; }
 
@@ -7836,6 +7838,195 @@ body.standalone-file-page {
   .cu-viewer-actions { width: 100%; justify-content: flex-start; }
   .cu-viewer-actions .btn { min-height: 36px; }
   .cu-viewer-notice { padding: 8px 10px; }
+}
+
+/* --- Computer-use collapsible Desktop panel inside #sessionView ------------
+   Created dynamically from JS on computerUse hosts (closed by default).
+   Phone / narrow viewports: collapsible block pinned above the composer.
+   Desktop (>= 1100px) when open: right-hand side panel beside the transcript. */
+.cu-session-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line);
+  background: var(--bg-darker);
+}
+.cu-session-panel[hidden] { display: none !important; }
+.cu-session-panel.open {
+  flex: 0 0 42%;
+  min-height: 210px;
+  max-height: 55%;
+}
+.cu-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  min-height: 34px;
+  min-width: 0;
+  background: var(--bg-darker);
+}
+.cu-session-panel.open .cu-panel-header {
+  border-bottom: 1px solid var(--line);
+}
+.cu-panel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-bright);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.cu-panel-toggle:hover { color: var(--accent); }
+.cu-panel-chevron {
+  width: 10px;
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.cu-panel-title {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cu-panel-summary {
+  margin-left: 4px;
+  font-size: 10px;
+  padding: 1px 6px;
+}
+.cu-panel-summary[hidden],
+.cu-panel-open-only[hidden],
+.cu-panel-body[hidden] { display: none !important; }
+.cu-panel-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.cu-panel-bar {
+  padding: 6px 10px;
+  gap: 6px 10px;
+}
+.cu-panel-stage {
+  min-height: 120px;
+}
+
+@media (max-width: 768px) {
+  .cu-session-panel.open {
+    flex: 0 0 42%;
+    min-height: 210px;
+    max-height: 55%;
+  }
+  .cu-panel-bar {
+    flex-direction: row;
+    align-items: center;
+    padding: 6px 10px;
+    gap: 6px 8px;
+  }
+  .cu-panel-bar .cu-seat-status {
+    flex: 1 1 140px;
+  }
+  .cu-panel-bar .cu-viewer-actions {
+    width: auto;
+    flex-shrink: 0;
+  }
+  .cu-panel-bar .cu-viewer-actions .btn {
+    min-height: 30px;
+    padding: 4px 10px;
+  }
+}
+
+@media (min-width: 1100px) {
+  .main:not(.usage-open):not(.recovery-open):not(.fleet-open):not(.cu-viewer-open):not(.search-open):not(.subagents-open):not(.new-session-open):not(.skills-open):not(.routines-open) > .session-view.cu-panel-open:not(.file-open):not(.diff-open) {
+    display: grid !important;
+    grid-template-columns: minmax(320px, 1fr) minmax(380px, 46%);
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  }
+  .session-view.cu-panel-open:not(.file-open):not(.diff-open) > .session-header {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .session-view.cu-panel-open:not(.file-open):not(.diff-open) > .search-bar {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .session-view.cu-panel-open:not(.file-open):not(.diff-open) > .messages {
+    grid-column: 1;
+    grid-row: 3;
+    min-width: 0;
+    min-height: 0;
+  }
+  .session-view.cu-panel-open:not(.file-open):not(.diff-open) > .terminal-panel {
+    grid-column: 1;
+    grid-row: 4;
+    min-width: 0;
+    height: 240px;
+    max-height: 40%;
+  }
+  .session-view.cu-panel-open:not(.file-open):not(.diff-open) > .resume-bar {
+    grid-column: 1;
+    grid-row: 5;
+    min-width: 0;
+  }
+  .session-view.cu-panel-open:not(.file-open):not(.diff-open) > .input-area {
+    grid-column: 1;
+    grid-row: 6;
+    min-width: 0;
+  }
+  .session-view.cu-panel-open:not(.file-open):not(.diff-open) > .cu-session-panel {
+    grid-column: 2;
+    grid-row: 2 / 7;
+    flex: none;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+  .session-view.cu-panel-open:not(.file-open):not(.diff-open) > .jump-to-bottom {
+    right: calc(46% + 16px);
+  }
+}
+
+/* Host-level computer-use seat cue in sidebar session rows */
+.cu-seat-cue {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.cu-seat-cue[data-tone="agent"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-bright));
+}
+.cu-seat-cue[data-tone="self"] {
+  border-color: color-mix(in srgb, var(--success) 50%, transparent);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success-bright);
+}
+.cu-seat-cue[data-tone="human"],
+.cu-seat-cue[data-tone="waiting"] {
+  border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
 }
 /* Bulk lifecycle controls live in the Fleet view. */
 .bounce-settings { border-bottom: 1px solid var(--line); padding: 0 0 14px; margin-bottom: 4px; min-width: 0; }

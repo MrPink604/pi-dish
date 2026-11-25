@@ -524,3 +524,33 @@ test('bot cycles and self-parents break into visible roots without dropping clai
     assert.match(rendered, /data-bot-toggle="root"[\s\S]*?<small>2000<\/small>/);
     assert.ok(elapsed < 150, `expected linear-time 2,000-node bot tree render, took ${elapsed}ms`);
 });
+test('sidebar renders host-level computer-use seat cue, invalidates memo on seat change, and reports visible hosts', () => {
+    const CU = '44444444-4444-4444-8444-444444444444';
+    const SELF = '11111111-1111-4111-8111-111111111111';
+    const { cuSessionListCue } = context.PiDishBrowser;
+    const hosts = [
+        { hostId: SELF, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+        { hostId: CU, self: false, label: 'cu-sandbox', state: 'reachable', key: CU, color: '#fa1', dot: '', hasCache: true },
+    ];
+    const active = [
+        { id: 's-cu-1', host: CU, name: 'CU One', cwd: '/work', isActive: true, lastActivity: 2000 },
+        { id: 's-cu-2', host: CU, name: 'CU Two', cwd: '/work', isActive: true, lastActivity: 1500 },
+        { id: 's-self', host: SELF, name: 'Local', cwd: '/repo', isActive: true, lastActivity: 1000 },
+    ];
+    const memo = {};
+    const idle = renderSidebar(options({ active, tab: 'active', multiHost: true, hosts, selfHostId: SELF, cuSeat: () => null }), memo);
+    assert.doesNotMatch(idle.html, /cu-seat-cue/);
+    assert.deepEqual([...(idle.visibleHostIds ?? [])].sort(), [SELF, CU].sort());
+    const agentCue = cuSessionListCue({ state: 'agent', epoch: 2, lease: { leaseId: 'a1', sessionId: null, holderKind: 'agent', holderId: null, label: 'omp', reason: null, acquiredAt: null, expiresAt: null, hardExpiresAt: null, reservedUntil: null }, preempted: null, health: null });
+    const agent = renderSidebar(options({ active, tab: 'active', multiHost: true, hosts, selfHostId: SELF, cuSeat: (hostId) => hostId === CU ? agentCue : null }), memo);
+    assert.notEqual(agent, idle, 'seat transition rebuilds the memoized projection');
+    assert.equal((agent.html.match(/class="cu-seat-cue"/g) || []).length, 2, 'both rows on the CU host carry the host-level cue');
+    assert.match(agent.html, /data-state="agent" data-holder="agent" data-tone="agent"[^>]*>desktop: agent<\/span>/);
+    assert.equal(renderSidebar(options({ active, tab: 'active', multiHost: true, hosts, selfHostId: SELF, cuSeat: (hostId) => hostId === CU ? agentCue : null }), memo), agent);
+    const humanCue = cuSessionListCue({ state: 'human', epoch: 3, lease: { leaseId: 'h1', sessionId: null, holderKind: 'human', holderId: null, label: 'pi-dish', reason: null, acquiredAt: null, expiresAt: null, hardExpiresAt: null, reservedUntil: null }, preempted: null, health: null }, { leaseId: 'h1', epoch: 3 });
+    const human = renderSidebar(options({ active, tab: 'active', multiHost: true, hosts, selfHostId: SELF, cuSeat: (hostId) => hostId === CU ? humanCue : null }), memo);
+    assert.notEqual(human, agent);
+    assert.match(human.html, /data-state="human" data-holder="human" data-tone="self"[^>]*>desktop: you<\/span>/);
+    const filtered = renderSidebar(options({ active, tab: 'active', multiHost: true, hosts, selfHostId: SELF, query: 'Local', cuSeat: (hostId) => hostId === CU ? humanCue : null }), memo);
+    assert.deepEqual([...(filtered.visibleHostIds ?? [])], [SELF], 'filtered-out CU host leaves visibleHostIds');
+});
