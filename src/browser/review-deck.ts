@@ -113,7 +113,8 @@ export function createReviewDecks(options: {
   const mediaBlobs = new Map<string, { url: string; reviewId: string }>();
   const mediaLoads = new Map<string, Promise<string | null>>();
   const expandedReceipts = new Set<string>();
-  const submitting = new Map<string, 'submit' | 'reject' | 'dismiss'>();
+  const submitting = new Map<string, { action: 'submit' | 'reject' | 'dismiss'; token: number }>();
+  let nextRequestToken = 1;
   const rejectOpen = new Set<string>();
   const rejectReasons = new Map<string, string>();
   let dismissArmedId: string | null = null;
@@ -128,18 +129,37 @@ export function createReviewDecks(options: {
     return !!owner && !!options.supportsDismiss?.(owner.endpoint);
   }
 
-  function disarmDismiss(): void {
+  function syncDismissButton(reviewId: string, armed: boolean): void {
+    const container = document.getElementById('messages');
+    const deck = container ? deckElement(container, reviewId) : null;
+    const btn = deck?.querySelector<HTMLButtonElement>('[data-review-action="dismiss"]');
+    if (btn) {
+      btn.classList.toggle('armed', armed);
+      btn.setAttribute('aria-pressed', armed ? 'true' : 'false');
+      if (submitting.get(reviewId)?.action !== 'dismiss') {
+        btn.textContent = armed ? 'Dismiss? Tap again' : 'Dismiss';
+      }
+    }
+    const review = reviewsById.get(reviewId);
+    if (review && activeOwner) {
+      renderedKeys.set(reviewId, deckRenderKey(activeOwner.selection.host, review));
+    }
+  }
+
+  function disarmDismiss(updateDom = true): void {
+    const prevId = dismissArmedId;
     if (dismissArmTimer !== null) {
       clearTimeout(dismissArmTimer);
       dismissArmTimer = null;
     }
     dismissArmedId = null;
+    if (updateDom && prevId) syncDismissButton(prevId, false);
   }
 
   function clearTransientDeckState(reviewId: string): void {
     rejectOpen.delete(reviewId);
     rejectReasons.delete(reviewId);
-    if (dismissArmedId === reviewId) disarmDismiss();
+    if (dismissArmedId === reviewId) disarmDismiss(false);
   }
 
   function draftStorageKey(hostId: string | null, sessionId: string, reviewId: string): string {
@@ -559,7 +579,7 @@ export function createReviewDecks(options: {
     }
 
     const draft = loadDraft(hostId, review);
-    const pendingAction = submitting.get(review.id) ?? null;
+    const pendingAction = submitting.get(review.id)?.action ?? null;
     const busy = pendingAction !== null;
     const error = errors.get(review.id) || '';
     const total = review.cards.length;
@@ -698,7 +718,7 @@ export function createReviewDecks(options: {
     const canDismiss = canDismissForOwner(activeOwner);
     return JSON.stringify([
       'open', hostId ?? '', review.title, review.companionPage ?? '', review.cards.length,
-      draft.cardIndex, submitting.get(review.id) ?? '', errors.get(review.id) ?? '',
+      draft.cardIndex, submitting.get(review.id)?.action ?? '', errors.get(review.id) ?? '',
       canDismiss, canDismiss && rejectOpen.has(review.id), canDismiss && dismissArmedId === review.id,
       questionState,
     ]);
@@ -830,7 +850,8 @@ export function createReviewDecks(options: {
     saveDraft(captured.selection.host, review, draft);
     disarmDismiss();
     errors.delete(reviewId);
-    submitting.set(reviewId, 'submit');
+    const token = nextRequestToken++;
+    submitting.set(reviewId, { action: 'submit', token });
     sync();
     try {
       const response = await options.request(
@@ -891,7 +912,7 @@ export function createReviewDecks(options: {
         errors.set(reviewId, `Could not submit review: ${errorMessage(error)}`);
       }
     } finally {
-      submitting.delete(reviewId);
+      if (submitting.get(reviewId)?.token === token) submitting.delete(reviewId);
       if (owns(captured)) sync();
     }
   }
@@ -914,7 +935,8 @@ export function createReviewDecks(options: {
     saveDraft(captured.selection.host, review, draft);
     disarmDismiss();
     errors.delete(reviewId);
-    submitting.set(reviewId, action);
+    const token = nextRequestToken++;
+    submitting.set(reviewId, { action, token });
     sync();
     const verb = action === 'reject' ? 'reject' : 'dismiss';
     const payload = action === 'reject'
@@ -979,7 +1001,7 @@ export function createReviewDecks(options: {
         errors.set(reviewId, `Could not ${verb} review: ${errorMessage(error)}`);
       }
     } finally {
-      submitting.delete(reviewId);
+      if (submitting.get(reviewId)?.token === token) submitting.delete(reviewId);
       if (owns(captured)) sync();
     }
   }
@@ -1037,21 +1059,30 @@ export function createReviewDecks(options: {
     if (action === 'dismiss') {
       if (!canDismissForOwner(activeOwner)) return;
       if (dismissArmedId === reviewId) {
-        disarmDismiss();
+        disarmDismiss(true);
         void resolveReview(reviewId, 'dismiss');
         return;
       }
       const captured = activeOwner;
-      disarmDismiss();
-      rejectOpen.delete(reviewId);
-      errors.delete(reviewId);
+      disarmDismiss(true);
+      const hadReject = rejectOpen.delete(reviewId);
+      const hadError = errors.delete(reviewId);
       dismissArmedId = reviewId;
       dismissArmTimer = setTimeout(() => {
         if (dismissArmedId !== reviewId) return;
-        disarmDismiss();
-        if (!disposed && owns(captured)) sync();
+        disarmDismiss(!disposed && owns(captured));
       }, DISMISS_ARM_MS);
-      renderOne(document.getElementById('messages')!, review);
+      if (hadError) deck.querySelector('.review-error')?.remove();
+      if (hadReject) {
+        deck.querySelector('.review-reject-panel')?.remove();
+        const rejectBtn = deck.querySelector<HTMLButtonElement>('[data-review-action="open-reject"]');
+        if (rejectBtn) {
+          rejectBtn.classList.remove('active');
+          rejectBtn.setAttribute('aria-expanded', 'false');
+        }
+      }
+      // Update label, class and aria-pressed in place so keyboard focus stays on Dismiss.
+      syncDismissButton(reviewId, true);
       return;
     }
 
@@ -1216,7 +1247,7 @@ export function createReviewDecks(options: {
     sessionAbort?.abort();
     sessionAbort = null;
     activeOwner = null;
-    disarmDismiss();
+    disarmDismiss(false);
     reviewsById.clear();
     drafts.clear();
     renderedKeys.clear();

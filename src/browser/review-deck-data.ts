@@ -83,7 +83,10 @@ export interface ReviewSubmission {
   readonly delivery: ReviewDelivery;
 }
 
+export type ReviewOutcome = 'rejected' | 'dismissed';
+
 export interface ReviewResolution {
+  readonly outcome?: ReviewOutcome | null;
   readonly id: string;
   readonly resolvedAt: number;
   readonly reason: string | null;
@@ -224,12 +227,18 @@ function decodeSubmission(raw: unknown): ReviewSubmission | null {
   };
 }
 
+function decodeOutcome(value: unknown): ReviewOutcome | null {
+  return value === 'rejected' || value === 'dismissed' ? value : null;
+}
+
 function decodeResolution(raw: unknown): ReviewResolution | null {
   if (!record(raw) || typeof raw.id !== 'string' || !record(raw.delivery)) return null;
   const deliveryState = typeof raw.delivery.state === 'string' && DELIVERY_STATES.includes(raw.delivery.state)
     ? raw.delivery.state as ReviewDeliveryState : 'pending';
   const via = raw.delivery.via === 'waiter' || raw.delivery.via === 'message' ? raw.delivery.via : null;
+  const outcome = decodeOutcome(raw.outcome);
   return {
+    ...(outcome ? { outcome } : {}),
     id: raw.id,
     resolvedAt: num(raw.resolvedAt) ?? 0,
     reason: str(raw.reason),
@@ -248,6 +257,9 @@ export function decodeClientReview(raw: unknown): ClientReview | null {
   }
   const cards = raw.cards.map(decodeCard).filter((item): item is ReviewCard => item !== null);
   if (!cards.length) return null;
+  const resolution = raw.resolution ? decodeResolution(raw.resolution) : null;
+  const outcome = decodeOutcome(raw.outcome) ?? decodeOutcome(resolution?.outcome);
+  const status: ReviewStatus = raw.status === 'cancelled' && outcome ? outcome : raw.status as ReviewStatus;
   return {
     id: raw.id,
     sessionId: raw.sessionId,
@@ -257,10 +269,10 @@ export function decodeClientReview(raw: unknown): ClientReview | null {
     title: raw.title,
     companionPage: safeReviewUrl(raw.companionPage),
     wait: raw.wait !== false,
-    status: raw.status as ReviewStatus,
+    status,
     cards,
     submission: raw.submission ? decodeSubmission(raw.submission) : null,
-    resolution: raw.resolution ? decodeResolution(raw.resolution) : null,
+    resolution,
   };
 }
 

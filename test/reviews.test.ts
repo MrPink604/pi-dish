@@ -7,7 +7,7 @@
 import test = require('node:test');
 import assert = require('node:assert/strict');
 import type { ChildProcess } from 'node:child_process';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import crypto = require('node:crypto');
 import { EventEmitter } from 'node:events';
 import fs = require('node:fs');
@@ -168,7 +168,7 @@ test('reject reason validation, reviewResult and fallback messages for rejected 
   const rejected: ReviewRecord = {
     id: 'rv_0123456789abcdef', sessionId: SESSION_ID, createdAt: 0, anchorMessageIndex: null, spec, media: [], assets: [],
     status: 'rejected', submission: null,
-    resolution: { id: 'res-000001', resolvedAt: at, reason: 'Drop @plan.md\nwrong scope', delivery: { state: 'pending', via: null, at: null, error: null } },
+    resolution: { outcome: 'rejected', id: 'res-000001', resolvedAt: at, reason: 'Drop @plan.md\nwrong scope', delivery: { state: 'pending', via: null, at: null, error: null } },
   };
   const rejectedMsg = reviews.formatReviewMessage(rejected, false);
   assert.equal(rejectedMsg, [
@@ -187,6 +187,12 @@ test('reject reason validation, reviewResult and fallback messages for rejected 
   assert.deepEqual(rejectedResult.answers, {});
   assert.deepEqual(rejectedResult.changedFromDefault, []);
 
+  // Client wire view emits legacy-recognized closed status `'cancelled'` plus explicit `outcome`.
+  const rejectedClient = reviews.clientReview(rejected);
+  assert.equal(rejectedClient.status, 'cancelled');
+  assert.equal(rejectedClient.outcome, 'rejected');
+  assert.equal(rejectedClient.resolution?.outcome, 'rejected');
+
   const rejectedNoReason: ReviewRecord = {
     ...rejected,
     resolution: { ...rejected.resolution!, reason: null },
@@ -200,7 +206,7 @@ test('reject reason validation, reviewResult and fallback messages for rejected 
   const dismissed: ReviewRecord = {
     id: 'rv_0123456789abcdef', sessionId: SESSION_ID, createdAt: 0, anchorMessageIndex: null, spec, media: [], assets: [],
     status: 'dismissed', submission: null,
-    resolution: { id: 'res-000002', resolvedAt: at, reason: null, delivery: { state: 'pending', via: null, at: null, error: null } },
+    resolution: { outcome: 'dismissed', id: 'res-000002', resolvedAt: at, reason: null, delivery: { state: 'pending', via: null, at: null, error: null } },
   };
   assert.equal(reviews.formatReviewMessage(dismissed, false), [
     '[review response: Halden part looks (rv_0123456789abcdef), DISMISSED by the user (no answers) at 2026-11-25T10:00:00Z]',
@@ -211,6 +217,76 @@ test('reject reason validation, reviewResult and fallback messages for rejected 
   assert.equal(dismissedResult.status, 'dismissed');
   assert.equal(dismissedResult.reason, null);
   assert.deepEqual(dismissedResult.answers, {});
+  const dismissedClient = reviews.clientReview(dismissed);
+  assert.equal(dismissedClient.status, 'cancelled');
+  assert.equal(dismissedClient.outcome, 'dismissed');
+  assert.equal(dismissedClient.resolution?.outcome, 'dismissed');
+});
+
+test('on-disk store remains readable by the f87452d rollback reader alongside open siblings', () => {
+  const prevHome = process.env.HOME;
+  const rollbackHome = createTestTempDir('pi-dish-reviews-rollback-');
+  process.env.HOME = rollbackHome;
+  try {
+    const spec = validSpec(DECK);
+    const openRec: ReviewRecord = {
+      id: 'rv_1111111111111111', sessionId: SESSION_ID, createdAt: 1, anchorMessageIndex: 0,
+      spec, media: [], assets: [], status: 'open', submission: null,
+    };
+    const dismissedRec: ReviewRecord = {
+      id: 'rv_2222222222222222', sessionId: SESSION_ID, createdAt: 2, anchorMessageIndex: 0,
+      spec, media: [], assets: [], status: 'dismissed', submission: null,
+      resolution: { outcome: 'dismissed', id: 'res-rb-0001', resolvedAt: 20, reason: null, delivery: { state: 'delivered', via: 'waiter', at: 21, error: null } },
+    };
+    const rejectedRec: ReviewRecord = {
+      id: 'rv_3333333333333333', sessionId: SESSION_ID, createdAt: 3, anchorMessageIndex: 0,
+      spec, media: [], assets: [], status: 'rejected', submission: null,
+      resolution: { outcome: 'rejected', id: 'res-rb-0002', resolvedAt: 30, reason: 'Rollback check', delivery: { state: 'delivered', via: 'message', at: 31, error: null } },
+    };
+    reviews.writeReviews(SESSION_ID, [openRec, dismissedRec, rejectedRec]);
+
+    // Raw JSON on disk uses legacy-compatible status `'cancelled'` plus `resolution.outcome`.
+    const storeFile = path.join(rollbackHome, '.pi', 'dish', 'reviews', `${crypto.createHash('sha256').update(SESSION_ID).digest('hex').slice(0, 32)}.json`);
+    const rawOnDisk = record(JSON.parse(fs.readFileSync(storeFile, 'utf8')));
+    const rawList = rawOnDisk.reviews as Record<string, unknown>[];
+    assert.equal(rawList[0].status, 'open');
+    assert.equal(rawList[1].status, 'cancelled');
+    assert.equal(record(rawList[1].resolution).outcome, 'dismissed');
+    assert.equal(rawList[2].status, 'cancelled');
+    assert.equal(record(rawList[2].resolution).outcome, 'rejected');
+
+    // Load the actual f87452d reader from git history and verify every record in the file loads cleanly.
+    const oldSource = execFileSync('git', ['show', 'f87452d:lib/reviews.js'], {
+      cwd: path.join(__dirname, '..'), encoding: 'utf8',
+    });
+    const oldModule: { exports: Record<string, unknown> } = { exports: {} };
+    const libDir = path.join(__dirname, '..', 'lib');
+    const oldRequire = (id: string) => id.startsWith('.') ? require(path.resolve(libDir, id)) : require(id);
+    const loader = new Function('exports', 'require', 'module', '__filename', '__dirname', oldSource) as (
+      exports: Record<string, unknown>, req: (id: string) => unknown, mod: { exports: Record<string, unknown> }, filename: string, dirname: string,
+    ) => void;
+    loader(oldModule.exports, oldRequire, oldModule, path.join(libDir, 'reviews.js'), libDir);
+    const oldReadReviews = oldModule.exports.readReviews as (sid: string) => Record<string, unknown>[];
+    const oldLoaded = oldReadReviews(SESSION_ID);
+    assert.equal(oldLoaded.length, 3);
+    assert.equal(oldLoaded[0].id, openRec.id);
+    assert.equal(oldLoaded[0].status, 'open');
+    assert.equal(oldLoaded[1].id, dismissedRec.id);
+    assert.equal(oldLoaded[1].status, 'cancelled');
+    assert.equal(oldLoaded[2].id, rejectedRec.id);
+    assert.equal(oldLoaded[2].status, 'cancelled');
+
+    // Current reader reconstructs the exact terminal statuses and resolutions.
+    const newLoaded = reviews.readReviews(SESSION_ID);
+    assert.deepEqual(newLoaded.map(item => [item.id, item.status]), [
+      [openRec.id, 'open'],
+      [dismissedRec.id, 'dismissed'],
+      [rejectedRec.id, 'rejected'],
+    ]);
+    assert.equal(newLoaded[2].resolution?.reason, 'Rollback check');
+  } finally {
+    process.env.HOME = prevHome;
+  }
 });
 
 // ---- the server ------------------------------------------------------------
@@ -1154,10 +1230,11 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
       ...overrides,
     } as unknown as ApplicationRequest;
   }
-  function mockRes(options: { failWrite?: boolean } = {}) {
+  function mockRes(options: { failWrite?: boolean; delayWrite?: boolean } = {}) {
     const emitter = new EventEmitter();
     let statusCode = 200;
     let body = '';
+    let pendingEnd: (() => void) | null = null;
     const res = Object.assign(emitter, {
       writableEnded: false,
       writableFinished: false,
@@ -1167,6 +1244,12 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
       type() { return res; },
       setHeader() { return res; },
       flushHeaders() {},
+      destroy() {
+        res.destroyed = true;
+        res.socket.destroyed = true;
+        res.emit('close');
+        return res;
+      },
       json(value: unknown) { body = JSON.stringify(value); res.writableEnded = true; res.writableFinished = true; return res; },
       end(chunk?: string, cb?: () => void) {
         if (options.failWrite) {
@@ -1178,13 +1261,27 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
           return res;
         }
         if (chunk) body += chunk;
+        if (options.delayWrite) {
+          res.writableEnded = true;
+          pendingEnd = () => {
+            if (!res.destroyed) res.writableFinished = true;
+            cb?.();
+          };
+          return res;
+        }
         res.writableEnded = true;
         res.writableFinished = true;
         cb?.();
         return res;
       },
     });
-    return { res: res as unknown as ApplicationResponse, status: () => statusCode, body: () => body };
+    return {
+      res: res as unknown as ApplicationResponse,
+      status: () => statusCode,
+      body: () => body,
+      finishWrite: () => { const fn = pendingEnd; pendingEnd = null; fn?.(); },
+      raw: res,
+    };
   }
 
   const noMediaDeck = { ...DECK, cards: DECK.cards.map(item => ({ ...item, media: [] })) };
@@ -1243,6 +1340,76 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
     fs.writeFileSync(storeFile, backup);
     assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id3)?.submission?.delivery.state, 'pending',
       'answer stays pending and recoverable');
+
+    // 4. Delayed successful live waiter write outlasting graceMs completes via waiter without duplicate fallback.
+    const deliveredBefore4 = delivered.length;
+    const c4 = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Slow live waiter', wait: true } }), c4.res, () => {});
+    const id4 = String(record(JSON.parse(c4.body()).review).id);
+    const slowWait4 = mockRes({ delayWrite: true });
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id4 }, query: { timeout: '10', outcomes: '1' } }), slowWait4.res, () => {});
+    const r4 = mockRes();
+    await handlers.reject(mockReq({ params: { id: SESSION_ID, reviewId: id4 }, body: { resolutionId: 'res-slow-01', reason: 'Wait for write' } }), r4.res, () => {});
+    assert.equal(r4.status(), 202);
+    // Outlast graceMs significantly while the socket write is still in flight.
+    t.mock.timers.tick(graceMs * 3);
+    assert.equal(delivered.length, deliveredBefore4, 'fallback does not fire while a live waiter write is still in flight');
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id4)?.resolution?.delivery.state, 'pending');
+    slowWait4.finishWrite();
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id4)?.resolution?.delivery.via, 'waiter');
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id4)?.resolution?.delivery.state, 'delivered');
+    t.mock.timers.tick(graceMs * 10);
+    assert.equal(delivered.length, deliveredBefore4, 'no duplicate fallback after delayed successful write');
+
+    // 5. Delayed successful late waiter write also prevents duplicate fallback.
+    const deliveredBefore5 = delivered.length;
+    const c5 = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Slow late waiter', wait: true } }), c5.res, () => {});
+    const id5 = String(record(JSON.parse(c5.body()).review).id);
+    await handlers.dismiss(mockReq({ params: { id: SESSION_ID, reviewId: id5 }, body: { resolutionId: 'res-slow-02' } }), mockRes().res, () => {});
+    const slowWait5 = mockRes({ delayWrite: true });
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id5 }, query: { outcomes: '1' } }), slowWait5.res, () => {});
+    t.mock.timers.tick(graceMs * 3);
+    assert.equal(delivered.length, deliveredBefore5, 'fallback waits for delayed late waiter write');
+    slowWait5.finishWrite();
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id5)?.resolution?.delivery.via, 'waiter');
+    assert.equal(delivered.length, deliveredBefore5);
+
+    // 6. Wedged waiter write past maxWriteMs is explicitly terminated before fallback, and late completion cannot override.
+    const c6 = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Hung waiter', wait: true } }), c6.res, () => {});
+    const id6 = String(record(JSON.parse(c6.body()).review).id);
+    const hungWait6 = mockRes({ delayWrite: true });
+    await handlers.wait(mockReq({ method: 'GET', params: { id: SESSION_ID, reviewId: id6 }, query: { timeout: '10', outcomes: '1' } }), hungWait6.res, () => {});
+    await handlers.dismiss(mockReq({ params: { id: SESSION_ID, reviewId: id6 }, body: { resolutionId: 'res-hung-01' } }), mockRes().res, () => {});
+    const settled6 = new Promise<void>(resolve => {
+      const unsubscribe = handlers.subscribe(SESSION_ID, ({ review }) => {
+        if (review.id === id6 && review.resolution?.delivery.state === 'delivered') {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+    t.mock.timers.tick(30_000);
+    await settled6;
+    assert.equal(hungWait6.raw.destroyed, true, 'wedged write socket is terminated before fallback');
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id6)?.resolution?.delivery.via, 'message');
+    hungWait6.finishWrite();
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id6)?.resolution?.delivery.via, 'message');
+
+    // 7. Non-object bodies (null, array, primitives) return 400 before changing state.
+    const c7 = mockRes();
+    await handlers.create(mockReq({ body: { ...noMediaDeck, title: 'Bad body unit', wait: false } }), c7.res, () => {});
+    const id7 = String(record(JSON.parse(c7.body()).review).id);
+    for (const badBody of [null, [], 'text', 123, true]) {
+      const rejRes = mockRes();
+      await handlers.reject(mockReq({ params: { id: SESSION_ID, reviewId: id7 }, body: badBody }), rejRes.res, () => {});
+      assert.equal(rejRes.status(), 400);
+      const disRes = mockRes();
+      await handlers.dismiss(mockReq({ params: { id: SESSION_ID, reviewId: id7 }, body: badBody }), disRes.res, () => {});
+      assert.equal(disRes.status(), 400);
+    }
+    assert.equal(reviews.readReviews(SESSION_ID).find(item => item.id === id7)?.status, 'open');
   } finally {
     handlers.stop();
     t.mock.timers.reset();
@@ -1251,36 +1418,75 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
   }
 });
 
-test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idempotency, races with submit, and legacy waiter skew', async () => {
+test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idempotency, races with submit, body validation, terminal escaping, and legacy skew', async () => {
   const noMediaDeck = { ...DECK, cards: DECK.cards.map(item => ({ ...item, media: [] })) };
 
-  // 1. Live waiting CLI gets REJECTED with reason via hub, exits 2, no duplicate message; idempotency & 409 conflicts hold.
+  // 1. Live waiting CLI gets REJECTED with reason via hub, exits 2, no duplicate message; wire review keeps legacy closed status `'cancelled'` + `outcome`.
   const beforeReject = prompts.length;
   const waitReject = cli(['ask', '-'], { ...noMediaDeck, title: 'Reject waited deck' });
   const rejectTarget = await openReview('Reject waited deck');
   const rejectId = String(rejectTarget.id);
   const badReason = await post(viaHub(`/${rejectId}/reject`), { resolutionId: 'res-too-long1', reason: 'x'.repeat(501) });
   assert.equal(badReason.status, 400);
-  const rejected = await post(viaHub(`/${rejectId}/reject`), { resolutionId: 'res-reject-01', reason: 'Wrong direction — drop it' });
-  assert.equal(rejected.status, 202);
-  assert.equal(record((await json(rejected)).review).status, 'rejected');
+
+  // Malformed bodies (JSON array or non-JSON content-type payload) return 400 without resolving the deck.
+  const arrayReject = await post(api(owner, `/${rejectId}/reject`), ['not', 'an', 'object']);
+  assert.equal(arrayReject.status, 400);
+  const arrayDismiss = await post(api(owner, `/${rejectId}/dismiss`), []);
+  assert.equal(arrayDismiss.status, 400);
+  const textReject = await fetch(api(owner, `/${rejectId}/reject`), {
+    method: 'POST', headers: { 'Content-Type': 'text/plain', ...CLIENT_HEADER }, body: 'plain text',
+  });
+  assert.equal(textReject.status, 400);
+  const textDismiss = await fetch(api(owner, `/${rejectId}/dismiss`), {
+    method: 'POST', headers: { 'Content-Type': 'text/plain', ...CLIENT_HEADER }, body: 'plain text',
+  });
+  assert.equal(textDismiss.status, 400);
+  assert.equal(record((await json(await fetch(api(owner, `/${rejectId}`)))).review).status, 'open');
+
+  const rawReason = 'Wrong direction\x1b[2K\rFAKE\u202eDROP';
+  const sseEvents = sseReader(`${owner}/api/sessions/${SESSION_ID}/stream`);
+  let rejectedWire: Record<string, unknown>;
+  try {
+    const rejected = await post(viaHub(`/${rejectId}/reject`), { resolutionId: 'res-reject-01', reason: rawReason });
+    assert.equal(rejected.status, 202);
+    rejectedWire = record((await json(rejected)).review);
+    assert.equal(rejectedWire.status, 'cancelled', 'wire status stays legacy-recognized cancelled');
+    assert.equal(rejectedWire.outcome, 'rejected');
+    assert.equal(record(rejectedWire.resolution).outcome, 'rejected');
+    const sseUpdate = await sseEvents.waitFor(event => event.event === 'review_updated' && record(record(event.data).review).id === rejectId);
+    const sseReview = record(record(sseUpdate.data).review);
+    assert.equal(sseReview.status, 'cancelled', 'SSE review_updated carries legacy closed status');
+    assert.equal(sseReview.outcome, 'rejected');
+  } finally { sseEvents.close(); }
+
+  // CLI human-readable output escapes terminal controls while preserving raw reason in JSON.
   assert.equal(await waitReject.exited, 2, waitReject.stderr());
   assert.match(waitReject.stdout(), /REJECTED by the user/);
-  assert.match(waitReject.stdout(), /reason: Wrong direction — drop it/);
+  assert.ok(!waitReject.stdout().includes('\x1b'), 'CLI human output must not contain raw ESC');
+  assert.ok(!waitReject.stdout().includes('\u202e'), 'CLI human output must not contain raw bidi override');
+  assert.match(waitReject.stdout(), /Wrong direction\\x1b\[2K/);
+  assert.match(waitReject.stdout(), /\\u202eDROP/);
   await pause(GRACE_MS + 300);
   assert.equal(prompts.length, beforeReject, 'no fallback message when a live waiter took the rejection');
 
-  // `pi-dish-review answers <id>` exits 0 and reports rejected status + reason + empty answers.
+  // `pi-dish-review answers <id>` exits 0 and preserves raw reason in structured JSON.
   const rejectAnswers = cli(['answers', rejectId]);
   assert.equal(await rejectAnswers.exited, 0, rejectAnswers.stderr());
   const rejectParsed = record(JSON.parse(rejectAnswers.stdout()));
   assert.equal(rejectParsed.status, 'rejected');
-  assert.equal(rejectParsed.reason, 'Wrong direction — drop it');
+  assert.equal(rejectParsed.reason, rawReason);
   assert.deepEqual(rejectParsed.answers, {});
   assert.equal(record(rejectParsed.delivery).via, 'waiter');
 
-  // Idempotent repeat with same resolutionId -> 200; conflicting ids/actions -> 409 with winning review.
-  const repeatReject = await post(api(owner, `/${rejectId}/reject`), { resolutionId: 'res-reject-01', reason: 'Wrong direction — drop it' });
+  // GET /reviews list also emits legacy closed status `'cancelled'` + `outcome: 'rejected'`.
+  const listedAfterReject = (await json(await fetch(api(owner)))).reviews as Record<string, unknown>[];
+  const listedItem = listedAfterReject.find(item => item.id === rejectId);
+  assert.equal(listedItem?.status, 'cancelled');
+  assert.equal(listedItem?.outcome, 'rejected');
+
+  // Idempotent repeat with same resolutionId -> 200; conflicting ids/actions -> 409 with legacy-closed winning review.
+  const repeatReject = await post(api(owner, `/${rejectId}/reject`), { resolutionId: 'res-reject-01', reason: rawReason });
   assert.equal(repeatReject.status, 200);
   assert.equal((await json(repeatReject)).repeated, true);
   for (const [label, res] of [
@@ -1293,18 +1499,22 @@ test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idemp
     assert.equal(res.status, 409, label);
     const body = await json(res);
     assert.equal(body.code, 'rejected', label);
-    assert.equal(record(body.review).status, 'rejected', label);
+    assert.equal(record(body.review).status, 'cancelled', `${label} carries legacy-closed status`);
+    assert.equal(record(body.review).outcome, 'rejected', label);
   }
 
-  // Legacy waiter (without outcomes=1) on already-rejected review gets 409 with reason instead of spinning or pretending defaults.
+  // Legacy waiter (without outcomes=1) on already-rejected review gets 409 with escaped reason text and raw reason in JSON result.
   const legacyAlready = await fetch(api(owner, `/${rejectId}/wait?timeout=2`), { headers: CLIENT_HEADER });
   assert.equal(legacyAlready.status, 409);
   const legacyAlreadyBody = await json(legacyAlready);
   assert.equal(legacyAlreadyBody.code, 'rejected');
-  assert.match(String(legacyAlreadyBody.error), /Wrong direction — drop it/);
+  assert.ok(!String(legacyAlreadyBody.error).includes('\x1b'), 'legacy 409 error escapes ESC');
+  assert.ok(!String(legacyAlreadyBody.error).includes('\u202e'), 'legacy 409 error escapes bidi override');
+  assert.match(String(legacyAlreadyBody.error), /Wrong direction\\x1b\[2K/);
   assert.equal(record(legacyAlreadyBody.result).status, 'rejected');
+  assert.equal(record(legacyAlreadyBody.result).reason, rawReason);
 
-  // 2. Live waiting CLI with --json gets DISMISSED via hub, exits 3, no duplicate message; answers CLI shows dismissed.
+  // 2. Live waiting CLI with --json gets DISMISSED via hub, exits 3, no duplicate message; absent body is accepted on dismiss/reject.
   const beforeDismiss = prompts.length;
   const waitDismiss = cli(['ask', '-', '--json'], { ...noMediaDeck, title: 'Dismiss waited deck' });
   const dismissTarget = await openReview('Dismiss waited deck');
@@ -1320,6 +1530,18 @@ test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idemp
   await pause(GRACE_MS + 300);
   assert.equal(prompts.length, beforeDismiss, 'no fallback message when a live waiter took the dismissal');
 
+  // Absent body (no Content-Type, no payload) is accepted on both dismiss and reject.
+  const emptyDismissCreated = await json(await post(api(owner), { ...noMediaDeck, title: 'Absent body dismiss', wait: false }));
+  const emptyDismissId = String(record(emptyDismissCreated.review).id);
+  const emptyDismissRes = await fetch(api(owner, `/${emptyDismissId}/dismiss`), { method: 'POST', headers: CLIENT_HEADER });
+  assert.equal(emptyDismissRes.status, 202);
+  await settled(emptyDismissId);
+  const emptyRejectCreated = await json(await post(api(owner), { ...noMediaDeck, title: 'Absent body reject', wait: false }));
+  const emptyRejectId = String(record(emptyRejectCreated.review).id);
+  const emptyRejectRes = await fetch(api(owner, `/${emptyRejectId}/reject`), { method: 'POST', headers: CLIENT_HEADER });
+  assert.equal(emptyRejectRes.status, 202);
+  await settled(emptyRejectId);
+
   // Idempotent repeat dismiss (same id and omitted id) -> 200; conflicting actions -> 409.
   assert.equal((await post(api(owner, `/${dismissId}/dismiss`), { resolutionId: 'res-dismiss-01' })).status, 200);
   assert.equal((await post(api(owner, `/${dismissId}/dismiss`), {})).status, 200);
@@ -1328,7 +1550,7 @@ test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idemp
   assert.equal((await post(api(owner, `/${dismissId}/reject`), { reason: 'late' })).status, 409);
   assert.equal((await post(api(owner, `/${dismissId}/cancel`), {})).status, 409);
 
-  // 3. Fallback message delivery (no waiter) for both rejected and dismissed, plus restart durability.
+  // 3. Fallback message delivery (no waiter) for both rejected and dismissed.
   const beforeFallback = prompts.length;
   const asyncRejectCreated = await json(await post(api(owner), { ...noMediaDeck, title: 'Async reject deck', wait: false }));
   const asyncRejectId = String(record(asyncRejectCreated.review).id);
@@ -1385,14 +1607,15 @@ test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idemp
     assert.deepEqual(statuses, [202, 409], `${label} must yield exactly one 202 and one 409`);
     const winnerRes = r1.status === 202 ? r1 : r2;
     const loserRes = r1.status === 409 ? r1 : r2;
-    const winnerStatus = record((await json(winnerRes)).review).status;
+    const winnerReview = record((await json(winnerRes)).review);
     const loserBody = await json(loserRes);
-    assert.equal(record(loserBody.review).status, winnerStatus, `${label} 409 returns winning terminal review`);
+    assert.equal(record(loserBody.review).status, winnerReview.status, `${label} 409 returns winning wire status`);
+    assert.equal(record(loserBody.review).outcome, winnerReview.outcome, `${label} 409 returns winning outcome`);
     await settled(raceId);
     assert.equal(prompts.filter(prompt => prompt.includes(raceId)).length, 1, `${label} delivers exactly once`);
   }
 
-  // 6. Reject/dismiss after cancel or submit returns 409.
+  // 6. Reject/dismiss after cancel returns 409.
   const cancelledDeck = await json(await post(api(owner), { ...noMediaDeck, title: 'Cancelled before dismiss', wait: false }));
   const cancelledId = String(record(cancelledDeck.review).id);
   assert.equal((await post(api(owner, `/${cancelledId}/cancel`), {})).status, 200);
@@ -1402,4 +1625,45 @@ test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idemp
   const rejectCancelled = await post(api(owner, `/${cancelledId}/reject`), { resolutionId: 'res-after-can2', reason: 'nope' });
   assert.equal(rejectCancelled.status, 409);
   assert.equal((await json(rejectCancelled)).code, 'cancelled');
+});
+
+test('CLI delivery note says "sent" only for delivered state, reporting recorded state and escaped error otherwise', async t => {
+  const reviewId = 'rv_445566778899aabb';
+  let currentResult: Record<string, unknown> = {};
+  const fake = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ result: currentResult }));
+  });
+  await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>(resolve => fake.close(() => resolve())));
+  const address = fake.address();
+  assert.ok(address && typeof address !== 'string');
+  const fakeBase = `http://127.0.0.1:${address.port}`;
+
+  // 1. Delivered via message -> says "also sent".
+  currentResult = { reviewId, status: 'dismissed', reason: null, answers: {}, delivery: { state: 'delivered', via: 'message', at: 1, error: null } };
+  const deliveredRun = cli(['wait', reviewId], undefined, { PI_DISH_URL: fakeBase });
+  assert.equal(await deliveredRun.exited, 3, deliveredRun.stderr());
+  assert.match(deliveredRun.stdout(), /also sent to this session/);
+
+  // 2. Failed via message -> does NOT say "sent"; reports state and escaped error.
+  currentResult = {
+    reviewId, status: 'rejected', reason: 'no\x1b[31m', answers: {},
+    delivery: { state: 'failed', via: 'message', at: 1, error: 'session busy\x1b[2K' },
+  };
+  const failedRun = cli(['wait', reviewId], undefined, { PI_DISH_URL: fakeBase });
+  assert.equal(await failedRun.exited, 2, failedRun.stderr());
+  assert.doesNotMatch(failedRun.stdout(), /also sent/);
+  assert.match(failedRun.stdout(), /Session message delivery state: failed — session busy\\x1b\[2K\./);
+  assert.ok(!failedRun.stdout().includes('\x1b'));
+
+  // 3. Uncertain via message on submitted -> does NOT say "sent"; reports state and error.
+  currentResult = {
+    reviewId, status: 'submitted', answers: { quick_mag: { value: 'tab', default: true } },
+    delivery: { state: 'uncertain', via: 'message', at: null, error: 'bridge dropped' },
+  };
+  const uncertainRun = cli(['wait', reviewId], undefined, { PI_DISH_URL: fakeBase });
+  assert.equal(await uncertainRun.exited, 0, uncertainRun.stderr());
+  assert.doesNotMatch(uncertainRun.stdout(), /also sent/);
+  assert.match(uncertainRun.stdout(), /Session message delivery state: uncertain — bridge dropped\./);
 });

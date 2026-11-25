@@ -105,14 +105,18 @@ export interface ReviewSubmission {
     changed: string[];
     delivery: ReviewDelivery;
 }
+export type ReviewOutcome = 'rejected' | 'dismissed';
 /** Terminal user rejection or dismissal of a deck (no answers submitted). */
 export interface ReviewResolution {
+    outcome: ReviewOutcome;
     id: string;
     resolvedAt: number;
     reason: string | null;
     delivery: ReviewDelivery;
 }
 export type ReviewStatus = 'open' | 'submitted' | 'cancelled' | 'rejected' | 'dismissed';
+/** Wire status recognized by both legacy and current browsers; check `outcome`/`resolution` for reject/dismiss. */
+export type ClientReviewWireStatus = 'open' | 'submitted' | 'cancelled';
 export interface ReviewRecord {
     id: string;
     sessionId: string;
@@ -215,7 +219,9 @@ export interface ClientReview {
     title: string;
     companionPage: string | null;
     wait: boolean;
-    status: ReviewStatus;
+    /** Legacy-safe closed status (`cancelled` for rejected/dismissed); capable clients read `outcome`/`resolution`. */
+    status: ClientReviewWireStatus;
+    outcome?: ReviewOutcome;
     cards: ClientCard[];
     submission: ReviewSubmission | null;
     resolution?: ReviewResolution | null;

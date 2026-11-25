@@ -885,12 +885,34 @@ test('reject with optional reason, two-tap dismiss, receipts, draft clearing, cr
   // Both Reject and Dismiss render in the secondary footer strip (distinct from primary Submit) with zero horizontal overflow at 390px.
   const rejectBtn = rejectEl.locator('[data-review-action="open-reject"]');
   const dismissBtn = rejectEl.locator('[data-review-action="dismiss"]');
+  const dismissDeckBtn = dismissEl.locator('[data-review-action="dismiss"]');
   await expect(rejectBtn).toBeVisible();
   await expect(dismissBtn).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
+  // Dismiss two-tap updates in place (keeping keyboard focus on Enter) and disarms any previously armed Dismiss button.
+  await dismissBtn.focus();
+  await dismissBtn.evaluate(el => Reflect.set(window, '__dismissBtnBefore', el));
+  await page.keyboard.press('Enter');
+  await expect(dismissBtn).toHaveClass(/\barmed\b/);
+  await expect(dismissBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(dismissBtn).toHaveText('Dismiss? Tap again');
+  expect(await dismissBtn.evaluate(el => el === Reflect.get(window, '__dismissBtnBefore') && document.activeElement === el)).toBe(true);
+
+  // Arming the second deck's Dismiss immediately disarms the first deck's button in place (never two armed buttons).
+  await dismissDeckBtn.focus();
+  await page.keyboard.press('Enter');
+  await expect(dismissDeckBtn).toHaveClass(/\barmed\b/);
+  await expect(dismissDeckBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(dismissDeckBtn).toBeFocused();
+  await expect(dismissBtn).not.toHaveClass(/\barmed\b/);
+  await expect(dismissBtn).toHaveAttribute('aria-pressed', 'false');
+  await expect(dismissBtn).toHaveText('Dismiss');
+  await expect(page.locator('[data-review-action="dismiss"].armed')).toHaveCount(1);
+
   // Save a draft edit on the deck to verify Reject clears sessionStorage draft too, even with an unanswered required text field.
   await rejectEl.locator('.review-option[data-question-id="approach"][data-value="b"]').click();
+  await expect(dismissDeckBtn).not.toHaveClass(/\barmed\b/);
   const hasDraft = async (reviewId: string) => page.evaluate(id => {
     for (let i = 0; i < sessionStorage.length; i++) {
       if ((sessionStorage.key(i) || '').endsWith(`:${id}`)) return true;
@@ -1027,15 +1049,63 @@ test('reject with optional reason, two-tap dismiss, receipts, draft clearing, cr
     await expect(peerDeckEl).toHaveClass(/\bis-dismissed\b/);
     await expect(peerDeckEl.locator('.review-receipt-title')).toHaveText('Dismissed · Remote deck to dismiss via hub');
 
-    // Verify the remote peer actually persisted the dismissal.
+    // Verify the remote peer actually persisted the dismissal (wire review carries legacy-closed status + outcome; result carries dismissed).
     const peerGet = await fetch(`${peer.base}/api/sessions/${encodeURIComponent(ROOT)}/reviews/${encodeURIComponent(peerDeck.id)}`, {
       headers: { Authorization: `Bearer ${peer.token}` },
     });
     const peerBody: unknown = await peerGet.json();
-    expect(isRecord(peerBody) && isRecord(peerBody.review) ? peerBody.review.status : null).toBe('dismissed');
+    expect(isRecord(peerBody) && isRecord(peerBody.result) ? peerBody.result.status : null).toBe('dismissed');
+    expect(isRecord(peerBody) && isRecord(peerBody.review) ? peerBody.review.status : null).toBe('cancelled');
+    expect(isRecord(peerBody) && isRecord(peerBody.review) ? peerBody.review.outcome : null).toBe('dismissed');
   } finally {
     await tab.close();
   }
+
+  // Stale delayed resolution request from an earlier selection never clears a newer in-flight request's busy marker.
+  const raceDeck = await createDeck(self.base, ROOT, {
+    title: 'Busy token deck',
+    wait: false,
+    cards: [{ id: 'c1', title: 'Race', context: 'Test request token isolation.', questions: [{ id: 'ok', type: 'approve', prompt: 'Ok?', default: 'approve' }] }],
+  });
+  const firstDismiss = heldRoute();
+  const secondDismiss = heldRoute();
+  let dismissCalls = 0;
+  await page.route(`**/api/sessions/${ROOT}/reviews/${raceDeck.id}/dismiss`, route => {
+    dismissCalls++;
+    if (dismissCalls === 1) { firstDismiss.hold(route); return; }
+    if (dismissCalls === 2) { secondDismiss.hold(route); return; }
+    return route.continue();
+  });
+  const raceEl = page.locator(`.review-deck[data-review-id="${raceDeck.id}"]`);
+  await expect(raceEl).toBeVisible();
+  const raceDismissBtn = raceEl.locator('[data-review-action="dismiss"]');
+  await raceDismissBtn.click();
+  await raceDismissBtn.click();
+  const held1 = requiredRoute(await firstDismiss.received);
+
+  // Navigate away to peer and back to self, then start a second dismiss request on the same deck.
+  await page.getByRole('button', { name: 'Open session list' }).click();
+  await fleet.row(peer, ROOT).click();
+  await page.getByRole('button', { name: 'Open session list' }).click();
+  await fleet.row(self, ROOT).click();
+  await expect(raceEl).toBeVisible();
+  await raceDismissBtn.click();
+  await raceDismissBtn.click();
+  const held2 = requiredRoute(await secondDismiss.received);
+  await expect(raceDismissBtn).toBeDisabled();
+  await expect(raceDismissBtn).toHaveText('Dismissing…');
+
+  // Finishing the stale first request must NOT clear the second request's busy marker.
+  await held1.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'stale failure' }) });
+  await page.waitForTimeout(100);
+  await expect(raceDismissBtn).toBeDisabled();
+  await expect(raceDismissBtn).toHaveText('Dismissing…');
+
+  // Letting the second request finish settles the deck cleanly.
+  await held2.continue();
+  await expect(raceEl).toHaveClass(/\bis-dismissed\b/);
+  await page.unroute(`**/api/sessions/${ROOT}/reviews/${raceDeck.id}/dismiss`);
+
   expect(errors).toEqual([]);
 });
 

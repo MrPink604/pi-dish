@@ -102,14 +102,18 @@ export interface ReviewSubmission {
   changed: string[];
   delivery: ReviewDelivery;
 }
+export type ReviewOutcome = 'rejected' | 'dismissed';
 /** Terminal user rejection or dismissal of a deck (no answers submitted). */
 export interface ReviewResolution {
+  outcome: ReviewOutcome;
   id: string;
   resolvedAt: number;
   reason: string | null;
   delivery: ReviewDelivery;
 }
 export type ReviewStatus = 'open' | 'submitted' | 'cancelled' | 'rejected' | 'dismissed';
+/** Wire status recognized by both legacy and current browsers; check `outcome`/`resolution` for reject/dismiss. */
+export type ClientReviewWireStatus = 'open' | 'submitted' | 'cancelled';
 export interface ReviewRecord {
   id: string;
   sessionId: string;
@@ -556,25 +560,71 @@ function storeFile(sessionId: string): string {
   return path.join(storeDir(), `${crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 32)}.json`);
 }
 
-function isRecordShape(value: unknown, sessionId: string): value is ReviewRecord {
-  if (!record(value)) return false;
-  const status = value.status;
-  const validStatus = status === 'open' || status === 'submitted' || status === 'cancelled'
-    || status === 'rejected' || status === 'dismissed';
+function isOutcome(value: unknown): value is ReviewOutcome {
+  return value === 'rejected' || value === 'dismissed';
+}
+
+function normalizeStoredRecord(value: unknown, sessionId: string): ReviewRecord | null {
+  if (!record(value)) return null;
+  const rawStatus = value.status;
+  const validStatus = rawStatus === 'open' || rawStatus === 'submitted' || rawStatus === 'cancelled'
+    || rawStatus === 'rejected' || rawStatus === 'dismissed';
+  if (!validStatus) return null;
+  if (typeof value.id !== 'string' || !REVIEW_ID_RE.test(value.id) || value.sessionId !== sessionId
+    || typeof value.createdAt !== 'number' || !record(value.spec) || !Array.isArray(value.media) || !Array.isArray(value.assets)) {
+    return null;
+  }
+  const hasSubmission = value.submission !== null;
+  if (hasSubmission && (!record(value.submission) || typeof value.submission.id !== 'string' || !record(value.submission.delivery))) {
+    return null;
+  }
+  if ((rawStatus === 'submitted') !== hasSubmission) return null;
+
   const hasResolution = value.resolution !== undefined && value.resolution !== null;
-  const validResolution = !hasResolution || (
-    record(value.resolution) && typeof value.resolution.id === 'string'
-    && typeof value.resolution.resolvedAt === 'number'
-    && (value.resolution.reason === null || typeof value.resolution.reason === 'string')
-    && record(value.resolution.delivery)
-  );
-  return typeof value.id === 'string' && REVIEW_ID_RE.test(value.id) && value.sessionId === sessionId
-    && typeof value.createdAt === 'number' && record(value.spec) && Array.isArray(value.media) && Array.isArray(value.assets)
-    && validStatus
-    && (value.submission === null || (record(value.submission) && typeof value.submission.id === 'string' && record(value.submission.delivery)))
-    && (status === 'submitted') === (value.submission !== null)
-    && validResolution
-    && (status === 'rejected' || status === 'dismissed') === hasResolution;
+  if (!hasResolution) {
+    if (rawStatus === 'rejected' || rawStatus === 'dismissed') return null;
+    return value as unknown as ReviewRecord;
+  }
+  if (rawStatus !== 'cancelled' && rawStatus !== 'rejected' && rawStatus !== 'dismissed') return null;
+  if (!record(value.resolution) || typeof value.resolution.id !== 'string'
+    || typeof value.resolution.resolvedAt !== 'number'
+    || (value.resolution.reason !== null && typeof value.resolution.reason !== 'string')
+    || !record(value.resolution.delivery)) {
+    return null;
+  }
+  const rawOutcome = value.resolution.outcome;
+  let outcome: ReviewOutcome;
+  if (rawStatus === 'cancelled') {
+    if (!isOutcome(rawOutcome)) return null;
+    outcome = rawOutcome;
+  } else {
+    if (rawOutcome !== undefined && rawOutcome !== rawStatus) return null;
+    outcome = rawStatus;
+  }
+  const normalizedResolution: ReviewResolution = {
+    ...(value.resolution as unknown as ReviewResolution),
+    outcome,
+  };
+  return {
+    ...(value as unknown as ReviewRecord),
+    status: outcome,
+    resolution: normalizedResolution,
+  };
+}
+
+function serializeStoredRecord(review: ReviewRecord): Record<string, unknown> {
+  if (review.status === 'rejected' || review.status === 'dismissed') {
+    if (!review.resolution) throw new Error(`review ${review.id} (${review.status}) is missing resolution`);
+    // Persist legacy-compatible status `'cancelled'` so an older pi-dish reader
+    // can still load this file without failing closed on unrelated sibling decks.
+    return {
+      ...review,
+      status: 'cancelled',
+      submission: null,
+      resolution: { ...review.resolution, outcome: review.status },
+    };
+  }
+  return review as unknown as Record<string, unknown>;
 }
 
 function readFile(file: string): { sessionId: string; reviews: ReviewRecord[] } | null {
@@ -587,8 +637,13 @@ function readFile(file: string): { sessionId: string; reviews: ReviewRecord[] } 
   const data: unknown = JSON.parse(source);
   if (!record(data) || typeof data.sessionId !== 'string' || !Array.isArray(data.reviews)) throw new Error(`${file} is malformed`);
   const sessionId = data.sessionId;
-  if (!data.reviews.every(item => isRecordShape(item, sessionId))) throw new Error(`${file} holds a malformed review`);
-  return { sessionId, reviews: data.reviews as ReviewRecord[] };
+  const parsed: ReviewRecord[] = [];
+  for (const item of data.reviews) {
+    const normalized = normalizeStoredRecord(item, sessionId);
+    if (!normalized) throw new Error(`${file} holds a malformed review`);
+    parsed.push(normalized);
+  }
+  return { sessionId, reviews: parsed };
 }
 
 /** A session's decks, oldest first; a store that exists but cannot be read throws. */
@@ -609,7 +664,7 @@ export function writeReviews(sessionId: string, reviews: ReviewRecord[]): void {
     if (index < 0) break;
     kept = [...kept.slice(0, index), ...kept.slice(index + 1)];
   }
-  replaceFileDurably(storeFile(sessionId), JSON.stringify({ sessionId, reviews: kept }) + '\n');
+  replaceFileDurably(storeFile(sessionId), JSON.stringify({ sessionId, reviews: kept.map(serializeStoredRecord) }) + '\n');
 }
 
 /** Reads, changes and writes one deck; null when the session has no such deck. */
@@ -673,13 +728,17 @@ export interface ClientReview {
   title: string;
   companionPage: string | null;
   wait: boolean;
-  status: ReviewStatus;
+  /** Legacy-safe closed status (`cancelled` for rejected/dismissed); capable clients read `outcome`/`resolution`. */
+  status: ClientReviewWireStatus;
+  outcome?: ReviewOutcome;
   cards: ClientCard[];
   submission: ReviewSubmission | null;
   resolution?: ReviewResolution | null;
 }
 
 export function clientReview(review: ReviewRecord): ClientReview {
+  const status: ClientReviewWireStatus = review.status === 'rejected' || review.status === 'dismissed' ? 'cancelled' : review.status;
+  const outcome: ReviewOutcome | undefined = review.status === 'rejected' || review.status === 'dismissed' ? review.status : undefined;
   return {
     id: review.id,
     sessionId: review.sessionId,
@@ -688,7 +747,8 @@ export function clientReview(review: ReviewRecord): ClientReview {
     title: review.spec.title,
     companionPage: review.spec.companionPage,
     wait: review.spec.wait,
-    status: review.status,
+    status,
+    ...(outcome ? { outcome } : {}),
     cards: review.spec.cards.map((card, cardIndex) => ({
       id: card.id, title: card.title, context: card.context, questions: card.questions,
       media: card.media.map((item, index) => {
@@ -701,6 +761,6 @@ export function clientReview(review: ReviewRecord): ClientReview {
       }),
     })),
     submission: review.submission,
-    ...(review.resolution ? { resolution: review.resolution } : {}),
+    ...(outcome && review.resolution ? { resolution: { ...review.resolution, outcome } } : {}),
   };
 }

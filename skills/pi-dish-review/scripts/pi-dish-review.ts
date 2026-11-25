@@ -149,7 +149,16 @@ function parseReviewPayload(payload: unknown, expectedReviewId: string): ValidRe
 function parseCancelledReview(payload: unknown, expectedReviewId: string): Record<string, unknown> | null {
   if (!isPlainObject(payload) || !isPlainObject(payload.review)) return null;
   const rev = payload.review;
-  return rev.id === expectedReviewId && rev.status === 'cancelled' ? rev : null;
+  return rev.id === expectedReviewId && rev.status === 'cancelled' && rev.outcome === undefined && !rev.resolution ? rev : null;
+}
+
+// Matches src/core/page-forms.ts visibleText: C0 (except tab and newline), DEL, C1, bidi and line-separator controls.
+const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+function visibleText(text: string): string {
+  return text.replace(/\r\n?/g, '\n').replace(CONTROL_RE, char => {
+    const code = char.charCodeAt(0);
+    return code <= 0xff ? `\\x${code.toString(16).padStart(2, '0')}` : `\\u${code.toString(16).padStart(4, '0')}`;
+  });
 }
 
 /** One end-to-end AbortSignal budget covering headers and body reads across all discovery calls. */
@@ -305,15 +314,27 @@ function outcomeExitCode(status: unknown): number {
   return 0;
 }
 
+function messageDeliveryNote(delivery: Record<string, unknown>, deliveredText: string): string | null {
+  if (delivery.via !== 'message') return null;
+  const state = typeof delivery.state === 'string' && delivery.state ? delivery.state : 'unknown';
+  if (state === 'delivered') return deliveredText;
+  const error = typeof delivery.error === 'string' && delivery.error.trim() ? visibleText(delivery.error.trim()) : null;
+  return `(Session message delivery state: ${visibleText(state)}${error ? ` — ${error}` : ''}.)`;
+}
+
 function answeredText(result: Record<string, unknown>): string {
   if (result.status === 'cancelled') return `review ${result.reviewId} was withdrawn; it has no answers.`;
   const delivery = record(result.delivery ?? {});
   if (result.status === 'rejected') {
-    const reason = typeof result.reason === 'string' && result.reason.trim() ? result.reason.trim() : null;
+    const reason = typeof result.reason === 'string' && result.reason.trim() ? visibleText(result.reason.trim()) : null;
     const lines = [`review ${result.reviewId} was REJECTED by the user (no answers).`];
-    if (reason) lines.push(`reason: ${reason}`);
+    if (reason) {
+      if (reason.includes('\n')) lines.push('reason: |', ...reason.split('\n').map(line => `  ${line}`));
+      else lines.push(`reason: ${reason}`);
+    }
     lines.push('Do not proceed with the proposal as presented.');
-    if (delivery.via === 'message') lines.push('(This was also sent to this session as a "[review response: …]" message.)');
+    const note = messageDeliveryNote(delivery, '(This was also sent to this session as a "[review response: …]" message.)');
+    if (note) lines.push(note);
     return lines.join('\n');
   }
   if (result.status === 'dismissed') {
@@ -321,10 +342,12 @@ function answeredText(result: Record<string, unknown>): string {
       `review ${result.reviewId} was DISMISSED by the user (no answers).`,
       'Proceed on your own judgement or drop it.',
     ];
-    if (delivery.via === 'message') lines.push('(This was also sent to this session as a "[review response: …]" message.)');
+    const note = messageDeliveryNote(delivery, '(This was also sent to this session as a "[review response: …]" message.)');
+    if (note) lines.push(note);
     return lines.join('\n');
   }
-  const also = delivery.via === 'message' ? '\n(These answers were also sent to this session as a "[review response: …]" message.)' : '';
+  const note = messageDeliveryNote(delivery, '(These answers were also sent to this session as a "[review response: …]" message.)');
+  const also = note ? `\n${note}` : '';
   return `${JSON.stringify(result, null, 2)}${also}`;
 }
 

@@ -798,11 +798,31 @@ async function createDeck(base, sessionId, spec, headers = {}) {
     // Both Reject and Dismiss render in the secondary footer strip (distinct from primary Submit) with zero horizontal overflow at 390px.
     const rejectBtn = rejectEl.locator('[data-review-action="open-reject"]');
     const dismissBtn = rejectEl.locator('[data-review-action="dismiss"]');
+    const dismissDeckBtn = dismissEl.locator('[data-review-action="dismiss"]');
     await (0, fixtures_js_1.expect)(rejectBtn).toBeVisible();
     await (0, fixtures_js_1.expect)(dismissBtn).toBeVisible();
     (0, fixtures_js_1.expect)(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    // Dismiss two-tap updates in place (keeping keyboard focus on Enter) and disarms any previously armed Dismiss button.
+    await dismissBtn.focus();
+    await dismissBtn.evaluate(el => Reflect.set(window, '__dismissBtnBefore', el));
+    await page.keyboard.press('Enter');
+    await (0, fixtures_js_1.expect)(dismissBtn).toHaveClass(/\barmed\b/);
+    await (0, fixtures_js_1.expect)(dismissBtn).toHaveAttribute('aria-pressed', 'true');
+    await (0, fixtures_js_1.expect)(dismissBtn).toHaveText('Dismiss? Tap again');
+    (0, fixtures_js_1.expect)(await dismissBtn.evaluate(el => el === Reflect.get(window, '__dismissBtnBefore') && document.activeElement === el)).toBe(true);
+    // Arming the second deck's Dismiss immediately disarms the first deck's button in place (never two armed buttons).
+    await dismissDeckBtn.focus();
+    await page.keyboard.press('Enter');
+    await (0, fixtures_js_1.expect)(dismissDeckBtn).toHaveClass(/\barmed\b/);
+    await (0, fixtures_js_1.expect)(dismissDeckBtn).toHaveAttribute('aria-pressed', 'true');
+    await (0, fixtures_js_1.expect)(dismissDeckBtn).toBeFocused();
+    await (0, fixtures_js_1.expect)(dismissBtn).not.toHaveClass(/\barmed\b/);
+    await (0, fixtures_js_1.expect)(dismissBtn).toHaveAttribute('aria-pressed', 'false');
+    await (0, fixtures_js_1.expect)(dismissBtn).toHaveText('Dismiss');
+    await (0, fixtures_js_1.expect)(page.locator('[data-review-action="dismiss"].armed')).toHaveCount(1);
     // Save a draft edit on the deck to verify Reject clears sessionStorage draft too, even with an unanswered required text field.
     await rejectEl.locator('.review-option[data-question-id="approach"][data-value="b"]').click();
+    await (0, fixtures_js_1.expect)(dismissDeckBtn).not.toHaveClass(/\barmed\b/);
     const hasDraft = async (reviewId) => page.evaluate(id => {
         for (let i = 0; i < sessionStorage.length; i++) {
             if ((sessionStorage.key(i) || '').endsWith(`:${id}`))
@@ -917,15 +937,64 @@ async function createDeck(base, sessionId, spec, headers = {}) {
         await peerDismissBtn.click();
         await (0, fixtures_js_1.expect)(peerDeckEl).toHaveClass(/\bis-dismissed\b/);
         await (0, fixtures_js_1.expect)(peerDeckEl.locator('.review-receipt-title')).toHaveText('Dismissed · Remote deck to dismiss via hub');
-        // Verify the remote peer actually persisted the dismissal.
+        // Verify the remote peer actually persisted the dismissal (wire review carries legacy-closed status + outcome; result carries dismissed).
         const peerGet = await fetch(`${peer.base}/api/sessions/${encodeURIComponent(fixtures_js_1.ROOT)}/reviews/${encodeURIComponent(peerDeck.id)}`, {
             headers: { Authorization: `Bearer ${peer.token}` },
         });
         const peerBody = await peerGet.json();
-        (0, fixtures_js_1.expect)((0, helper_values_js_1.record)(peerBody) && (0, helper_values_js_1.record)(peerBody.review) ? peerBody.review.status : null).toBe('dismissed');
+        (0, fixtures_js_1.expect)((0, helper_values_js_1.record)(peerBody) && (0, helper_values_js_1.record)(peerBody.result) ? peerBody.result.status : null).toBe('dismissed');
+        (0, fixtures_js_1.expect)((0, helper_values_js_1.record)(peerBody) && (0, helper_values_js_1.record)(peerBody.review) ? peerBody.review.status : null).toBe('cancelled');
+        (0, fixtures_js_1.expect)((0, helper_values_js_1.record)(peerBody) && (0, helper_values_js_1.record)(peerBody.review) ? peerBody.review.outcome : null).toBe('dismissed');
     }
     finally {
         await tab.close();
     }
+    // Stale delayed resolution request from an earlier selection never clears a newer in-flight request's busy marker.
+    const raceDeck = await createDeck(self.base, fixtures_js_1.ROOT, {
+        title: 'Busy token deck',
+        wait: false,
+        cards: [{ id: 'c1', title: 'Race', context: 'Test request token isolation.', questions: [{ id: 'ok', type: 'approve', prompt: 'Ok?', default: 'approve' }] }],
+    });
+    const firstDismiss = (0, fixtures_js_1.heldRoute)();
+    const secondDismiss = (0, fixtures_js_1.heldRoute)();
+    let dismissCalls = 0;
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/reviews/${raceDeck.id}/dismiss`, route => {
+        dismissCalls++;
+        if (dismissCalls === 1) {
+            firstDismiss.hold(route);
+            return;
+        }
+        if (dismissCalls === 2) {
+            secondDismiss.hold(route);
+            return;
+        }
+        return route.continue();
+    });
+    const raceEl = page.locator(`.review-deck[data-review-id="${raceDeck.id}"]`);
+    await (0, fixtures_js_1.expect)(raceEl).toBeVisible();
+    const raceDismissBtn = raceEl.locator('[data-review-action="dismiss"]');
+    await raceDismissBtn.click();
+    await raceDismissBtn.click();
+    const held1 = (0, fixtures_js_1.requiredRoute)(await firstDismiss.received);
+    // Navigate away to peer and back to self, then start a second dismiss request on the same deck.
+    await page.getByRole('button', { name: 'Open session list' }).click();
+    await fleet.row(peer, fixtures_js_1.ROOT).click();
+    await page.getByRole('button', { name: 'Open session list' }).click();
+    await fleet.row(self, fixtures_js_1.ROOT).click();
+    await (0, fixtures_js_1.expect)(raceEl).toBeVisible();
+    await raceDismissBtn.click();
+    await raceDismissBtn.click();
+    const held2 = (0, fixtures_js_1.requiredRoute)(await secondDismiss.received);
+    await (0, fixtures_js_1.expect)(raceDismissBtn).toBeDisabled();
+    await (0, fixtures_js_1.expect)(raceDismissBtn).toHaveText('Dismissing…');
+    // Finishing the stale first request must NOT clear the second request's busy marker.
+    await held1.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'stale failure' }) });
+    await page.waitForTimeout(100);
+    await (0, fixtures_js_1.expect)(raceDismissBtn).toBeDisabled();
+    await (0, fixtures_js_1.expect)(raceDismissBtn).toHaveText('Dismissing…');
+    // Letting the second request finish settles the deck cleanly.
+    await held2.continue();
+    await (0, fixtures_js_1.expect)(raceEl).toHaveClass(/\bis-dismissed\b/);
+    await page.unroute(`**/api/sessions/${fixtures_js_1.ROOT}/reviews/${raceDeck.id}/dismiss`);
     (0, fixtures_js_1.expect)(errors).toEqual([]);
 });

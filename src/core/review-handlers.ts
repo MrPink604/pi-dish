@@ -15,6 +15,8 @@ import os = require('os');
 import path = require('path');
 import type { ApplicationRequest, ApplicationResponse, RouteHandler } from './http-boundary';
 import { errorMessage, errorStatus, requestBody } from './http-boundary';
+import { record } from './helper-values';
+import { visibleText } from './page-forms';
 import { canonicalSessionId, resolveSessionRoute } from './session-key';
 import { sendRangedFile } from './range-response';
 import * as reviews from './reviews';
@@ -72,11 +74,35 @@ interface Waiter {
   close(): void;
 }
 
+interface InFlightWrite {
+  readonly sessionId: string;
+  readonly startedAt: number;
+  readonly res: ApplicationResponse;
+  abort(): void;
+}
+
+const JSON_CONTENT_TYPE_RE = /^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|$)/i;
+
+function parseOptionalObjectBody(req: ApplicationRequest): { body: Record<string, unknown> } | { error: string } {
+  const contentLength = Number(req.headers['content-length']);
+  const hasTransfer = typeof req.headers['transfer-encoding'] === 'string' && req.headers['transfer-encoding'].trim() !== '';
+  const hasPayload = (Number.isFinite(contentLength) && contentLength > 0) || hasTransfer;
+  const contentType = typeof req.headers['content-type'] === 'string' ? req.headers['content-type'].trim() : '';
+  if (hasPayload && !JSON_CONTENT_TYPE_RE.test(contentType)) {
+    return { error: 'request body must be a JSON object' };
+  }
+  if (req.body === undefined) return { body: {} };
+  if (!record(req.body)) return { error: 'request body must be a JSON object' };
+  return { body: req.body };
+}
+
 export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers {
   const graceMs = ports.graceMs ?? DEFAULT_GRACE_MS;
+  const maxWriteMs = Math.max(graceMs * 4, 30_000);
   const startedAt = Date.now();
   const listeners = new Map<string, Set<(data: { review: reviews.ClientReview }) => void>>();
   const waiters = new Map<string, { sessionId: string; set: Set<Waiter> }>();
+  const inFlightWrites = new Map<string, Set<InFlightWrite>>();
   const detachedAt = new Map<string, { sessionId: string; at: number }>();
   const timers = new Map<string, { sessionId: string; timer: NodeJS.Timeout }>();
   let stopped = false;
@@ -244,9 +270,14 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
   function legacyOutcomeError(review: ReviewRecord): string {
     if (review.status === 'rejected') {
       const reason = review.resolution?.reason;
-      return reason ? `review was rejected by the user: ${reason}` : 'review was rejected by the user';
+      return reason ? `review was rejected by the user: ${visibleText(reason)}` : 'review was rejected by the user';
     }
     return 'review was dismissed by the user (no answers)';
+  }
+
+  function fallbackHoldUntil(review: ReviewRecord): number {
+    const waitingSince = review.spec.wait ? Math.max(startedAt, review.createdAt) : -Infinity;
+    return Math.max(waitingSince, detachedAt.get(review.id)?.at ?? -Infinity) + graceMs;
   }
 
   function setDelivery(sessionId: string, reviewId: string, delivery: reviews.ReviewDelivery): ReviewRecord | null {
@@ -258,12 +289,47 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     return updated;
   }
 
-  /** Writes a wait response; invokes `onWritten` only once `res.end` finishes on an intact socket. */
+  /**
+   * Writes a wait response; invokes `onWritten` only once `res.end` finishes on
+   * an intact socket. Delivery writes (those with `onWritten`) stay tracked in
+   * `inFlightWrites` until completion or explicit abort so a slow successful
+   * write and fallback message delivery cannot both happen.
+   */
   function writeWaiter(res: ApplicationResponse, review: ReviewRecord, onWritten?: () => void): void {
     if (res.writableEnded || res.destroyed || res.socket?.destroyed) return;
     let failed = false;
-    const onError = () => { failed = true; };
-    const onClose = () => { if (!res.writableFinished) failed = true; };
+    let aborted = false;
+    let entry: InFlightWrite | null = null;
+    const release = () => {
+      if (!entry) return;
+      const bucket = inFlightWrites.get(review.id);
+      if (bucket) {
+        bucket.delete(entry);
+        if (!bucket.size) inFlightWrites.delete(review.id);
+      }
+      entry = null;
+    };
+    const scheduleAfterFailure = () => {
+      if (!onWritten || stopped || aborted || inFlightWrites.get(review.id)?.size) return;
+      schedule(review.sessionId, review.id, Math.max(0, fallbackHoldUntil(review) - Date.now()));
+    };
+    if (onWritten) {
+      entry = {
+        sessionId: review.sessionId,
+        startedAt: Date.now(),
+        res,
+        abort: () => {
+          aborted = true;
+          release();
+          try { res.destroy(); } catch {}
+        },
+      };
+      const bucket = inFlightWrites.get(review.id) ?? new Set<InFlightWrite>();
+      bucket.add(entry);
+      inFlightWrites.set(review.id, bucket);
+    }
+    const onError = () => { failed = true; release(); scheduleAfterFailure(); };
+    const onClose = () => { if (!res.writableFinished) { failed = true; release(); scheduleAfterFailure(); } };
     res.once('error', onError);
     res.once('close', onClose);
     const body = JSON.stringify({ review: reviews.clientReview(review), result: reviews.reviewResult(review) });
@@ -271,11 +337,18 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
       res.end(body, () => {
         res.off('error', onError);
         res.off('close', onClose);
-        if (!failed && !res.destroyed && !res.socket?.destroyed && res.writableFinished) onWritten?.();
+        release();
+        if (!aborted && !failed && !res.destroyed && !res.socket?.destroyed && res.writableFinished) {
+          onWritten?.();
+        } else {
+          scheduleAfterFailure();
+        }
       });
     } catch {
       res.off('error', onError);
       res.off('close', onClose);
+      release();
+      scheduleAfterFailure();
     }
   }
 
@@ -311,6 +384,26 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     if (stopped) return;
     const review = reviews.readReviews(sessionId).find(item => item.id === reviewId);
     if (!review || reviews.reviewDelivery(review)?.state !== 'pending') return;
+    const flights = inFlightWrites.get(reviewId);
+    if (flights?.size) {
+      const now = Date.now();
+      let nextCheck = Infinity;
+      for (const flight of [...flights]) {
+        if (flight.res.destroyed || flight.res.socket?.destroyed) {
+          flights.delete(flight);
+          continue;
+        }
+        const deadline = flight.startedAt + maxWriteMs;
+        if (now < deadline) {
+          nextCheck = Math.min(nextCheck, deadline - now);
+        } else {
+          // A wedged write past the budget is terminated before fallback so both cannot deliver.
+          flight.abort();
+        }
+      }
+      if (!flights.size) inFlightWrites.delete(reviewId);
+      if (Number.isFinite(nextCheck)) return schedule(sessionId, reviewId, nextCheck);
+    }
     const isOutcome = review.status === 'rejected' || review.status === 'dismissed';
     const attached = liveWaiters(reviewId);
     const capable = isOutcome ? attached.filter(waiter => waiter.supportsOutcomes) : attached;
@@ -331,8 +424,7 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
       for (const waiter of legacy) waiter.finish(review);
     }
     // A waiting CLI that has not attached yet (just started, or back after a restart) gets the grace period too.
-    const waitingSince = review.spec.wait ? Math.max(startedAt, review.createdAt) : -Infinity;
-    const holdUntil = Math.max(waitingSince, detachedAt.get(reviewId)?.at ?? -Infinity) + graceMs;
+    const holdUntil = fallbackHoldUntil(review);
     if (Date.now() < holdUntil) return schedule(sessionId, reviewId, holdUntil - Date.now());
     const delivering = setDelivery(sessionId, reviewId, { state: 'delivering', via: 'message', at: null, error: null });
     if (!delivering) return;
@@ -511,7 +603,9 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
         || Buffer.byteLength(JSON.stringify(req.body ?? null)) > reviews.MAX_SUBMIT_BYTES) {
         return res.status(413).json({ error: `request exceeds ${reviews.MAX_SUBMIT_BYTES / 1024} KiB` });
       }
-      const body = requestBody(req);
+      const parsedBody = parseOptionalObjectBody(req);
+      if ('error' in parsedBody) return res.status(400).json({ error: parsedBody.error });
+      const body = parsedBody.body;
       let givenId: string | null = null;
       if (body.resolutionId !== undefined && body.resolutionId !== null) {
         if (typeof body.resolutionId !== 'string' || !reviews.SUBMISSION_ID_RE.test(body.resolutionId)) {
@@ -545,6 +639,7 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
         if (current.status !== 'open') { raced = current; return; }
         current.status = targetStatus;
         current.resolution = {
+          outcome: targetStatus,
           id,
           resolvedAt: Date.now(),
           reason,
@@ -611,6 +706,12 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
       for (const waiter of [...bucket.set]) waiter.close();
       waiters.delete(reviewId);
     }
+    for (const [reviewId, flights] of [...inFlightWrites]) {
+      for (const flight of [...flights]) {
+        if (flight.sessionId === key) flight.abort();
+      }
+      if (!flights.size) inFlightWrites.delete(reviewId);
+    }
     try { reviews.deleteReviews(key); } catch (error) {
       ports.log(`[reviews] could not remove reviews for ${key}: ${errorMessage(error)}`);
     }
@@ -634,6 +735,7 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     stopped = true;
     for (const { timer } of timers.values()) clearTimeout(timer);
     timers.clear();
+    inFlightWrites.clear();
   }
 
   return { create, list, get, lookup, wait, submit, reject, dismiss, cancel, media, subscribe, removeSession, start, stop };
