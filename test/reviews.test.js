@@ -144,6 +144,60 @@ test('the delivered message lists changes and notes first, summarizes defaults, 
     }, false);
     assert.match(otherOnlyMsg, /\nquick_mag: other \(default tab\): A lit vial\n/);
 });
+test('reject reason validation, reviewResult and fallback messages for rejected and dismissed decks', () => {
+    assert.deepEqual(reviews.validateRejectReason(undefined), { reason: null });
+    assert.deepEqual(reviews.validateRejectReason('   '), { reason: null });
+    assert.deepEqual(reviews.validateRejectReason('  wrong approach  '), { reason: 'wrong approach' });
+    assert.deepEqual(reviews.validateRejectReason('x'.repeat(500)), { reason: 'x'.repeat(500) });
+    assert.ok('error' in reviews.validateRejectReason('x'.repeat(501)));
+    assert.ok('error' in reviews.validateRejectReason(42));
+    const spec = validSpec(DECK);
+    const at = Date.UTC(2026, 10, 25, 10, 0, 0);
+    const rejected = {
+        id: 'rv_0123456789abcdef', sessionId: SESSION_ID, createdAt: 0, anchorMessageIndex: null, spec, media: [], assets: [],
+        status: 'rejected', submission: null,
+        resolution: { id: 'res-000001', resolvedAt: at, reason: 'Drop @plan.md\nwrong scope', delivery: { state: 'pending', via: null, at: null, error: null } },
+    };
+    const rejectedMsg = reviews.formatReviewMessage(rejected, false);
+    assert.equal(rejectedMsg, [
+        '[review response: Halden part looks (rv_0123456789abcdef), REJECTED by the user at 2026-11-25T10:00:00Z]',
+        'reason: |',
+        '  Drop @plan.md',
+        '  wrong scope',
+        'The user rejected this proposal (no answers were submitted). Do not proceed with it as proposed.',
+        'status: pi-dish-review answers rv_0123456789abcdef',
+    ].join('\n'));
+    assert.match(reviews.formatReviewMessage(rejected, true), /Drop \\@plan\.md/);
+    const rejectedResult = reviews.reviewResult(rejected);
+    assert.equal(rejectedResult.status, 'rejected');
+    assert.equal(rejectedResult.reason, 'Drop @plan.md\nwrong scope');
+    assert.equal(rejectedResult.resolvedAt, '2026-11-25T10:00:00.000Z');
+    assert.deepEqual(rejectedResult.answers, {});
+    assert.deepEqual(rejectedResult.changedFromDefault, []);
+    const rejectedNoReason = {
+        ...rejected,
+        resolution: { ...rejected.resolution, reason: null },
+    };
+    assert.equal(reviews.formatReviewMessage(rejectedNoReason, false), [
+        '[review response: Halden part looks (rv_0123456789abcdef), REJECTED by the user at 2026-11-25T10:00:00Z]',
+        'The user rejected this proposal (no answers were submitted; no reason given). Do not proceed with it as proposed.',
+        'status: pi-dish-review answers rv_0123456789abcdef',
+    ].join('\n'));
+    const dismissed = {
+        id: 'rv_0123456789abcdef', sessionId: SESSION_ID, createdAt: 0, anchorMessageIndex: null, spec, media: [], assets: [],
+        status: 'dismissed', submission: null,
+        resolution: { id: 'res-000002', resolvedAt: at, reason: null, delivery: { state: 'pending', via: null, at: null, error: null } },
+    };
+    assert.equal(reviews.formatReviewMessage(dismissed, false), [
+        '[review response: Halden part looks (rv_0123456789abcdef), DISMISSED by the user (no answers) at 2026-11-25T10:00:00Z]',
+        'The user declined to answer this review. Proceed on your own judgement or drop it.',
+        'status: pi-dish-review answers rv_0123456789abcdef',
+    ].join('\n'));
+    const dismissedResult = reviews.reviewResult(dismissed);
+    assert.equal(dismissedResult.status, 'dismissed');
+    assert.equal(dismissedResult.reason, null);
+    assert.deepEqual(dismissedResult.answers, {});
+});
 // ---- the server ------------------------------------------------------------
 const children = [];
 const prompts = [];
@@ -243,8 +297,10 @@ async function openReview(title) {
 async function settled(reviewId) {
     return until(async () => {
         const { review } = await json(await fetch(api(owner, `/${reviewId}`)));
-        const state = (0, test_types_js_1.record)((0, test_types_js_1.record)((0, test_types_js_1.record)(review).submission ?? {}).delivery ?? {}).state;
-        return state && state !== 'pending' && state !== 'delivering' ? (0, test_types_js_1.record)(review) : null;
+        const rec = (0, test_types_js_1.record)(review);
+        const holder = (0, test_types_js_1.record)(rec.submission ?? rec.resolution ?? {});
+        const state = (0, test_types_js_1.record)(holder.delivery ?? {}).state;
+        return state && state !== 'pending' && state !== 'delivering' ? rec : null;
     }, `the delivery of ${reviewId}`);
 }
 const DEFAULTS = { quick_mag: { value: 'tab' }, finish: { value: ['steel'] }, scope: { value: 'approve' } };
@@ -295,7 +351,9 @@ test('boot an owner host with a live session, and a hub that fronts it', async (
     fs.mkdirSync(path.join(hubHome, '.pi', 'dish'), { recursive: true });
     fs.writeFileSync(path.join(hubHome, '.pi', 'dish', 'settings.json'), JSON.stringify({ remotes: [{ name: 'owner', url: owner }] }));
     hub = (await boot(hubHome, await freePort())).base;
-    assert.equal((0, test_types_js_1.record)((await json(await fetch(`${owner}/api/host`))).capabilities).reviewsV1, true);
+    const ownerCaps = (0, test_types_js_1.record)((await json(await fetch(`${owner}/api/host`))).capabilities);
+    assert.equal(ownerCaps.reviewsV1, true);
+    assert.equal(ownerCaps.reviewsDismissV1, true);
 });
 test('media is served only from the session\'s reach, through the hub too', async () => {
     const outside = await post(api(owner), { ...DECK, cards: [card('x', { media: [path.join(home, 'outside', 'secret.png')] })] });
@@ -425,11 +483,15 @@ test('CSRF header is required (and proxied), HEAD wait has no side effects, and 
     const created = await post(viaHub(), { ...DECK, title: 'CSRF deck', wait: true });
     assert.equal(created.status, 201);
     const reviewId = String((0, test_types_js_1.record)((await json(created)).review).id);
-    // Missing header is refused on wait, submit, and cancel (directly and via hub) with zero side effects.
+    // Missing header is refused on wait, submit, reject, dismiss, and cancel (directly and via hub) with zero side effects.
     assert.equal((await fetch(api(owner, `/${reviewId}/wait?timeout=1`))).status, 403);
     assert.equal((await fetch(viaHub(`/${reviewId}/wait?timeout=1`))).status, 403);
     assert.equal((await rawPost(api(owner, `/${reviewId}/submit`), { submissionId: 'sub-csrf-01', answers: DEFAULTS })).status, 403);
     assert.equal((await rawPost(viaHub(`/${reviewId}/submit`), { submissionId: 'sub-csrf-01', answers: DEFAULTS })).status, 403);
+    assert.equal((await rawPost(api(owner, `/${reviewId}/reject`), { reason: 'nope' })).status, 403);
+    assert.equal((await rawPost(viaHub(`/${reviewId}/reject`), { reason: 'nope' })).status, 403);
+    assert.equal((await rawPost(api(owner, `/${reviewId}/dismiss`), {})).status, 403);
+    assert.equal((await rawPost(viaHub(`/${reviewId}/dismiss`), {})).status, 403);
     assert.equal((await rawPost(api(owner, `/${reviewId}/cancel`), {})).status, 403);
     assert.equal((await rawPost(viaHub(`/${reviewId}/cancel`), {})).status, 403);
     assert.equal((0, test_types_js_1.record)((await json(await fetch(api(owner, `/${reviewId}`)))).review).status, 'open');
@@ -462,6 +524,8 @@ test('unknown or deleted sessions (including private) return 404; DELETE purges 
     assert.equal((await fetch(`${ghostBase}/${fakeId}`)).status, 404);
     assert.equal((await fetch(`${ghostBase}/${fakeId}/wait?timeout=1`, { headers: CLIENT_HEADER })).status, 404);
     assert.equal((await post(`${ghostBase}/${fakeId}/submit`, { submissionId: 'sub-ghost-1', answers: DEFAULTS })).status, 404);
+    assert.equal((await post(`${ghostBase}/${fakeId}/reject`, { reason: 'no' })).status, 404);
+    assert.equal((await post(`${ghostBase}/${fakeId}/dismiss`, {})).status, 404);
     assert.equal((await post(`${ghostBase}/${fakeId}/cancel`, {})).status, 404);
     assert.equal((await fetch(`${ghostBase}/${fakeId}/media/0`)).status, 404);
     // Private session: deleting its transcript must not expose its reviews without the PIN.
@@ -1147,4 +1211,145 @@ test('failed waiter writes stay pending for message fallback, and timer settle f
         process.off('unhandledRejection', onUnhandled);
         process.env.HOME = prevHome;
     }
+});
+test('reject and dismiss: live CLI waiter, fallback messages, answers CLI, idempotency, races with submit, and legacy waiter skew', async () => {
+    const noMediaDeck = { ...DECK, cards: DECK.cards.map(item => ({ ...item, media: [] })) };
+    // 1. Live waiting CLI gets REJECTED with reason via hub, exits 2, no duplicate message; idempotency & 409 conflicts hold.
+    const beforeReject = prompts.length;
+    const waitReject = cli(['ask', '-'], { ...noMediaDeck, title: 'Reject waited deck' });
+    const rejectTarget = await openReview('Reject waited deck');
+    const rejectId = String(rejectTarget.id);
+    const badReason = await post(viaHub(`/${rejectId}/reject`), { resolutionId: 'res-too-long1', reason: 'x'.repeat(501) });
+    assert.equal(badReason.status, 400);
+    const rejected = await post(viaHub(`/${rejectId}/reject`), { resolutionId: 'res-reject-01', reason: 'Wrong direction — drop it' });
+    assert.equal(rejected.status, 202);
+    assert.equal((0, test_types_js_1.record)((await json(rejected)).review).status, 'rejected');
+    assert.equal(await waitReject.exited, 2, waitReject.stderr());
+    assert.match(waitReject.stdout(), /REJECTED by the user/);
+    assert.match(waitReject.stdout(), /reason: Wrong direction — drop it/);
+    await pause(GRACE_MS + 300);
+    assert.equal(prompts.length, beforeReject, 'no fallback message when a live waiter took the rejection');
+    // `pi-dish-review answers <id>` exits 0 and reports rejected status + reason + empty answers.
+    const rejectAnswers = cli(['answers', rejectId]);
+    assert.equal(await rejectAnswers.exited, 0, rejectAnswers.stderr());
+    const rejectParsed = (0, test_types_js_1.record)(JSON.parse(rejectAnswers.stdout()));
+    assert.equal(rejectParsed.status, 'rejected');
+    assert.equal(rejectParsed.reason, 'Wrong direction — drop it');
+    assert.deepEqual(rejectParsed.answers, {});
+    assert.equal((0, test_types_js_1.record)(rejectParsed.delivery).via, 'waiter');
+    // Idempotent repeat with same resolutionId -> 200; conflicting ids/actions -> 409 with winning review.
+    const repeatReject = await post(api(owner, `/${rejectId}/reject`), { resolutionId: 'res-reject-01', reason: 'Wrong direction — drop it' });
+    assert.equal(repeatReject.status, 200);
+    assert.equal((await json(repeatReject)).repeated, true);
+    for (const [label, res] of [
+        ['reject different id', await post(api(owner, `/${rejectId}/reject`), { resolutionId: 'res-reject-02', reason: 'Other' })],
+        ['reject no id different reason', await post(api(owner, `/${rejectId}/reject`), { reason: 'Other' })],
+        ['dismiss after reject', await post(api(owner, `/${rejectId}/dismiss`), { resolutionId: 'res-dismiss-1' })],
+        ['submit after reject', await post(api(owner, `/${rejectId}/submit`), { submissionId: 'sub-after-rej', answers: DEFAULTS })],
+        ['cancel after reject', await post(api(owner, `/${rejectId}/cancel`), {})],
+    ]) {
+        assert.equal(res.status, 409, label);
+        const body = await json(res);
+        assert.equal(body.code, 'rejected', label);
+        assert.equal((0, test_types_js_1.record)(body.review).status, 'rejected', label);
+    }
+    // Legacy waiter (without outcomes=1) on already-rejected review gets 409 with reason instead of spinning or pretending defaults.
+    const legacyAlready = await fetch(api(owner, `/${rejectId}/wait?timeout=2`), { headers: CLIENT_HEADER });
+    assert.equal(legacyAlready.status, 409);
+    const legacyAlreadyBody = await json(legacyAlready);
+    assert.equal(legacyAlreadyBody.code, 'rejected');
+    assert.match(String(legacyAlreadyBody.error), /Wrong direction — drop it/);
+    assert.equal((0, test_types_js_1.record)(legacyAlreadyBody.result).status, 'rejected');
+    // 2. Live waiting CLI with --json gets DISMISSED via hub, exits 3, no duplicate message; answers CLI shows dismissed.
+    const beforeDismiss = prompts.length;
+    const waitDismiss = cli(['ask', '-', '--json'], { ...noMediaDeck, title: 'Dismiss waited deck' });
+    const dismissTarget = await openReview('Dismiss waited deck');
+    const dismissId = String(dismissTarget.id);
+    const dismissed = await post(viaHub(`/${dismissId}/dismiss`), { resolutionId: 'res-dismiss-01' });
+    assert.equal(dismissed.status, 202);
+    assert.equal(await waitDismiss.exited, 3, waitDismiss.stderr());
+    const dismissPrinted = (0, test_types_js_1.record)(JSON.parse(waitDismiss.stdout()));
+    assert.equal(dismissPrinted.status, 'dismissed');
+    assert.equal(dismissPrinted.reason, null);
+    assert.deepEqual(dismissPrinted.answers, {});
+    assert.equal((0, test_types_js_1.record)(dismissPrinted.delivery).via, 'waiter');
+    await pause(GRACE_MS + 300);
+    assert.equal(prompts.length, beforeDismiss, 'no fallback message when a live waiter took the dismissal');
+    // Idempotent repeat dismiss (same id and omitted id) -> 200; conflicting actions -> 409.
+    assert.equal((await post(api(owner, `/${dismissId}/dismiss`), { resolutionId: 'res-dismiss-01' })).status, 200);
+    assert.equal((await post(api(owner, `/${dismissId}/dismiss`), {})).status, 200);
+    assert.equal((await post(api(owner, `/${dismissId}/dismiss`), { resolutionId: 'res-dismiss-02' })).status, 409);
+    assert.equal((await post(api(owner, `/${dismissId}/submit`), { submissionId: 'sub-after-dis', answers: DEFAULTS })).status, 409);
+    assert.equal((await post(api(owner, `/${dismissId}/reject`), { reason: 'late' })).status, 409);
+    assert.equal((await post(api(owner, `/${dismissId}/cancel`), {})).status, 409);
+    // 3. Fallback message delivery (no waiter) for both rejected and dismissed, plus restart durability.
+    const beforeFallback = prompts.length;
+    const asyncRejectCreated = await json(await post(api(owner), { ...noMediaDeck, title: 'Async reject deck', wait: false }));
+    const asyncRejectId = String((0, test_types_js_1.record)(asyncRejectCreated.review).id);
+    assert.equal((await post(api(owner, `/${asyncRejectId}/reject`), { resolutionId: 'res-async-rej', reason: 'Too complex' })).status, 202);
+    const settledReject = await settled(asyncRejectId);
+    assert.equal((0, test_types_js_1.record)((0, test_types_js_1.record)(settledReject.resolution).delivery).via, 'message');
+    assert.equal(prompts.length, beforeFallback + 1);
+    assert.match(prompts[beforeFallback], new RegExp(`^\\[review response: Async reject deck \\(${asyncRejectId}\\), REJECTED by the user at [^\\]]+\\]\\nreason: Too complex\\n`));
+    const asyncDismissCreated = await json(await post(api(owner), { ...noMediaDeck, title: 'Async dismiss deck', wait: false }));
+    const asyncDismissId = String((0, test_types_js_1.record)(asyncDismissCreated.review).id);
+    assert.equal((await post(api(owner, `/${asyncDismissId}/dismiss`), { resolutionId: 'res-async-dis' })).status, 202);
+    const settledDismiss = await settled(asyncDismissId);
+    assert.equal((0, test_types_js_1.record)((0, test_types_js_1.record)(settledDismiss.resolution).delivery).via, 'message');
+    assert.equal(prompts.length, beforeFallback + 2);
+    assert.match(prompts[beforeFallback + 1], new RegExp(`^\\[review response: Async dismiss deck \\(${asyncDismissId}\\), DISMISSED by the user \\(no answers\\) at [^\\]]+\\]\\n`));
+    // 4. Live legacy waiter (no outcomes=1): gets 200 with rejected status (never defaults) AND server still sends fallback message.
+    const beforeLegacy = prompts.length;
+    const legacyDeck = await json(await post(api(owner), { ...noMediaDeck, title: 'Legacy waiter deck', wait: true }));
+    const legacyId = String((0, test_types_js_1.record)(legacyDeck.review).id);
+    const legacyWait = fetch(api(owner, `/${legacyId}/wait?timeout=10`), { headers: CLIENT_HEADER });
+    await pause(150);
+    assert.equal((await post(api(owner, `/${legacyId}/reject`), { resolutionId: 'res-legacy-01', reason: 'Legacy check' })).status, 202);
+    const legacyRes = await legacyWait;
+    assert.equal(legacyRes.status, 200);
+    const legacyData = await json(legacyRes);
+    assert.equal((0, test_types_js_1.record)(legacyData.result).status, 'rejected');
+    assert.deepEqual((0, test_types_js_1.record)(legacyData.result).answers, {});
+    const legacySettled = await settled(legacyId);
+    assert.equal((0, test_types_js_1.record)((0, test_types_js_1.record)(legacySettled.resolution).delivery).via, 'message');
+    assert.equal(prompts.length, beforeLegacy + 1);
+    assert.match(prompts[beforeLegacy], /REJECTED by the user/);
+    // 5. Concurrent races (submit vs reject, submit vs dismiss, reject vs dismiss): first-writer-wins with clear 409.
+    for (const [label, pair] of [
+        ['submit vs reject', (id) => [
+                post(api(owner, `/${id}/submit`), { submissionId: 'sub-race-0001', answers: DEFAULTS }),
+                post(api(owner, `/${id}/reject`), { resolutionId: 'res-race-0001', reason: 'Race reject' }),
+            ]],
+        ['submit vs dismiss', (id) => [
+                post(api(owner, `/${id}/submit`), { submissionId: 'sub-race-0002', answers: DEFAULTS }),
+                post(api(owner, `/${id}/dismiss`), { resolutionId: 'res-race-0002' }),
+            ]],
+        ['reject vs dismiss', (id) => [
+                post(api(owner, `/${id}/reject`), { resolutionId: 'res-race-0003', reason: 'Race reject' }),
+                post(api(owner, `/${id}/dismiss`), { resolutionId: 'res-race-0004' }),
+            ]],
+    ]) {
+        const created = await json(await post(api(owner), { ...noMediaDeck, title: `Race ${label}`, wait: false }));
+        const raceId = String((0, test_types_js_1.record)(created.review).id);
+        const [r1, r2] = await Promise.all(pair(raceId));
+        const statuses = [r1.status, r2.status].sort((a, b) => a - b);
+        assert.deepEqual(statuses, [202, 409], `${label} must yield exactly one 202 and one 409`);
+        const winnerRes = r1.status === 202 ? r1 : r2;
+        const loserRes = r1.status === 409 ? r1 : r2;
+        const winnerStatus = (0, test_types_js_1.record)((await json(winnerRes)).review).status;
+        const loserBody = await json(loserRes);
+        assert.equal((0, test_types_js_1.record)(loserBody.review).status, winnerStatus, `${label} 409 returns winning terminal review`);
+        await settled(raceId);
+        assert.equal(prompts.filter(prompt => prompt.includes(raceId)).length, 1, `${label} delivers exactly once`);
+    }
+    // 6. Reject/dismiss after cancel or submit returns 409.
+    const cancelledDeck = await json(await post(api(owner), { ...noMediaDeck, title: 'Cancelled before dismiss', wait: false }));
+    const cancelledId = String((0, test_types_js_1.record)(cancelledDeck.review).id);
+    assert.equal((await post(api(owner, `/${cancelledId}/cancel`), {})).status, 200);
+    const dismissCancelled = await post(api(owner, `/${cancelledId}/dismiss`), { resolutionId: 'res-after-can' });
+    assert.equal(dismissCancelled.status, 409);
+    assert.equal((await json(dismissCancelled)).code, 'cancelled');
+    const rejectCancelled = await post(api(owner, `/${cancelledId}/reject`), { resolutionId: 'res-after-can2', reason: 'nope' });
+    assert.equal(rejectCancelled.status, 409);
+    assert.equal((await json(rejectCancelled)).code, 'cancelled');
 });

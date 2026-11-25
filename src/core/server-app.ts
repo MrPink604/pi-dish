@@ -535,6 +535,8 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/reviews/:reviewId', reviewHandlers.get);
   app.get('/api/sessions/:id/reviews/:reviewId/wait', reviewHandlers.wait);
   app.post('/api/sessions/:id/reviews/:reviewId/submit', reviewHandlers.submit);
+  app.post('/api/sessions/:id/reviews/:reviewId/reject', reviewHandlers.reject);
+  app.post('/api/sessions/:id/reviews/:reviewId/dismiss', reviewHandlers.dismiss);
   app.post('/api/sessions/:id/reviews/:reviewId/cancel', reviewHandlers.cancel);
   app.get('/api/sessions/:id/reviews/:reviewId/media/:slot', reviewHandlers.media);
 

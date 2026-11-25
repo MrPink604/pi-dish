@@ -44,6 +44,8 @@ export interface ReviewHandlers {
   lookup: RouteHandler;
   wait: RouteHandler;
   submit: RouteHandler;
+  reject: RouteHandler;
+  dismiss: RouteHandler;
   cancel: RouteHandler;
   media: RouteHandler;
   /** `review_updated` for a session's event stream; returns the unsubscribe. */
@@ -65,6 +67,7 @@ const WAIT_MAX_SECS = 600;
 
 interface Waiter {
   res: ApplicationResponse;
+  readonly supportsOutcomes: boolean;
   finish(review: ReviewRecord, onWritten?: () => void): void;
   close(): void;
 }
@@ -225,10 +228,31 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     timers.set(reviewId, { sessionId, timer });
   }
 
+  function setReviewDelivery(review: ReviewRecord, delivery: reviews.ReviewDelivery): void {
+    if (review.submission) review.submission.delivery = delivery;
+    else if (review.resolution) review.resolution.delivery = delivery;
+  }
+
+  function conflictResponse(review: ReviewRecord): { code: string; error: string; review: reviews.ClientReview } {
+    const client = reviews.clientReview(review);
+    if (review.status === 'submitted') return { code: 'answered', error: 'this review was already answered', review: client };
+    if (review.status === 'cancelled') return { code: 'cancelled', error: 'the agent withdrew this review', review: client };
+    if (review.status === 'rejected') return { code: 'rejected', error: 'this review was already rejected', review: client };
+    return { code: 'dismissed', error: 'this review was already dismissed', review: client };
+  }
+
+  function legacyOutcomeError(review: ReviewRecord): string {
+    if (review.status === 'rejected') {
+      const reason = review.resolution?.reason;
+      return reason ? `review was rejected by the user: ${reason}` : 'review was rejected by the user';
+    }
+    return 'review was dismissed by the user (no answers)';
+  }
+
   function setDelivery(sessionId: string, reviewId: string, delivery: reviews.ReviewDelivery): ReviewRecord | null {
     if (delivery.state !== 'pending') detachedAt.delete(reviewId);
     const updated = reviews.updateReview(sessionId, reviewId, review => {
-      if (review.submission) review.submission.delivery = delivery;
+      setReviewDelivery(review, delivery);
     });
     if (updated) emit(updated);
     return updated;
@@ -260,8 +284,8 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     try {
       let changed = false;
       const updated = reviews.updateReview(sessionId, reviewId, review => {
-        if (review.submission?.delivery.state !== 'pending') return;
-        review.submission.delivery = delivery;
+        if (reviews.reviewDelivery(review)?.state !== 'pending') return;
+        setReviewDelivery(review, delivery);
         changed = true;
       });
       if (!changed || !updated) return;
@@ -274,26 +298,37 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
   }
 
   function withWaiterDelivery(review: ReviewRecord): { delivered: ReviewRecord; delivery: reviews.ReviewDelivery } | null {
-    if (!review.submission || review.submission.delivery.state !== 'pending') return null;
+    const current = reviews.reviewDelivery(review);
+    if (!current || current.state !== 'pending') return null;
     const delivery: reviews.ReviewDelivery = { state: 'delivered', via: 'waiter', at: Date.now(), error: null };
-    return { delivery, delivered: { ...review, submission: { ...review.submission, delivery } } };
+    if (review.submission) return { delivery, delivered: { ...review, submission: { ...review.submission, delivery } } };
+    if (review.resolution) return { delivery, delivered: { ...review, resolution: { ...review.resolution, delivery } } };
+    return null;
   }
 
-  /** A pending answer goes to an attached waiter, waits out the grace period, or becomes a message. */
+  /** A pending answer or user resolution goes to an attached waiter, waits out the grace period, or becomes a message. */
   async function settle(sessionId: string, reviewId: string): Promise<void> {
     if (stopped) return;
     const review = reviews.readReviews(sessionId).find(item => item.id === reviewId);
-    if (!review?.submission || review.submission.delivery.state !== 'pending') return;
+    if (!review || reviews.reviewDelivery(review)?.state !== 'pending') return;
+    const isOutcome = review.status === 'rejected' || review.status === 'dismissed';
     const attached = liveWaiters(reviewId);
-    if (attached.length) {
+    const capable = isOutcome ? attached.filter(waiter => waiter.supportsOutcomes) : attached;
+    const legacy = isOutcome ? attached.filter(waiter => !waiter.supportsOutcomes) : [];
+    if (capable.length) {
       const prepared = withWaiterDelivery(review);
       if (!prepared) return;
       // Leave pending on disk until a waiter write actually succeeds; if all fail, the fallback timer delivers via message.
       schedule(sessionId, reviewId, graceMs);
-      for (const waiter of attached) {
+      for (const waiter of capable) {
         waiter.finish(prepared.delivered, () => markWaiterDelivered(sessionId, reviewId, prepared.delivery));
       }
+      for (const waiter of legacy) waiter.finish(review);
       return;
+    }
+    if (legacy.length) {
+      // Legacy waiters do not recognize rejected/dismissed; finish their flushed 200 without claiming delivery so message fallback still runs.
+      for (const waiter of legacy) waiter.finish(review);
     }
     // A waiting CLI that has not attached yet (just started, or back after a restart) gets the grace period too.
     const waitingSince = review.spec.wait ? Math.max(startedAt, review.createdAt) : -Infinity;
@@ -362,9 +397,9 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     res.json({ review: reviews.clientReview(review), result: reviews.reviewResult(review) });
   });
 
-  // Long-poll for the agent's CLI: answers with the review once it is answered or
-  // cancelled, or still open after `timeout` seconds. Headers go out at once so a
-  // proxy's first-byte timer never cuts the poll.
+  // Long-poll for the agent's CLI: answers with the review once it is answered,
+  // rejected, dismissed or cancelled, or still open after `timeout` seconds.
+  // Headers go out at once so a proxy's first-byte timer never cuts the poll.
   const wait = guarded((req, res) => {
     const sessionId = sessionOf(req, res);
     if (!sessionId) return;
@@ -375,8 +410,21 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     if (!review) return;
     const requested = Number(req.query.timeout);
     const seconds = Number.isFinite(requested) && requested > 0 ? Math.min(requested, WAIT_MAX_SECS) : WAIT_DEFAULT_SECS;
-    res.status(200).type('application/json').setHeader('Cache-Control', 'no-store, no-transform');
+    const supportsOutcomes = req.query.outcomes === '1' || req.query.outcomes === 'true';
+    res.setHeader('Cache-Control', 'no-store, no-transform');
     if (review.status !== 'open') {
+      if ((review.status === 'rejected' || review.status === 'dismissed') && !supportsOutcomes) {
+        if (reviews.reviewDelivery(review)?.state === 'pending' && !timers.has(review.id)) {
+          schedule(sessionId, review.id, graceMs);
+        }
+        return res.status(409).json({
+          code: review.status,
+          error: legacyOutcomeError(review),
+          review: reviews.clientReview(review),
+          result: reviews.reviewResult(review),
+        });
+      }
+      res.status(200).type('application/json');
       const prepared = withWaiterDelivery(review);
       if (prepared) {
         if (!timers.has(review.id)) schedule(sessionId, review.id, graceMs);
@@ -384,6 +432,7 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
       }
       return writeWaiter(res, review);
     }
+    res.status(200).type('application/json');
     res.flushHeaders();
     const bucket = waiters.get(review.id) ?? { sessionId, set: new Set<Waiter>() };
     waiters.set(review.id, bucket);
@@ -398,6 +447,7 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     };
     const waiter: Waiter = {
       res,
+      supportsOutcomes,
       finish: (current, onWritten) => { detach(true); writeWaiter(res, current, onWritten); },
       close: () => { detach(false); if (!res.writableEnded && !res.destroyed) res.end(); },
     };
@@ -427,37 +477,106 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     }
     // Any id ever accepted answers with its receipt, never a second send.
     if (review.submission?.id === id) return res.status(200).json({ review: reviews.clientReview(review), repeated: true });
-    if (review.status === 'submitted') {
-      return res.status(409).json({ code: 'answered', error: 'this review was already answered', review: reviews.clientReview(review) });
-    }
-    if (review.status === 'cancelled') {
-      return res.status(409).json({ code: 'cancelled', error: 'the agent withdrew this review', review: reviews.clientReview(review) });
+    if (review.status !== 'open') {
+      return res.status(409).json(conflictResponse(review));
     }
     const checked = reviews.validateReviewAnswers(review.spec, body.answers);
     if ('errors' in checked) return res.status(400).json({ error: checked.errors.join('; '), errors: checked.errors });
-    const accepted = reviews.updateReview(sessionId, review.id, current => {
+    let accepted: ReviewRecord | null = null;
+    let raced: ReviewRecord | null = null;
+    reviews.updateReview(sessionId, review.id, current => {
+      if (current.status !== 'open') { raced = current; return; }
       current.status = 'submitted';
       current.submission = {
         id, submittedAt: Date.now(), answers: checked.answers, changed: reviews.changedQuestions(current.spec, checked.answers),
         delivery: { state: 'pending', via: null, at: null, error: null },
       };
+      accepted = current;
     });
+    if (raced) return res.status(409).json(conflictResponse(raced));
     if (!accepted) return res.status(404).json({ error: 'no such review' });
     res.status(202).json({ review: reviews.clientReview(accepted) });
     emit(accepted);
     void settle(sessionId, review.id).catch(error => ports.log(`[reviews] delivering ${review.id}: ${errorMessage(error)}`));
   });
 
+  function resolveOutcome(targetStatus: 'rejected' | 'dismissed'): RouteHandler {
+    return guarded((req, res) => {
+      const sessionId = sessionOf(req, res);
+      if (!sessionId || !requireClient(req, res)) return;
+      const review = loadReview(sessionId, req, res);
+      if (!review) return;
+      const contentLength = Number(req.headers['content-length']);
+      if ((Number.isFinite(contentLength) && contentLength > reviews.MAX_SUBMIT_BYTES)
+        || Buffer.byteLength(JSON.stringify(req.body ?? null)) > reviews.MAX_SUBMIT_BYTES) {
+        return res.status(413).json({ error: `request exceeds ${reviews.MAX_SUBMIT_BYTES / 1024} KiB` });
+      }
+      const body = requestBody(req);
+      let givenId: string | null = null;
+      if (body.resolutionId !== undefined && body.resolutionId !== null) {
+        if (typeof body.resolutionId !== 'string' || !reviews.SUBMISSION_ID_RE.test(body.resolutionId)) {
+          return res.status(400).json({ error: 'resolutionId must be 8-64 letters, digits, "_" or "-"' });
+        }
+        givenId = body.resolutionId;
+      }
+      // A repeated retry with the already-accepted id returns its receipt without a second send.
+      if (givenId !== null && review.status === targetStatus && review.resolution?.id === givenId) {
+        return res.status(200).json({ review: reviews.clientReview(review), repeated: true });
+      }
+      let reason: string | null = null;
+      if (targetStatus === 'rejected') {
+        const checked = reviews.validateRejectReason(body.reason);
+        if ('error' in checked) return res.status(400).json({ error: checked.error });
+        reason = checked.reason;
+      }
+      if (review.status === targetStatus && review.resolution) {
+        if (givenId === null && (targetStatus === 'dismissed' || reason === review.resolution.reason)) {
+          return res.status(200).json({ review: reviews.clientReview(review), repeated: true });
+        }
+        return res.status(409).json(conflictResponse(review));
+      }
+      if (review.status !== 'open') {
+        return res.status(409).json(conflictResponse(review));
+      }
+      const id = givenId ?? reviews.newResolutionId();
+      let accepted: ReviewRecord | null = null;
+      let raced: ReviewRecord | null = null;
+      reviews.updateReview(sessionId, review.id, current => {
+        if (current.status !== 'open') { raced = current; return; }
+        current.status = targetStatus;
+        current.resolution = {
+          id,
+          resolvedAt: Date.now(),
+          reason,
+          delivery: { state: 'pending', via: null, at: null, error: null },
+        };
+        accepted = current;
+      });
+      if (raced) return res.status(409).json(conflictResponse(raced));
+      if (!accepted) return res.status(404).json({ error: 'no such review' });
+      res.status(202).json({ review: reviews.clientReview(accepted) });
+      emit(accepted);
+      void settle(sessionId, review.id).catch(error => ports.log(`[reviews] delivering ${review.id}: ${errorMessage(error)}`));
+    });
+  }
+
+  const reject = resolveOutcome('rejected');
+  const dismiss = resolveOutcome('dismissed');
+
   const cancel = guarded((req, res) => {
     const sessionId = sessionOf(req, res);
     if (!sessionId || !requireClient(req, res)) return;
     const review = loadReview(sessionId, req, res);
     if (!review) return;
-    if (review.status === 'submitted') {
-      return res.status(409).json({ code: 'answered', error: 'this review was already answered', review: reviews.clientReview(review) });
+    if (review.status === 'cancelled') return res.json({ review: reviews.clientReview(review) });
+    if (review.status !== 'open') {
+      return res.status(409).json(conflictResponse(review));
     }
-    const cancelled = reviews.updateReview(sessionId, review.id, current => { current.status = 'cancelled'; });
+    const cancelled = reviews.updateReview(sessionId, review.id, current => {
+      if (current.status === 'open') current.status = 'cancelled';
+    });
     if (!cancelled) return res.status(404).json({ error: 'no such review' });
+    if (cancelled.status !== 'cancelled') return res.status(409).json(conflictResponse(cancelled));
     clearTimer(cancelled.id);
     detachedAt.delete(cancelled.id);
     for (const waiter of liveWaiters(cancelled.id)) waiter.finish(cancelled);
@@ -499,7 +618,7 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
 
   function start(): void {
     for (const review of reviews.readAllReviews(ports.log)) {
-      const state = review.submission?.delivery.state;
+      const state = reviews.reviewDelivery(review)?.state;
       if (state === 'pending') schedule(review.sessionId, review.id, startedAt + graceMs - Date.now());
       if (state === 'delivering') {
         try {
@@ -517,5 +636,5 @@ export function createReviewHandlers(ports: ReviewHandlerPorts): ReviewHandlers 
     timers.clear();
   }
 
-  return { create, list, get, lookup, wait, submit, cancel, media, subscribe, removeSession, start, stop };
+  return { create, list, get, lookup, wait, submit, reject, dismiss, cancel, media, subscribe, removeSession, start, stop };
 }

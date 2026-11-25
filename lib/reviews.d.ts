@@ -1,11 +1,13 @@
 // Generated from src/core/reviews.ts; edit that source and run npm run build:core.
 export declare const REVIEWS_CAPABILITY = "reviewsV1";
+export declare const REVIEWS_DISMISS_CAPABILITY = "reviewsDismissV1";
 export declare const REVIEW_CLIENT_HEADER = "x-pi-dish-client";
 export declare const REVIEW_CLIENT_VALUE = "1";
 export declare const MAX_CARDS = 6;
 export declare const MAX_QUESTIONS_PER_CARD = 3;
 export declare const MAX_MEDIA_PER_CARD = 4;
 export declare const MAX_CONTEXT_CHARS = 500;
+export declare const MAX_REJECT_REASON = 500;
 export declare const MAX_TEXT_ANSWER = 2000;
 export declare const MAX_NOTE = 1000;
 /** A deck's JSON as posted; far above anything the bounds above allow, so it only stops abuse. */
@@ -103,7 +105,14 @@ export interface ReviewSubmission {
     changed: string[];
     delivery: ReviewDelivery;
 }
-export type ReviewStatus = 'open' | 'submitted' | 'cancelled';
+/** Terminal user rejection or dismissal of a deck (no answers submitted). */
+export interface ReviewResolution {
+    id: string;
+    resolvedAt: number;
+    reason: string | null;
+    delivery: ReviewDelivery;
+}
+export type ReviewStatus = 'open' | 'submitted' | 'cancelled' | 'rejected' | 'dismissed';
 export interface ReviewRecord {
     id: string;
     sessionId: string;
@@ -116,6 +125,8 @@ export interface ReviewRecord {
     assets: ReviewAsset[];
     status: ReviewStatus;
     submission: ReviewSubmission | null;
+    /** Present when status is 'rejected' or 'dismissed'. */
+    resolution?: ReviewResolution | null;
 }
 /** The token a `/page/<token>[/asset]` reference names, or null. */
 export declare function pageToken(src: string): string | null;
@@ -138,6 +149,14 @@ export declare function validateReviewAnswers(spec: ReviewSpec, raw: unknown): {
 };
 /** Questions with a default whose answer is not it, in deck order. */
 export declare function changedQuestions(spec: ReviewSpec, answers: Record<string, QuestionAnswer>): string[];
+/** Optional short rejection reason, bounded at MAX_REJECT_REASON chars. */
+export declare function validateRejectReason(raw: unknown): {
+    reason: string | null;
+} | {
+    error: string;
+};
+/** The delivery tracker for a submitted, rejected or dismissed review, or null. */
+export declare function reviewDelivery(review: Pick<ReviewRecord, 'submission' | 'resolution'>): ReviewDelivery | null;
 /** What the agent receives, from the waiting CLI or `answers`: the design's structured answer. */
 export declare function reviewResult(review: ReviewRecord): {
     reviewId: string;
@@ -145,6 +164,8 @@ export declare function reviewResult(review: ReviewRecord): {
     status: ReviewStatus;
     revision: number;
     submittedAt: string | null;
+    resolvedAt?: string | undefined;
+    reason?: string | null | undefined;
     changedFromDefault: string[];
     answers: Record<string, QuestionAnswer>;
     delivery: ReviewDelivery | null;
@@ -152,11 +173,14 @@ export declare function reviewResult(review: ReviewRecord): {
 /**
  * Changed answers and answers with a note first, unchanged defaults
  * summarized, then answers to questions without a default; the footer names
- * the full answer set. The whole message fits MAX_MESSAGE_BYTES. In an OMP
- * session every line has OMP prompt syntax defused (see page-forms).
+ * the full answer set. Rejected and dismissed decks produce unambiguous
+ * machine-readable notices instead of answers. The whole message fits
+ * MAX_MESSAGE_BYTES. In an OMP session every line has OMP prompt syntax
+ * defused (see page-forms).
  */
 export declare function formatReviewMessage(review: ReviewRecord, ompRecipient: boolean): string;
 export declare function newReviewId(): string;
+export declare function newResolutionId(): string;
 /** A session's decks, oldest first; a store that exists but cannot be read throws. */
 export declare function readReviews(sessionId: string): ReviewRecord[];
 export declare function writeReviews(sessionId: string, reviews: ReviewRecord[]): void;
@@ -194,6 +218,7 @@ export interface ClientReview {
     status: ReviewStatus;
     cards: ClientCard[];
     submission: ReviewSubmission | null;
+    resolution?: ReviewResolution | null;
 }
 export declare function clientReview(review: ReviewRecord): ClientReview;
 export {};

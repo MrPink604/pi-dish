@@ -278,6 +278,7 @@ function hostsChanged() {
   routinesController.updateButton();
   composerSpeech.updateButton();
   cuViewerController.syncSessionChip();
+  reviewDecks.sync();
   void bots.sync();
   renderSessions();
   agentRefs.hydrate();
@@ -1174,6 +1175,10 @@ const reviewDecks: ReturnType<typeof createReviewDecks> = createReviewDecks({
     const entry = effectiveHosts().find(candidate => candidate.base === endpoint.base);
     if (!entry?.capabilities) return true;
     return hostSupportsCapability(entry, 'reviewsV1', appConfig);
+  },
+  supportsDismiss: endpoint => {
+    const entry = effectiveHosts().find(candidate => candidate.base === endpoint.base);
+    return hostSupportsCapability(entry, 'reviewsDismissV1', appConfig);
   },
   mediaUrl: (hostId, apiPath) => {
     const base = resolveHost(hostId).base;

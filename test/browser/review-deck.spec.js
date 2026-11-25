@@ -745,3 +745,187 @@ async function createDeck(base, sessionId, spec, headers = {}) {
     (0, fixtures_js_1.expect)(leakedAfterLock).toEqual([]);
     (0, fixtures_js_1.expect)(errors).toEqual([]);
 });
+(0, fixtures_js_1.test)('reject with optional reason, two-tap dismiss, receipts, draft clearing, cross-host dismiss, and capability gating at 390x844 and desktop', async ({ page, fleet }) => {
+    const { self, peer } = fleet;
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    // Register `peer` as hub-proxied `/hosts/remote` on `self`.
+    fs.writeFileSync(path.join(self.home, '.pi/dish/settings.json'), JSON.stringify({
+        remotes: [{ name: 'remote', url: peer.base, token: peer.token }],
+    }));
+    seedWorkAndTranscript(self);
+    seedWorkAndTranscript(peer);
+    const rejectDeck = await createDeck(self.base, fixtures_js_1.ROOT, {
+        title: 'Proposal to reject',
+        wait: true,
+        cards: [{
+                id: 'c1',
+                title: 'Step 1',
+                context: 'Should we rebuild the widget from scratch?',
+                questions: [
+                    { id: 'approach', type: 'choice', prompt: 'Pick approach', default: 'a', options: [{ value: 'a', label: 'Rebuild' }, { value: 'b', label: 'Patch' }] },
+                    { id: 'required_note', type: 'text', prompt: 'Required detail', required: true },
+                ],
+            }],
+    });
+    const dismissDeck = await createDeck(self.base, fixtures_js_1.ROOT, {
+        title: 'Optional check to dismiss',
+        wait: true,
+        cards: [{
+                id: 'c1',
+                title: 'Minor tweak',
+                context: 'Optional nitpick questions.',
+                questions: [{ id: 'nit', type: 'approve', prompt: 'Ship nit?', default: 'approve' }],
+            }],
+    });
+    const peerDeck = await createDeck(peer.base, fixtures_js_1.ROOT, {
+        title: 'Remote deck to dismiss via hub',
+        wait: false,
+        cards: [{
+                id: 'c1',
+                title: 'Peer card',
+                context: 'Lives on the remote peer.',
+                questions: [{ id: 'ok', type: 'approve', prompt: 'Looks fine?', default: 'approve' }],
+            }],
+    }, { Authorization: `Bearer ${peer.token}` });
+    // Open session at phone width (390x844).
+    await fleet.row(self, fixtures_js_1.ROOT).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const rejectEl = page.locator(`.review-deck[data-review-id="${rejectDeck.id}"]`);
+    const dismissEl = page.locator(`.review-deck[data-review-id="${dismissDeck.id}"]`);
+    await (0, fixtures_js_1.expect)(rejectEl).toBeVisible();
+    await (0, fixtures_js_1.expect)(dismissEl).toBeVisible();
+    // Both Reject and Dismiss render in the secondary footer strip (distinct from primary Submit) with zero horizontal overflow at 390px.
+    const rejectBtn = rejectEl.locator('[data-review-action="open-reject"]');
+    const dismissBtn = rejectEl.locator('[data-review-action="dismiss"]');
+    await (0, fixtures_js_1.expect)(rejectBtn).toBeVisible();
+    await (0, fixtures_js_1.expect)(dismissBtn).toBeVisible();
+    (0, fixtures_js_1.expect)(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    // Save a draft edit on the deck to verify Reject clears sessionStorage draft too, even with an unanswered required text field.
+    await rejectEl.locator('.review-option[data-question-id="approach"][data-value="b"]').click();
+    const hasDraft = async (reviewId) => page.evaluate(id => {
+        for (let i = 0; i < sessionStorage.length; i++) {
+            if ((sessionStorage.key(i) || '').endsWith(`:${id}`))
+                return true;
+        }
+        return false;
+    }, reviewId);
+    (0, fixtures_js_1.expect)(await hasDraft(rejectDeck.id)).toBe(true);
+    // Clicking Reject opens the inline confirm/reason drawer (never rejects in one tap); Cancel closes without side effects.
+    await rejectBtn.click();
+    const reasonInput = rejectEl.locator('textarea[data-review-input="reject-reason"]');
+    await (0, fixtures_js_1.expect)(reasonInput).toBeVisible();
+    await (0, fixtures_js_1.expect)(reasonInput).toBeFocused();
+    await rejectEl.locator('[data-review-action="cancel-reject"]').click();
+    await (0, fixtures_js_1.expect)(reasonInput).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(rejectEl).toHaveClass(/\bis-open\b/);
+    // Attach a live waiter (outcomes=1) and reject with a short reason; verify header, receipt, draft cleared, and waiter result.
+    const rejectWaiter = fetch(`${self.base}/api/sessions/${encodeURIComponent(fixtures_js_1.ROOT)}/reviews/${encodeURIComponent(rejectDeck.id)}/wait?timeout=15&outcomes=1`, { headers: { 'X-Pi-Dish-Client': '1' } }).then(async (res) => ({ status: res.status, body: await res.json() }));
+    let rejectClientHeader = null;
+    page.on('request', req => {
+        if (req.method() === 'POST' && req.url().endsWith(`/reviews/${rejectDeck.id}/reject`)) {
+            rejectClientHeader = req.headers()['x-pi-dish-client'] ?? null;
+        }
+    });
+    await rejectBtn.click();
+    await (0, fixtures_js_1.expect)(reasonInput).toBeVisible();
+    await reasonInput.fill('Out of scope — keep the current widget');
+    await (0, fixtures_js_1.expect)(rejectEl.locator(`[data-review-reject-count="${rejectDeck.id}"]`)).toHaveText('38/500');
+    await rejectEl.locator('[data-review-action="confirm-reject"]').click();
+    await (0, fixtures_js_1.expect)(rejectEl).toHaveClass(/\bis-rejected\b/);
+    await (0, fixtures_js_1.expect)(rejectEl.locator('.review-receipt-title')).toHaveText('Rejected · Proposal to reject');
+    await (0, fixtures_js_1.expect)(rejectEl.locator('.review-receipt-reason')).toHaveText('Out of scope — keep the current widget');
+    (0, fixtures_js_1.expect)(rejectClientHeader).toBe('1');
+    (0, fixtures_js_1.expect)(await hasDraft(rejectDeck.id)).toBe(false);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    const rejectWaited = await rejectWaiter;
+    (0, fixtures_js_1.expect)(rejectWaited.status).toBe(200);
+    const rejectResult = (0, helper_values_js_1.record)(rejectWaited.body) && (0, helper_values_js_1.record)(rejectWaited.body.result) ? rejectWaited.body.result : null;
+    (0, fixtures_js_1.expect)(rejectResult?.status).toBe('rejected');
+    (0, fixtures_js_1.expect)(rejectResult?.reason).toBe('Out of scope — keep the current widget');
+    await (0, fixtures_js_1.expect)(rejectEl.locator('.review-delivery-badge')).toHaveCount(0);
+    // Two-tap Dismiss flow at desktop width (1280x800) and then phone width: tap 1 arms, tap 2 dismisses & clears draft.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await dismissEl.locator('.review-option[data-question-id="nit"][data-value="revise"]').click();
+    (0, fixtures_js_1.expect)(await hasDraft(dismissDeck.id)).toBe(true);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const dismissWaiter = fetch(`${self.base}/api/sessions/${encodeURIComponent(fixtures_js_1.ROOT)}/reviews/${encodeURIComponent(dismissDeck.id)}/wait?timeout=15&outcomes=1`, { headers: { 'X-Pi-Dish-Client': '1' } }).then(async (res) => ({ status: res.status, body: await res.json() }));
+    let dismissClientHeader = null;
+    page.on('request', req => {
+        if (req.method() === 'POST' && req.url().endsWith(`/reviews/${dismissDeck.id}/dismiss`)) {
+            dismissClientHeader = req.headers()['x-pi-dish-client'] ?? null;
+        }
+    });
+    const dismissActionBtn = dismissEl.locator('[data-review-action="dismiss"]');
+    await dismissActionBtn.click();
+    await (0, fixtures_js_1.expect)(dismissEl).toHaveClass(/\bis-open\b/);
+    await (0, fixtures_js_1.expect)(dismissActionBtn).toHaveClass(/\barmed\b/);
+    await (0, fixtures_js_1.expect)(dismissActionBtn).toHaveText('Dismiss? Tap again');
+    await dismissActionBtn.click();
+    await (0, fixtures_js_1.expect)(dismissEl).toHaveClass(/\bis-dismissed\b/);
+    await (0, fixtures_js_1.expect)(dismissEl.locator('.review-receipt-title')).toHaveText('Dismissed · Optional check to dismiss');
+    await (0, fixtures_js_1.expect)(dismissEl.locator('.review-receipt-meta')).toHaveText('Declined to answer');
+    (0, fixtures_js_1.expect)(dismissClientHeader).toBe('1');
+    (0, fixtures_js_1.expect)(await hasDraft(dismissDeck.id)).toBe(false);
+    const dismissWaited = await dismissWaiter;
+    (0, fixtures_js_1.expect)(dismissWaited.status).toBe(200);
+    const dismissResult = (0, helper_values_js_1.record)(dismissWaited.body) && (0, helper_values_js_1.record)(dismissWaited.body.result) ? dismissWaited.body.result : null;
+    (0, fixtures_js_1.expect)(dismissResult?.status).toBe('dismissed');
+    await (0, fixtures_js_1.expect)(dismissEl.locator('.review-delivery-badge')).toHaveCount(0);
+    // Version skew & cross-host: clean tab using hub-proxied `/hosts/remote`.
+    await page.evaluate(() => localStorage.removeItem('pi-dish-hosts'));
+    const tab = await page.context().newPage();
+    tab.on('pageerror', error => errors.push(error.message));
+    try {
+        await tab.setViewportSize({ width: 390, height: 844 });
+        // 1) Old peer without reviewsDismissV1: Reject & Dismiss buttons must stay hidden, while Submit stays visible.
+        let stripPeerDismissCap = true;
+        await tab.route('**/api/hosts', async (route) => {
+            const response = await route.fetch();
+            if (!stripPeerDismissCap)
+                return route.fulfill({ response });
+            const data = await response.json();
+            if ((0, helper_values_js_1.record)(data) && Array.isArray(data.hosts)) {
+                for (const host of data.hosts) {
+                    if ((0, helper_values_js_1.record)(host) && !host.self && (0, helper_values_js_1.record)(host.capabilities)) {
+                        delete host.capabilities.reviewsDismissV1;
+                    }
+                }
+            }
+            return route.fulfill({ status: response.status(), contentType: 'application/json', body: JSON.stringify(data) });
+        });
+        await tab.goto(self.base);
+        await tab.getByRole('button', { name: 'Open session list' }).click();
+        await tab.locator('#tabAll').click();
+        const peerRow = tab.locator(`.session-item[data-id="${fixtures_js_1.ROOT}"][data-host="${peer.hostId}"]`);
+        await (0, fixtures_js_1.expect)(peerRow).toBeVisible();
+        await peerRow.click();
+        const peerDeckEl = tab.locator(`.review-deck[data-review-id="${peerDeck.id}"]`);
+        await (0, fixtures_js_1.expect)(peerDeckEl).toBeVisible();
+        await (0, fixtures_js_1.expect)(peerDeckEl.locator('[data-review-action="submit"]')).toBeVisible();
+        await (0, fixtures_js_1.expect)(peerDeckEl.locator('[data-review-action="dismiss"]')).toHaveCount(0);
+        await (0, fixtures_js_1.expect)(peerDeckEl.locator('[data-review-action="open-reject"]')).toHaveCount(0);
+        // 2) Reload with real peer capabilities (reviewsDismissV1: true): buttons appear and dismiss works through /hosts/remote.
+        stripPeerDismissCap = false;
+        await tab.reload();
+        await (0, fixtures_js_1.expect)(peerDeckEl).toBeVisible();
+        const peerDismissBtn = peerDeckEl.locator('[data-review-action="dismiss"]');
+        await (0, fixtures_js_1.expect)(peerDismissBtn).toBeVisible();
+        await (0, fixtures_js_1.expect)(peerDeckEl.locator('[data-review-action="open-reject"]')).toBeVisible();
+        await peerDismissBtn.click();
+        await (0, fixtures_js_1.expect)(peerDismissBtn).toHaveClass(/\barmed\b/);
+        await peerDismissBtn.click();
+        await (0, fixtures_js_1.expect)(peerDeckEl).toHaveClass(/\bis-dismissed\b/);
+        await (0, fixtures_js_1.expect)(peerDeckEl.locator('.review-receipt-title')).toHaveText('Dismissed · Remote deck to dismiss via hub');
+        // Verify the remote peer actually persisted the dismissal.
+        const peerGet = await fetch(`${peer.base}/api/sessions/${encodeURIComponent(fixtures_js_1.ROOT)}/reviews/${encodeURIComponent(peerDeck.id)}`, {
+            headers: { Authorization: `Bearer ${peer.token}` },
+        });
+        const peerBody = await peerGet.json();
+        (0, fixtures_js_1.expect)((0, helper_values_js_1.record)(peerBody) && (0, helper_values_js_1.record)(peerBody.review) ? peerBody.review.status : null).toBe('dismissed');
+    }
+    finally {
+        await tab.close();
+    }
+    (0, fixtures_js_1.expect)(errors).toEqual([]);
+});

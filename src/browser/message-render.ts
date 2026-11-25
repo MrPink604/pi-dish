@@ -259,11 +259,19 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   }
   const reviewResponse = parseReviewResponseMessage(rawText);
   if (reviewResponse) {
-    return `<div${attrs} class="message custom-message review-response-notice" data-timestamp="${escapeHtml(String(msg.timestamp || Date.now()))}" data-review-response-id="${escapeHtml(reviewResponse.reviewId)}">
-      <details class="review-response-details">
+    const iconClass = reviewResponse.status === 'rejected' ? 'rejected'
+      : reviewResponse.status === 'dismissed' ? 'muted' : 'done';
+    const iconGlyph = reviewResponse.status === 'rejected' ? '✕'
+      : reviewResponse.status === 'dismissed' ? '–' : '✓';
+    const label = reviewResponse.status === 'rejected' ? 'Review rejected'
+      : reviewResponse.status === 'dismissed' ? 'Review dismissed' : 'Review response';
+    const detailsMod = reviewResponse.status === 'rejected' ? ' is-rejected'
+      : reviewResponse.status === 'dismissed' ? ' is-dismissed' : '';
+    return `<div${attrs} class="message custom-message review-response-notice" data-timestamp="${escapeHtml(String(msg.timestamp || Date.now()))}" data-review-response-id="${escapeHtml(reviewResponse.reviewId)}" data-review-response-status="${escapeHtml(reviewResponse.status)}">
+      <details class="review-response-details${detailsMod}">
         <summary class="review-response-summary">
-          <span class="review-icon done" aria-hidden="true">✓</span>
-          <span class="review-response-title">Review response · ${escapeHtml(reviewResponse.title)}</span>
+          <span class="review-icon ${iconClass}" aria-hidden="true">${iconGlyph}</span>
+          <span class="review-response-title">${label} · ${escapeHtml(reviewResponse.title)}</span>
           ${time ? `<span class="message-time">${time}</span>` : ''}
         </summary>
         ${reviewResponse.body ? `<pre class="review-response-body">${escapeHtml(reviewResponse.body)}</pre>` : ''}

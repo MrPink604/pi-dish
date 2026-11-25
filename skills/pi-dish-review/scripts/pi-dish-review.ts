@@ -51,6 +51,9 @@ Flags:
   --session ID     owning session id or [host/]ref (default: this session)
   --url URL        pi-dish base URL (default $PI_DISH_URL, else http://127.0.0.1:3333)
 
+Exit codes (ask/wait): 0 answered/withdrawn/timed out, 2 rejected by user,
+3 dismissed by user, 1 error. answers always exits 0 when the review exists.
+
 Deck format (hard limits: 1-6 cards, 1-3 questions and 0-4 shots per card,
 context <= 500 characters):
   { "title": "…", "companionPage": "/page/<token>", "cards": [
@@ -67,7 +70,7 @@ paths, or https URLs. See skills/pi-dish-review/SKILL.md.`;
 const CLIENT_HEADERS: Record<string, string> = { 'X-Pi-Dish-Client': '1' };
 const REVIEW_ID_RE = /^rv_[0-9a-f]{16}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const VALID_STATUSES = new Set(['open', 'submitted', 'cancelled']);
+const VALID_STATUSES = new Set(['open', 'submitted', 'cancelled', 'rejected', 'dismissed']);
 const LOOKUP_TIMEOUT_MS = process.env.PI_DISH_REVIEW_LOOKUP_TIMEOUT_MS && Number.isFinite(Number(process.env.PI_DISH_REVIEW_LOOKUP_TIMEOUT_MS))
   ? Math.max(50, Number(process.env.PI_DISH_REVIEW_LOOKUP_TIMEOUT_MS)) : 15_000;
 const WAIT_RETRY_MS = process.env.PI_DISH_REVIEW_WAIT_RETRY_MS && Number.isFinite(Number(process.env.PI_DISH_REVIEW_WAIT_RETRY_MS))
@@ -246,7 +249,7 @@ function readSpec(source: string): unknown {
   try { return JSON.parse(text); } catch (error) { throw new Error(`${source} is not valid JSON: ${errorMessage(error)}`); }
 }
 
-/** Long-polls until the review is answered or withdrawn; null once `deadline` passes with it still open. */
+/** Long-polls until the review is answered, rejected, dismissed or withdrawn; null once `deadline` passes with it still open. */
 async function waitFor(base: string, host: string | null, sessionId: unknown, reviewId: string, deadline: number): Promise<Record<string, unknown> | null> {
   let failures = 0;
   let lastError: unknown = null;
@@ -267,11 +270,11 @@ async function waitFor(base: string, host: string | null, sessionId: unknown, re
       timer.unref();
     }
     try {
-      const { data } = await api(base, host, reviewsPath(sessionId, `/${encodeURIComponent(reviewId)}/wait?timeout=${poll}`), init);
+      const { data } = await api(base, host, reviewsPath(sessionId, `/${encodeURIComponent(reviewId)}/wait?timeout=${poll}&outcomes=1`), init);
       const raw = isPlainObject(data) ? data.result : null;
       if (!isPlainObject(raw)) throw new Error('wait response ended without a review result');
       if (raw.reviewId !== undefined && raw.reviewId !== reviewId) throw new Error(`wait response returned review "${String(raw.reviewId)}" instead of "${reviewId}"`);
-      if (raw.status === 'cancelled') return raw;
+      if (raw.status === 'cancelled' || raw.status === 'rejected' || raw.status === 'dismissed') return raw;
       if (raw.status === 'submitted') {
         if (!isPlainObject(raw.answers)) throw new Error('wait response reported submitted without answers');
         return raw;
@@ -296,9 +299,31 @@ async function waitFor(base: string, host: string | null, sessionId: unknown, re
   }
 }
 
+function outcomeExitCode(status: unknown): number {
+  if (status === 'rejected') return 2;
+  if (status === 'dismissed') return 3;
+  return 0;
+}
+
 function answeredText(result: Record<string, unknown>): string {
   if (result.status === 'cancelled') return `review ${result.reviewId} was withdrawn; it has no answers.`;
   const delivery = record(result.delivery ?? {});
+  if (result.status === 'rejected') {
+    const reason = typeof result.reason === 'string' && result.reason.trim() ? result.reason.trim() : null;
+    const lines = [`review ${result.reviewId} was REJECTED by the user (no answers).`];
+    if (reason) lines.push(`reason: ${reason}`);
+    lines.push('Do not proceed with the proposal as presented.');
+    if (delivery.via === 'message') lines.push('(This was also sent to this session as a "[review response: …]" message.)');
+    return lines.join('\n');
+  }
+  if (result.status === 'dismissed') {
+    const lines = [
+      `review ${result.reviewId} was DISMISSED by the user (no answers).`,
+      'Proceed on your own judgement or drop it.',
+    ];
+    if (delivery.via === 'message') lines.push('(This was also sent to this session as a "[review response: …]" message.)');
+    return lines.join('\n');
+  }
   const also = delivery.via === 'message' ? '\n(These answers were also sent to this session as a "[review response: …]" message.)' : '';
   return `${JSON.stringify(result, null, 2)}${also}`;
 }
@@ -312,7 +337,10 @@ async function executeReviewCommand(
   if (command === 'wait') {
     const result = await waitFor(base, host, sessionId, reviewId, waitDeadline);
     if (!result) return print({ reviewId, status: 'open' }, json, `No answer within ${timeoutSecs} s: ${OPEN_LATER}`);
-    return print(result, json, answeredText(result));
+    print(result, json, answeredText(result));
+    const code = outcomeExitCode(result.status);
+    if (code) process.exitCode = code;
+    return;
   }
   if (command === 'answers') {
     const { data } = await api(base, host, item, withSignal(signal));
@@ -721,7 +749,10 @@ async function main() {
       return fail(`stopped waiting for ${review.id} (${errorMessage(error)}; ${whereAsked(base, host)}); ${OPEN_LATER}`);
     }
     if (!result) return print({ reviewId: review.id, status: 'open' }, args.json, `No answer within ${timeout} s: ${OPEN_LATER}`);
-    return print(result, args.json, answeredText(result));
+    print(result, args.json, answeredText(result));
+    const code = outcomeExitCode(result.status);
+    if (code) process.exitCode = code;
+    return;
   }
 
   if (args.command !== 'wait' && args.command !== 'answers' && args.command !== 'cancel') {

@@ -24,6 +24,8 @@ export interface ReviewHandlers {
     lookup: RouteHandler;
     wait: RouteHandler;
     submit: RouteHandler;
+    reject: RouteHandler;
+    dismiss: RouteHandler;
     cancel: RouteHandler;
     media: RouteHandler;
     /** `review_updated` for a session's event stream; returns the unsubscribe. */

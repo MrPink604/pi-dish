@@ -17,12 +17,14 @@ import { literalPrompt, visibleText } from './page-forms';
 import { record } from './helper-values';
 
 export const REVIEWS_CAPABILITY = 'reviewsV1';
+export const REVIEWS_DISMISS_CAPABILITY = 'reviewsDismissV1';
 export const REVIEW_CLIENT_HEADER = 'x-pi-dish-client';
 export const REVIEW_CLIENT_VALUE = '1';
 export const MAX_CARDS = 6;
 export const MAX_QUESTIONS_PER_CARD = 3;
 export const MAX_MEDIA_PER_CARD = 4;
 export const MAX_CONTEXT_CHARS = 500;
+export const MAX_REJECT_REASON = 500;
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 6;
 const MAX_TITLE = 120;
@@ -100,7 +102,14 @@ export interface ReviewSubmission {
   changed: string[];
   delivery: ReviewDelivery;
 }
-export type ReviewStatus = 'open' | 'submitted' | 'cancelled';
+/** Terminal user rejection or dismissal of a deck (no answers submitted). */
+export interface ReviewResolution {
+  id: string;
+  resolvedAt: number;
+  reason: string | null;
+  delivery: ReviewDelivery;
+}
+export type ReviewStatus = 'open' | 'submitted' | 'cancelled' | 'rejected' | 'dismissed';
 export interface ReviewRecord {
   id: string;
   sessionId: string;
@@ -113,6 +122,8 @@ export interface ReviewRecord {
   assets: ReviewAsset[];
   status: ReviewStatus;
   submission: ReviewSubmission | null;
+  /** Present when status is 'rejected' or 'dismissed'. */
+  resolution?: ReviewResolution | null;
 }
 
 // ---- the deck format -----------------------------------------------------------
@@ -397,18 +408,37 @@ export function changedQuestions(spec: ReviewSpec, answers: Record<string, Quest
   return reviewQuestions(spec).filter(question => question.default !== null && !answers[question.id]?.default).map(question => question.id);
 }
 
+/** Optional short rejection reason, bounded at MAX_REJECT_REASON chars. */
+export function validateRejectReason(raw: unknown): { reason: string | null } | { error: string } {
+  if (raw === undefined || raw === null) return { reason: null };
+  if (typeof raw !== 'string') return { error: 'reason must be text' };
+  const trimmed = raw.trim();
+  if (trimmed.length > MAX_REJECT_REASON) return { error: `reason is ${trimmed.length} characters; max is ${MAX_REJECT_REASON}` };
+  return { reason: trimmed || null };
+}
+
+/** The delivery tracker for a submitted, rejected or dismissed review, or null. */
+export function reviewDelivery(review: Pick<ReviewRecord, 'submission' | 'resolution'>): ReviewDelivery | null {
+  return review.submission?.delivery ?? review.resolution?.delivery ?? null;
+}
+
 /** What the agent receives, from the waiting CLI or `answers`: the design's structured answer. */
 export function reviewResult(review: ReviewRecord) {
   const submission = review.submission;
+  const resolution = review.resolution ?? null;
   return {
     reviewId: review.id,
     title: review.spec.title,
     status: review.status,
-    revision: submission ? 1 : 0,
+    revision: submission || resolution ? 1 : 0,
     submittedAt: submission ? new Date(submission.submittedAt).toISOString() : null,
+    ...(resolution ? {
+      resolvedAt: new Date(resolution.resolvedAt).toISOString(),
+      reason: resolution.reason,
+    } : {}),
     changedFromDefault: submission?.changed ?? [],
     answers: submission?.answers ?? {},
-    delivery: submission?.delivery ?? null,
+    delivery: submission?.delivery ?? resolution?.delivery ?? null,
   };
 }
 
@@ -432,14 +462,38 @@ function block(label: string, value: string): string[] {
 /**
  * Changed answers and answers with a note first, unchanged defaults
  * summarized, then answers to questions without a default; the footer names
- * the full answer set. The whole message fits MAX_MESSAGE_BYTES. In an OMP
- * session every line has OMP prompt syntax defused (see page-forms).
+ * the full answer set. Rejected and dismissed decks produce unambiguous
+ * machine-readable notices instead of answers. The whole message fits
+ * MAX_MESSAGE_BYTES. In an OMP session every line has OMP prompt syntax
+ * defused (see page-forms).
  */
 export function formatReviewMessage(review: ReviewRecord, ompRecipient: boolean): string {
-  const submission = review.submission;
-  if (!submission) throw new Error('the review has no submission');
   const literal = ompRecipient ? literalPrompt : (line: string) => line;
   const title = visibleText(review.spec.title.replace(/\s+/g, ' '));
+  if (review.status === 'rejected') {
+    const resolution = review.resolution;
+    if (!resolution) throw new Error('the rejected review has no resolution');
+    const header = literal(`[review response: ${title} (${review.id}), REJECTED by the user at ${isoSeconds(resolution.resolvedAt)}]`);
+    const raw: string[] = [];
+    if (resolution.reason) {
+      raw.push(...block('reason', visibleText(resolution.reason)));
+      raw.push('The user rejected this proposal (no answers were submitted). Do not proceed with it as proposed.');
+    } else {
+      raw.push('The user rejected this proposal (no answers were submitted; no reason given). Do not proceed with it as proposed.');
+    }
+    const footer = `status: pi-dish-review answers ${review.id}`;
+    return [header, ...raw.map(literal), footer].join('\n');
+  }
+  if (review.status === 'dismissed') {
+    const resolution = review.resolution;
+    if (!resolution) throw new Error('the dismissed review has no resolution');
+    const header = literal(`[review response: ${title} (${review.id}), DISMISSED by the user (no answers) at ${isoSeconds(resolution.resolvedAt)}]`);
+    const body = literal('The user declined to answer this review. Proceed on your own judgement or drop it.');
+    const footer = `status: pi-dish-review answers ${review.id}`;
+    return [header, body, footer].join('\n');
+  }
+  const submission = review.submission;
+  if (!submission) throw new Error('the review has no submission');
   const header = literal(`[review response: ${title} (${review.id}), submitted ${isoSeconds(submission.submittedAt)}]`);
   const raw: string[] = [];
   const questions = reviewQuestions(review.spec);
@@ -489,6 +543,10 @@ export function newReviewId(): string {
   return `rv_${crypto.randomBytes(8).toString('hex')}`;
 }
 
+export function newResolutionId(): string {
+  return `res_${crypto.randomBytes(8).toString('hex')}`;
+}
+
 function storeDir(): string {
   return path.join(dishDir(), 'reviews');
 }
@@ -499,11 +557,24 @@ function storeFile(sessionId: string): string {
 }
 
 function isRecordShape(value: unknown, sessionId: string): value is ReviewRecord {
-  return record(value) && typeof value.id === 'string' && REVIEW_ID_RE.test(value.id) && value.sessionId === sessionId
+  if (!record(value)) return false;
+  const status = value.status;
+  const validStatus = status === 'open' || status === 'submitted' || status === 'cancelled'
+    || status === 'rejected' || status === 'dismissed';
+  const hasResolution = value.resolution !== undefined && value.resolution !== null;
+  const validResolution = !hasResolution || (
+    record(value.resolution) && typeof value.resolution.id === 'string'
+    && typeof value.resolution.resolvedAt === 'number'
+    && (value.resolution.reason === null || typeof value.resolution.reason === 'string')
+    && record(value.resolution.delivery)
+  );
+  return typeof value.id === 'string' && REVIEW_ID_RE.test(value.id) && value.sessionId === sessionId
     && typeof value.createdAt === 'number' && record(value.spec) && Array.isArray(value.media) && Array.isArray(value.assets)
-    && (value.status === 'open' || value.status === 'submitted' || value.status === 'cancelled')
+    && validStatus
     && (value.submission === null || (record(value.submission) && typeof value.submission.id === 'string' && record(value.submission.delivery)))
-    && (value.status === 'submitted') === (value.submission !== null);
+    && (status === 'submitted') === (value.submission !== null)
+    && validResolution
+    && (status === 'rejected' || status === 'dismissed') === hasResolution;
 }
 
 function readFile(file: string): { sessionId: string; reviews: ReviewRecord[] } | null {
@@ -527,11 +598,14 @@ export function readReviews(sessionId: string): ReviewRecord[] {
 
 export function writeReviews(sessionId: string, reviews: ReviewRecord[]): void {
   fs.mkdirSync(storeDir(), { recursive: true, mode: 0o700 });
-  // Answered and cancelled decks are evicted first; open ones are bounded at creation.
+  // Settled terminal decks are evicted first; open ones are bounded at creation.
   let kept = reviews;
   while (kept.length > KEPT_REVIEWS) {
-    const index = kept.findIndex(review => review.status !== 'open'
-      && !(review.submission && (review.submission.delivery.state === 'pending' || review.submission.delivery.state === 'delivering')));
+    const index = kept.findIndex(review => {
+      if (review.status === 'open') return false;
+      const state = reviewDelivery(review)?.state;
+      return state !== 'pending' && state !== 'delivering';
+    });
     if (index < 0) break;
     kept = [...kept.slice(0, index), ...kept.slice(index + 1)];
   }
@@ -602,6 +676,7 @@ export interface ClientReview {
   status: ReviewStatus;
   cards: ClientCard[];
   submission: ReviewSubmission | null;
+  resolution?: ReviewResolution | null;
 }
 
 export function clientReview(review: ReviewRecord): ClientReview {
@@ -626,5 +701,6 @@ export function clientReview(review: ReviewRecord): ClientReview {
       }),
     })),
     submission: review.submission,
+    ...(review.resolution ? { resolution: review.resolution } : {}),
   };
 }

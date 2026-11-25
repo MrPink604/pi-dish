@@ -6,7 +6,7 @@ import { sessionKey } from './helper-identity';
 import type { SelectionOwner, SessionState } from './session-state';
 import {
   buildSubmitAnswers, decodeClientReview, decodeReviewList, firstMissingRequired, hydrateDraft,
-  initialDraft, REVIEW_CLIENT_HEADER, REVIEW_CLIENT_VALUE, reviewReceiptSummary,
+  initialDraft, MAX_REJECT_REASON, REVIEW_CLIENT_HEADER, REVIEW_CLIENT_VALUE, reviewDelivery, reviewReceiptSummary,
   type ClientReview, type DraftAnswer, type ReviewCard, type ReviewMedia, type ReviewQuestion, type ReviewDraft, type ReviewStatus,
 } from './review-deck-data';
 
@@ -30,7 +30,14 @@ interface LightboxState {
   readonly events: AbortController;
 }
 
-const STATUS_RANK: Record<ReviewStatus, number> = { open: 0, cancelled: 1, submitted: 2 };
+const DISMISS_ARM_MS = 4000;
+const STATUS_RANK: Record<ReviewStatus, number> = {
+  open: 0,
+  cancelled: 1,
+  dismissed: 2,
+  rejected: 2,
+  submitted: 2,
+};
 const DELIVERY_RANK: Record<string, number> = {
   pending: 0,
   delivering: 1,
@@ -46,14 +53,18 @@ function isForwardReviewUpdate(existing: ClientReview | undefined, incoming: Cli
   if (existing.updatedAt !== null && incoming.updatedAt !== null && incoming.updatedAt < existing.updatedAt) {
     return false;
   }
-  if (existing.status === 'submitted' && incoming.status === 'submitted') {
-    const curRank = DELIVERY_RANK[existing.submission?.delivery.state ?? ''] ?? -1;
-    const nextRank = DELIVERY_RANK[incoming.submission?.delivery.state ?? ''] ?? -1;
-    if (nextRank < curRank) return false;
-    if (nextRank > curRank) return true;
-    const curAt = existing.submission?.delivery.at ?? existing.submission?.submittedAt ?? 0;
-    const nextAt = incoming.submission?.delivery.at ?? incoming.submission?.submittedAt ?? 0;
-    if (nextAt < curAt) return false;
+  if (existing.status === incoming.status) {
+    const curDelivery = reviewDelivery(existing);
+    const nextDelivery = reviewDelivery(incoming);
+    if (curDelivery || nextDelivery) {
+      const curRank = DELIVERY_RANK[curDelivery?.state ?? ''] ?? -1;
+      const nextRank = DELIVERY_RANK[nextDelivery?.state ?? ''] ?? -1;
+      if (nextRank < curRank) return false;
+      if (nextRank > curRank) return true;
+      const curAt = curDelivery?.at ?? existing.submission?.submittedAt ?? existing.resolution?.resolvedAt ?? 0;
+      const nextAt = nextDelivery?.at ?? incoming.submission?.submittedAt ?? incoming.resolution?.resolvedAt ?? 0;
+      if (nextAt < curAt) return false;
+    }
   }
   return true;
 }
@@ -80,6 +91,8 @@ export function createReviewDecks(options: {
   host: (id: string | null) => HostEndpoint | null;
   /** Whether the host is known to lack `reviewsV1` (returns false only when definitely absent). */
   supports?: (host: HostEndpoint) => boolean;
+  /** Whether the host advertises `reviewsDismissV1` (fail-closed: false hides Reject/Dismiss). */
+  supportsDismiss?: (host: HostEndpoint) => boolean;
   /** Builds a browser-loadable URL for session-scoped media (includes peer `/hosts/<name>` and private unlock). */
   mediaUrl: (hostId: string | null, apiPath: string) => string;
   /** Builds a browser-loadable URL for `/page/<token>...` paths or `https://` URLs. */
@@ -100,12 +113,34 @@ export function createReviewDecks(options: {
   const mediaBlobs = new Map<string, { url: string; reviewId: string }>();
   const mediaLoads = new Map<string, Promise<string | null>>();
   const expandedReceipts = new Set<string>();
-  const submitting = new Set<string>();
+  const submitting = new Map<string, 'submit' | 'reject' | 'dismiss'>();
+  const rejectOpen = new Set<string>();
+  const rejectReasons = new Map<string, string>();
+  let dismissArmedId: string | null = null;
+  let dismissArmTimer: ReturnType<typeof setTimeout> | null = null;
   const errors = new Map<string, string>();
   let jumpBarEl: HTMLButtonElement | null = null;
   let scrollFrame: number | null = null;
   let lightbox: LightboxState | null = null;
   const domEvents = new AbortController();
+
+  function canDismissForOwner(owner: ActiveOwner | null): boolean {
+    return !!owner && !!options.supportsDismiss?.(owner.endpoint);
+  }
+
+  function disarmDismiss(): void {
+    if (dismissArmTimer !== null) {
+      clearTimeout(dismissArmTimer);
+      dismissArmTimer = null;
+    }
+    dismissArmedId = null;
+  }
+
+  function clearTransientDeckState(reviewId: string): void {
+    rejectOpen.delete(reviewId);
+    rejectReasons.delete(reviewId);
+    if (dismissArmedId === reviewId) disarmDismiss();
+  }
 
   function draftStorageKey(hostId: string | null, sessionId: string, reviewId: string): string {
     return `pi-dish-review-draft:${sessionKey(hostId, sessionId)}:${reviewId}`;
@@ -445,10 +480,11 @@ export function createReviewDecks(options: {
   }
 
   function deliveryBadgeHtml(review: ClientReview): string {
-    const state = review.submission?.delivery.state;
+    const delivery = reviewDelivery(review);
+    const state = delivery?.state;
     if (!state || state === 'delivered') return '';
     if (state === 'pending' || state === 'delivering') return '<span class="badge review-delivery-badge pending">sending…</span>';
-    const title = review.submission?.delivery.error ? ` title="${escapeHtml(review.submission.delivery.error)}"` : '';
+    const title = delivery?.error ? ` title="${escapeHtml(delivery.error)}"` : '';
     return `<span class="badge review-delivery-badge warn"${title}>${escapeHtml(state)}</span>`;
   }
 
@@ -485,6 +521,26 @@ export function createReviewDecks(options: {
       </div>`;
     }
 
+    if (review.status === 'rejected' || review.status === 'dismissed') {
+      const isRejected = review.status === 'rejected';
+      const reason = isRejected ? (review.resolution?.reason || '') : '';
+      const deliveryError = review.resolution?.delivery.error || '';
+      const pageLink = review.companionPage
+        ? `<a class="review-page-link" href="${escapeHtml(options.pageUrl(hostId, review.companionPage))}" target="_blank" rel="noopener noreferrer">Full ↗</a>` : '';
+      return `<div class="review-receipt-line">
+        <span class="review-icon ${isRejected ? 'rejected' : 'muted'}" aria-hidden="true">${isRejected ? '✕' : '–'}</span>
+        <span class="review-receipt-copy">
+          <span class="review-receipt-title">${isRejected ? 'Rejected' : 'Dismissed'} · ${escapeHtml(review.title)}</span>
+          ${isRejected
+            ? (reason ? `<span class="review-receipt-reason">${escapeHtml(reason)}</span>` : '<span class="review-receipt-meta">No answers sent</span>')
+            : '<span class="review-receipt-meta">Declined to answer</span>'}
+        </span>
+        ${deliveryBadgeHtml(review)}
+        ${pageLink}
+      </div>
+      ${deliveryError ? `<div class="review-receipt-delivery-note review-receipt-delivery-inline">${escapeHtml(deliveryError)}</div>` : ''}`;
+    }
+
     if (review.status === 'submitted') {
       const open = expandedReceipts.has(review.id);
       const pageLink = review.companionPage
@@ -503,12 +559,17 @@ export function createReviewDecks(options: {
     }
 
     const draft = loadDraft(hostId, review);
-    const busy = submitting.has(review.id);
+    const pendingAction = submitting.get(review.id) ?? null;
+    const busy = pendingAction !== null;
     const error = errors.get(review.id) || '';
     const total = review.cards.length;
     const current = Math.max(0, Math.min(draft.cardIndex, total - 1));
     draft.cardIndex = current;
     const card = review.cards[current]!;
+    const canDismiss = canDismissForOwner(activeOwner);
+    const isRejectOpen = canDismiss && rejectOpen.has(review.id);
+    const isDismissArmed = canDismiss && dismissArmedId === review.id;
+    const rejectReason = rejectReasons.get(review.id) ?? '';
     const pageLink = review.companionPage
       ? `<a class="review-page-link" href="${escapeHtml(options.pageUrl(hostId, review.companionPage))}" target="_blank" rel="noopener noreferrer">Full ↗</a>` : '';
     const dots = total > 1
@@ -544,13 +605,30 @@ export function createReviewDecks(options: {
     <div class="review-body">${cardsHtml}</div>
     ${error ? `<div class="review-error" role="alert">${escapeHtml(error)}</div>` : ''}
     <div class="review-foot">
-      ${!isFirst ? `<button type="button" class="btn btn-sm review-back-btn" data-review-action="prev-card"${busy ? ' disabled' : ''}>← Back</button>` : '<span></span>'}
-      <div class="review-foot-right">
-        ${canQuickSubmit ? `<button type="button" class="btn btn-sm" data-review-action="submit"${busy ? ' disabled' : ''}>${busy ? 'Sending…' : 'Accept defaults'}</button>` : ''}
-        ${!isLast
-          ? `<button type="button" class="btn btn-sm btn-primary" data-review-action="next-card"${busy ? ' disabled' : ''}>Next →</button>`
-          : `<button type="button" class="btn btn-sm btn-primary" data-review-action="submit"${busy ? ' disabled' : ''}>${busy ? 'Sending…' : 'Submit'}</button>`}
+      <div class="review-foot-main">
+        ${!isFirst ? `<button type="button" class="btn btn-sm review-back-btn" data-review-action="prev-card"${busy ? ' disabled' : ''}>← Back</button>` : '<span></span>'}
+        <div class="review-foot-right">
+          ${canQuickSubmit ? `<button type="button" class="btn btn-sm" data-review-action="submit"${busy ? ' disabled' : ''}>${pendingAction === 'submit' ? 'Sending…' : 'Accept defaults'}</button>` : ''}
+          ${!isLast
+            ? `<button type="button" class="btn btn-sm btn-primary" data-review-action="next-card"${busy ? ' disabled' : ''}>Next →</button>`
+            : `<button type="button" class="btn btn-sm btn-primary" data-review-action="submit"${busy ? ' disabled' : ''}>${pendingAction === 'submit' ? 'Sending…' : 'Submit'}</button>`}
+        </div>
       </div>
+      ${canDismiss ? `<div class="review-foot-secondary">
+        <button type="button" class="btn btn-sm review-secondary-btn review-dismiss-btn${isDismissArmed ? ' armed' : ''}" data-review-action="dismiss" aria-pressed="${isDismissArmed ? 'true' : 'false'}"${busy ? ' disabled' : ''}>${pendingAction === 'dismiss' ? 'Dismissing…' : isDismissArmed ? 'Dismiss? Tap again' : 'Dismiss'}</button>
+        <button type="button" class="btn btn-sm review-secondary-btn review-reject-btn${isRejectOpen ? ' active' : ''}" data-review-action="open-reject" aria-expanded="${isRejectOpen ? 'true' : 'false'}"${busy ? ' disabled' : ''}>Reject…</button>
+      </div>` : ''}
+      ${isRejectOpen ? `<div class="review-reject-panel">
+        <label class="review-reject-label" for="review-reject-${escapeHtml(review.id)}">
+          <span>Reject proposal — optional reason</span>
+          <span class="review-reject-count" data-review-reject-count="${escapeHtml(review.id)}">${rejectReason.length}/${MAX_REJECT_REASON}</span>
+        </label>
+        <textarea id="review-reject-${escapeHtml(review.id)}" class="review-textarea review-reject-input" rows="2" maxlength="${MAX_REJECT_REASON}" data-review-input="reject-reason" placeholder="Why not? (optional, max ${MAX_REJECT_REASON} chars)…"${busy ? ' disabled' : ''}>${escapeHtml(rejectReason)}</textarea>
+        <div class="review-reject-actions">
+          <button type="button" class="btn btn-sm review-secondary-btn" data-review-action="cancel-reject"${busy ? ' disabled' : ''}>Cancel</button>
+          <button type="button" class="btn btn-sm review-danger-btn" data-review-action="confirm-reject"${busy ? ' disabled' : ''}>${pendingAction === 'reject' ? 'Rejecting…' : 'Confirm reject'}</button>
+        </div>
+      </div>` : ''}
     </div>`;
   }
 
@@ -597,6 +675,13 @@ export function createReviewDecks(options: {
 
   function deckRenderKey(hostId: string | null, review: ClientReview): string {
     if (review.status === 'cancelled') return `cancelled|${review.title}`;
+    if (review.status === 'rejected' || review.status === 'dismissed') {
+      return JSON.stringify([
+        review.status, hostId ?? '', review.title, review.companionPage ?? '',
+        review.resolution?.id ?? '', review.resolution?.reason ?? '',
+        review.resolution?.delivery.state ?? '', review.resolution?.delivery.error ?? '',
+      ]);
+    }
     if (review.status === 'submitted') {
       return JSON.stringify([
         'submitted', hostId ?? '', review.title, review.companionPage ?? '',
@@ -610,9 +695,12 @@ export function createReviewDecks(options: {
       if (!entry || question.type === 'text') return [question.id];
       return [question.id, entry.value, entry.noteOpen];
     }));
+    const canDismiss = canDismissForOwner(activeOwner);
     return JSON.stringify([
       'open', hostId ?? '', review.title, review.companionPage ?? '', review.cards.length,
-      draft.cardIndex, submitting.has(review.id), errors.get(review.id) ?? '', questionState,
+      draft.cardIndex, submitting.get(review.id) ?? '', errors.get(review.id) ?? '',
+      canDismiss, canDismiss && rejectOpen.has(review.id), canDismiss && dismissArmedId === review.id,
+      questionState,
     ]);
   }
 
@@ -630,6 +718,8 @@ export function createReviewDecks(options: {
     el.dataset.reviewStatus = review.status;
     el.classList.toggle('is-open', review.status === 'open');
     el.classList.toggle('is-submitted', review.status === 'submitted');
+    el.classList.toggle('is-rejected', review.status === 'rejected');
+    el.classList.toggle('is-dismissed', review.status === 'dismissed');
     el.classList.toggle('is-cancelled', review.status === 'cancelled');
     if (!placeDeck(container, el, review)) {
       renderedKeys.delete(review.id);
@@ -738,8 +828,9 @@ export function createReviewDecks(options: {
 
     // Persist submissionId before sending (including untouched "Accept defaults") so reload retries stay idempotent.
     saveDraft(captured.selection.host, review, draft);
+    disarmDismiss();
     errors.delete(reviewId);
-    submitting.add(reviewId);
+    submitting.set(reviewId, 'submit');
     sync();
     try {
       const response = await options.request(
@@ -760,6 +851,7 @@ export function createReviewDecks(options: {
           return;
         }
         clearDraft(captured.selection.host, review.id, review.sessionId);
+        clearTransientDeckState(review.id);
         errors.delete(reviewId);
         if (isForwardReviewUpdate(reviewsById.get(updated.id), updated)) {
           reviewsById.set(updated.id, updated);
@@ -770,6 +862,7 @@ export function createReviewDecks(options: {
         const serverReview = decodeClientReview(data.review);
         if (serverReview && serverReview.status !== 'open') {
           clearDraft(captured.selection.host, review.id, review.sessionId);
+          clearTransientDeckState(review.id);
           errors.delete(reviewId);
           if (isForwardReviewUpdate(reviewsById.get(serverReview.id), serverReview)) {
             reviewsById.set(serverReview.id, serverReview);
@@ -796,6 +889,94 @@ export function createReviewDecks(options: {
         errors.set(reviewId, 'Sign-in expired — reload to sign in; your draft is saved.');
       } else {
         errors.set(reviewId, `Could not submit review: ${errorMessage(error)}`);
+      }
+    } finally {
+      submitting.delete(reviewId);
+      if (owns(captured)) sync();
+    }
+  }
+
+  async function resolveReview(reviewId: string, action: 'reject' | 'dismiss'): Promise<void> {
+    if (disposed || !activeOwner || !owns(activeOwner) || submitting.has(reviewId)) return;
+    if (!canDismissForOwner(activeOwner)) return;
+    const review = reviewsById.get(reviewId);
+    if (!review || review.status !== 'open') return;
+    const captured = activeOwner;
+    const draft = loadDraft(captured.selection.host, review);
+    const reason = action === 'reject' ? (rejectReasons.get(reviewId) ?? '').trim() : '';
+    if (action === 'reject' && reason.length > MAX_REJECT_REASON) {
+      errors.set(reviewId, `Reason is ${reason.length} characters; max is ${MAX_REJECT_REASON}.`);
+      sync();
+      return;
+    }
+
+    // Persist resolutionId before sending so reload retries stay idempotent.
+    saveDraft(captured.selection.host, review, draft);
+    disarmDismiss();
+    errors.delete(reviewId);
+    submitting.set(reviewId, action);
+    sync();
+    const verb = action === 'reject' ? 'reject' : 'dismiss';
+    const payload = action === 'reject'
+      ? { resolutionId: draft.resolutionId, ...(reason ? { reason } : {}) }
+      : { resolutionId: draft.resolutionId };
+    try {
+      const response = await options.request(
+        captured.endpoint,
+        `/api/sessions/${encodeURIComponent(review.sessionId)}/reviews/${encodeURIComponent(review.id)}/${action}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', [REVIEW_CLIENT_HEADER]: REVIEW_CLIENT_VALUE },
+          body: JSON.stringify(payload),
+        },
+      );
+      const data = await readJson(response);
+      if (!owns(captured)) return;
+      if (response.ok) {
+        const updated = decodeClientReview(record(data) ? data.review : null);
+        if (!updated) {
+          errors.set(reviewId, 'Unexpected response from server — retry or reload.');
+          return;
+        }
+        clearDraft(captured.selection.host, review.id, review.sessionId);
+        clearTransientDeckState(review.id);
+        errors.delete(reviewId);
+        if (isForwardReviewUpdate(reviewsById.get(updated.id), updated)) {
+          reviewsById.set(updated.id, updated);
+        }
+        return;
+      }
+      if (response.status === 409 && record(data)) {
+        const serverReview = decodeClientReview(data.review);
+        if (serverReview && serverReview.status !== 'open') {
+          clearDraft(captured.selection.host, review.id, review.sessionId);
+          clearTransientDeckState(review.id);
+          errors.delete(reviewId);
+          if (isForwardReviewUpdate(reviewsById.get(serverReview.id), serverReview)) {
+            reviewsById.set(serverReview.id, serverReview);
+          }
+          return;
+        }
+      }
+      if (response.status === 401 || response.status === 403) {
+        if (captured.endpoint.base === '') options.originFailure?.('auth');
+        const detail = responseError(response, data, '');
+        errors.set(reviewId, detail && !/HTTP 40[13]/.test(detail)
+          ? detail
+          : 'Sign-in expired — reload to sign in.');
+        return;
+      }
+      errors.set(reviewId, responseError(response, data, `Could not ${verb} review (HTTP ${response.status})`));
+    } catch (error) {
+      if (!owns(captured)) return;
+      const originFailure = captured.endpoint.base === '' ? classifyOriginError(error) : null;
+      if (originFailure === 'auth') {
+        options.originFailure?.('auth');
+        errors.set(reviewId, 'Sign-in expired — reload to sign in.');
+      } else if (error instanceof ApiHttpError && (error.status === 401 || error.status === 403)) {
+        errors.set(reviewId, 'Sign-in expired — reload to sign in.');
+      } else {
+        errors.set(reviewId, `Could not ${verb} review: ${errorMessage(error)}`);
       }
     } finally {
       submitting.delete(reviewId);
@@ -852,6 +1033,59 @@ export function createReviewDecks(options: {
     const draft = loadDraft(hostId, review);
     const questionId = actionEl.dataset.questionId || '';
     const entry = questionId ? draft.answers[questionId] : undefined;
+
+    if (action === 'dismiss') {
+      if (!canDismissForOwner(activeOwner)) return;
+      if (dismissArmedId === reviewId) {
+        disarmDismiss();
+        void resolveReview(reviewId, 'dismiss');
+        return;
+      }
+      const captured = activeOwner;
+      disarmDismiss();
+      rejectOpen.delete(reviewId);
+      errors.delete(reviewId);
+      dismissArmedId = reviewId;
+      dismissArmTimer = setTimeout(() => {
+        if (dismissArmedId !== reviewId) return;
+        disarmDismiss();
+        if (!disposed && owns(captured)) sync();
+      }, DISMISS_ARM_MS);
+      renderOne(document.getElementById('messages')!, review);
+      return;
+    }
+
+    if (action === 'open-reject') {
+      if (!canDismissForOwner(activeOwner)) return;
+      disarmDismiss();
+      errors.delete(reviewId);
+      const opening = !rejectOpen.has(reviewId);
+      if (opening) rejectOpen.add(reviewId);
+      else rejectOpen.delete(reviewId);
+      const container = document.getElementById('messages')!;
+      renderOne(container, review);
+      if (opening) {
+        const updatedDeck = deckElement(container, reviewId);
+        const input = updatedDeck?.querySelector<HTMLTextAreaElement>('textarea[data-review-input="reject-reason"]');
+        input?.focus();
+      }
+      return;
+    }
+
+    if (action === 'cancel-reject') {
+      rejectOpen.delete(reviewId);
+      errors.delete(reviewId);
+      renderOne(document.getElementById('messages')!, review);
+      return;
+    }
+
+    if (action === 'confirm-reject') {
+      if (!canDismissForOwner(activeOwner)) return;
+      void resolveReview(reviewId, 'reject');
+      return;
+    }
+
+    if (dismissArmedId !== null) disarmDismiss();
 
     if (action === 'pick-choice' && entry) {
       entry.value = actionEl.dataset.value ?? null;
@@ -940,12 +1174,23 @@ export function createReviewDecks(options: {
     const input = event.target;
     if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return;
     const kind = input.dataset.reviewInput;
-    const questionId = input.dataset.questionId || '';
     const deck = input.closest<HTMLElement>('.review-deck');
-    if (!kind || !questionId || !deck) return;
+    if (!kind || !deck) return;
     const reviewId = deck.dataset.reviewId || '';
     const review = reviewsById.get(reviewId);
     if (!review || review.status !== 'open') return;
+    if (kind === 'reject-reason') {
+      rejectReasons.set(reviewId, input.value);
+      const counter = deck.querySelector<HTMLElement>(`[data-review-reject-count="${CSS.escape(reviewId)}"]`);
+      if (counter) counter.textContent = `${input.value.length}/${MAX_REJECT_REASON}`;
+      if (errors.delete(reviewId)) {
+        deck.querySelector('.review-error')?.remove();
+        renderedKeys.set(reviewId, deckRenderKey(activeOwner.selection.host, review));
+      }
+      return;
+    }
+    const questionId = input.dataset.questionId || '';
+    if (!questionId) return;
     const draft = loadDraft(activeOwner.selection.host, review);
     const entry = draft.answers[questionId];
     if (!entry) return;
@@ -971,11 +1216,14 @@ export function createReviewDecks(options: {
     sessionAbort?.abort();
     sessionAbort = null;
     activeOwner = null;
+    disarmDismiss();
     reviewsById.clear();
     drafts.clear();
     renderedKeys.clear();
     expandedReceipts.clear();
     submitting.clear();
+    rejectOpen.clear();
+    rejectReasons.clear();
     errors.clear();
     jumpBarEl?.remove();
     jumpBarEl = null;
@@ -1032,6 +1280,7 @@ export function createReviewDecks(options: {
           if (wasNew) hasNewOpen = true;
         } else {
           clearDraft(selection.host, review.id, review.sessionId);
+          clearTransientDeckState(review.id);
           revokeReviewMedia(review.id);
         }
       }
@@ -1076,6 +1325,7 @@ export function createReviewDecks(options: {
     reviewsById.set(review.id, review);
     if (review.status !== 'open') {
       clearDraft(session.host, review.id, review.sessionId);
+      clearTransientDeckState(review.id);
       revokeReviewMedia(review.id);
     }
     const container = document.getElementById('messages');

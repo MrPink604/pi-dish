@@ -2,9 +2,10 @@ import { record } from '../core/helper-values';
 
 export const REVIEW_CLIENT_HEADER = 'X-Pi-Dish-Client';
 export const REVIEW_CLIENT_VALUE = '1';
+export const MAX_REJECT_REASON = 500;
 
 export type ReviewQuestionType = 'choice' | 'multi' | 'approve' | 'text';
-export type ReviewStatus = 'open' | 'submitted' | 'cancelled';
+export type ReviewStatus = 'open' | 'submitted' | 'cancelled' | 'rejected' | 'dismissed';
 export type ReviewDeliveryState = 'pending' | 'delivering' | 'delivered' | 'failed' | 'uncertain';
 export type ReviewAnswerValue = string | string[] | null;
 
@@ -82,6 +83,13 @@ export interface ReviewSubmission {
   readonly delivery: ReviewDelivery;
 }
 
+export interface ReviewResolution {
+  readonly id: string;
+  readonly resolvedAt: number;
+  readonly reason: string | null;
+  readonly delivery: ReviewDelivery;
+}
+
 export interface ClientReview {
   readonly id: string;
   readonly sessionId: string;
@@ -94,6 +102,7 @@ export interface ClientReview {
   readonly status: ReviewStatus;
   readonly cards: readonly ReviewCard[];
   readonly submission: ReviewSubmission | null;
+  readonly resolution: ReviewResolution | null;
 }
 
 export interface DraftAnswer {
@@ -106,11 +115,12 @@ export interface DraftAnswer {
 export interface ReviewDraft {
   cardIndex: number;
   submissionId: string;
+  resolutionId: string;
   answers: Record<string, DraftAnswer>;
 }
 
 const DELIVERY_STATES: readonly string[] = ['pending', 'delivering', 'delivered', 'failed', 'uncertain'];
-const STATUSES: readonly string[] = ['open', 'submitted', 'cancelled'];
+const STATUSES: readonly string[] = ['open', 'submitted', 'cancelled', 'rejected', 'dismissed'];
 
 const str = (value: unknown): string | null => typeof value === 'string' ? value : null;
 const num = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -214,6 +224,23 @@ function decodeSubmission(raw: unknown): ReviewSubmission | null {
   };
 }
 
+function decodeResolution(raw: unknown): ReviewResolution | null {
+  if (!record(raw) || typeof raw.id !== 'string' || !record(raw.delivery)) return null;
+  const deliveryState = typeof raw.delivery.state === 'string' && DELIVERY_STATES.includes(raw.delivery.state)
+    ? raw.delivery.state as ReviewDeliveryState : 'pending';
+  const via = raw.delivery.via === 'waiter' || raw.delivery.via === 'message' ? raw.delivery.via : null;
+  return {
+    id: raw.id,
+    resolvedAt: num(raw.resolvedAt) ?? 0,
+    reason: str(raw.reason),
+    delivery: { state: deliveryState, via, at: num(raw.delivery.at), error: str(raw.delivery.error) },
+  };
+}
+
+export function reviewDelivery(review: Pick<ClientReview, 'submission' | 'resolution'>): ReviewDelivery | null {
+  return review.submission?.delivery ?? review.resolution?.delivery ?? null;
+}
+
 export function decodeClientReview(raw: unknown): ClientReview | null {
   if (!record(raw) || typeof raw.id !== 'string' || typeof raw.sessionId !== 'string' || typeof raw.title !== 'string'
     || typeof raw.status !== 'string' || !STATUSES.includes(raw.status) || !Array.isArray(raw.cards)) {
@@ -233,6 +260,7 @@ export function decodeClientReview(raw: unknown): ClientReview | null {
     status: raw.status as ReviewStatus,
     cards,
     submission: raw.submission ? decodeSubmission(raw.submission) : null,
+    resolution: raw.resolution ? decodeResolution(raw.resolution) : null,
   };
 }
 
@@ -241,14 +269,22 @@ export function decodeReviewList(raw: unknown): ClientReview[] {
   return raw.reviews.map(decodeClientReview).filter((item): item is ClientReview => item !== null);
 }
 
-export function generateSubmissionId(): string {
+function randomToken(prefix: string): string {
   const bytes = new Uint8Array(12);
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
     crypto.getRandomValues(bytes);
   } else {
     for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
   }
-  return 'sub_' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return prefix + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export function generateSubmissionId(): string {
+  return randomToken('sub_');
+}
+
+export function generateResolutionId(): string {
+  return randomToken('res_');
 }
 
 export function initialDraft(review: ClientReview): ReviewDraft {
@@ -264,7 +300,7 @@ export function initialDraft(review: ClientReview): ReviewDraft {
       answers[question.id] = { value, note: '', other: '', noteOpen: false };
     }
   }
-  return { cardIndex: 0, submissionId: generateSubmissionId(), answers };
+  return { cardIndex: 0, submissionId: generateSubmissionId(), resolutionId: generateResolutionId(), answers };
 }
 
 export function hydrateDraft(review: ClientReview, raw: unknown): ReviewDraft {
@@ -273,6 +309,7 @@ export function hydrateDraft(review: ClientReview, raw: unknown): ReviewDraft {
   const idx = num(raw.cardIndex);
   if (idx !== null && Number.isInteger(idx) && idx >= 0 && idx < review.cards.length) base.cardIndex = idx;
   if (typeof raw.submissionId === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(raw.submissionId)) base.submissionId = raw.submissionId;
+  if (typeof raw.resolutionId === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(raw.resolutionId)) base.resolutionId = raw.resolutionId;
   if (record(raw.answers)) {
     for (const card of review.cards) {
       for (const question of card.questions) {
@@ -355,14 +392,17 @@ export function reviewReceiptSummary(review: ClientReview): string {
 export interface ParsedReviewResponseMessage {
   readonly title: string;
   readonly reviewId: string;
+  readonly status: 'submitted' | 'rejected' | 'dismissed';
   readonly submittedAt: string;
   readonly body: string;
 }
 
-const REVIEW_RESPONSE_RE = /^\[review response:\s*(.+?)\s+\((rv_[0-9a-f]{16})\),\s*submitted\s+([^\]]+)\]\n?([\s\S]*)$/;
+const REVIEW_RESPONSE_RE = /^\[review response:\s*(.+?)\s+\((rv_[0-9a-f]{16})\),\s*(?:submitted\s+([^\]]+)|REJECTED by the user at\s+([^\]]+)|DISMISSED by the user \(no answers\) at\s+([^\]]+))\]\n?([\s\S]*)$/;
 
 export function parseReviewResponseMessage(text: string): ParsedReviewResponseMessage | null {
   const match = REVIEW_RESPONSE_RE.exec(text.trim());
   if (!match) return null;
-  return { title: match[1]!.trim(), reviewId: match[2]!, submittedAt: match[3]!.trim(), body: (match[4] ?? '').trim() };
+  const status: 'submitted' | 'rejected' | 'dismissed' = match[3] ? 'submitted' : match[4] ? 'rejected' : 'dismissed';
+  const at = (match[3] ?? match[4] ?? match[5] ?? '').trim();
+  return { title: match[1]!.trim(), reviewId: match[2]!, status, submittedAt: at, body: (match[6] ?? '').trim() };
 }

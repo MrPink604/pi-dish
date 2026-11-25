@@ -1020,7 +1020,9 @@ const PREAMBLE = [
   '',
   'Reviews: when the user must decide two or more things, or pick between visuals, ask with request_review: a few cards,',
   'one idea and at most three questions each, your recommendation preselected. Never list open questions at the end of a',
-  'message, and on a status check point to the open deck instead of asking again.',
+  'message, and on a status check point to the open deck instead of asking again. A "[review response:" message can also',
+  'report REJECTED (stop — the user said no to the proposal, with optional reason) or DISMISSED (user declined to answer;',
+  'proceed on your own judgement or drop it).',
   '',
   'Code mode: the codemode tool runs a short JavaScript script that calls your tools as `await tools.<name>(args)`;',
   'only what the script prints or returns enters this conversation. Use it when a request takes several calls whose',
@@ -2362,7 +2364,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       + 'recommended answers preselected. Use it instead of listing questions in a message. Limits: 1-6 cards; each card has '
       + 'an id, a title, one short paragraph of context (at most 500 characters: what is decided and what changes), 0-4 '
       + 'labelled shots and 1-3 questions. Pre-select your recommendation on every question with a one-line "why". The '
-      + 'answers arrive later as a message starting "[review response:"; end your turn after posting and do not repeat the '
+      + 'answers arrive later as a message starting "[review response:" (which may also report REJECTED with an optional '
+      + 'reason, or DISMISSED if the user declined to answer); end your turn after posting and do not repeat the '
       + 'questions in chat.',
     parameters: obj({
       title: str(),

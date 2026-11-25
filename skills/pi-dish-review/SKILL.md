@@ -55,3 +55,18 @@ touched), `/page/<token>/…` paths or https URLs.
    re-ask unanswered questions in status messages, no ledgers or self-scores.
 9. **Leave room to punt.** Keep `allowOther` (on by default); if an answer
    raises one quick ambiguity, follow up with a one-card deck.
+
+## Handling reject and dismiss
+
+The user may also **Reject** or **Dismiss** a deck instead of answering it
+(both carry no answers; `answers <id>` returns JSON with `status` and any
+`reason`):
+
+- **Rejected** (`status: "rejected"`, CLI exit `2`, fallback message
+  `[review response: …, REJECTED by the user at …]`): the user said no to the
+  whole proposal, with an optional `reason`. Stop and do not proceed with it as
+  proposed; acknowledge the rejection or pivot based on the reason.
+- **Dismissed** (`status: "dismissed"`, CLI exit `3`, fallback message
+  `[review response: …, DISMISSED by the user (no answers) at …]`): the user
+  declined to answer. Proceed on your own judgement or drop it — do not re-ask
+  the same deck.
