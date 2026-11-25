@@ -10,6 +10,7 @@ import { formatModelRef } from './helper-models';
 import type { ProcessIdentity } from './contracts';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { SessionOperationError } from './session-operations';
+import { CuBrokerUnavailableError, CuSeatBusyError } from './cu-agent-leases';
 import type { ResumeSessionResult, SessionOperations } from './session-operations';
 import { liveSessionSupports, recoveryRouteId, routeIdentity, routeSessionId, sameProcessIdentity, validateRecoveryRecord } from './session-ownership';
 import type { LiveSession, SessionOwnership } from './session-ownership';
@@ -373,7 +374,8 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       return save(record, 'continued', 'Sent one visible recovery prompt to inspect state before continuing.', { delivery: 'confirmed' });
     } catch (error) {
       const attempt = store.getControl(record.harnessId, record.nativeSessionId).attempt;
-      const uncertain = attempt?.delivery === 'uncertain' || attempt?.status === 'restoring';
+      const preSpawnCuRefusal = error instanceof CuSeatBusyError || error instanceof CuBrokerUnavailableError;
+      const uncertain = attempt?.delivery === 'uncertain' || (!preSpawnCuRefusal && attempt?.status === 'restoring');
       try { return save(record, uncertain ? 'needs-review' : 'failed', errorMessage(error)); }
       catch (persistError) {
         log.error?.(`Recovery ${id}: ${errorMessage(persistError)}`);

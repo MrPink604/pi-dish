@@ -22,8 +22,20 @@ export interface CuBrokerClientOptions {
   socketPath?: () => string | null;
 }
 
+export interface CuBrokerEventsOptions {
+  /** Exact Last-Event-ID header value (e.g. `<generation>:<cursor>`). */
+  readonly lastEventId?: string | null;
+  /** Optional explicit broker generation for ordered SSE resume. */
+  readonly generation?: string | null;
+  /** Optional explicit non-negative broker cursor for ordered SSE resume. */
+  readonly cursor?: number | null;
+}
+
 export interface CuBrokerClient {
   socketPath(): string | null;
+  /** True when PI_DISH_CU_BROKER_SOCKET (or test seam) is configured — even if the socket file is temporarily missing. */
+  configured(): boolean;
+  /** True when the configured socket path currently exists as a live Unix socket. */
   available(): boolean;
   requestJson(
     method: 'GET' | 'POST',
@@ -34,6 +46,7 @@ export interface CuBrokerClient {
   openEvents(
     onResponse: (res: http.IncomingMessage) => void,
     onError: (error: Error) => void,
+    options?: CuBrokerEventsOptions,
   ): http.ClientRequest | null;
 }
 
@@ -54,6 +67,10 @@ export function isSocketPathLive(socketPath: string | null | undefined): socketP
 export function createCuBrokerClient(options: CuBrokerClientOptions = {}): CuBrokerClient {
   const resolveSocket = options.socketPath ?? resolveCuBrokerSocket;
 
+  function configured(): boolean {
+    return resolveSocket() !== null;
+  }
+
   function liveSocket(): string | null {
     const candidate = resolveSocket();
     return isSocketPathLive(candidate) ? candidate : null;
@@ -65,9 +82,13 @@ export function createCuBrokerClient(options: CuBrokerClientOptions = {}): CuBro
     body?: unknown,
     reqOptions: { timeoutMs?: number } = {},
   ): Promise<CuBrokerResponse> {
-    const socket = liveSocket();
-    if (!socket) {
+    const candidate = resolveSocket();
+    if (!candidate) {
       return Promise.reject(httpError('Computer-use broker is not available on this host', 404));
+    }
+    const socket = isSocketPathLive(candidate) ? candidate : null;
+    if (!socket) {
+      return Promise.reject(httpError('Computer-use broker is unavailable', 503));
     }
     const timeoutMs = reqOptions.timeoutMs ?? DEFAULT_BROKER_TIMEOUT_MS;
     const payload = body !== undefined ? JSON.stringify(body) : null;
@@ -133,18 +154,40 @@ export function createCuBrokerClient(options: CuBrokerClientOptions = {}): CuBro
   function openEvents(
     onResponse: (res: http.IncomingMessage) => void,
     onError: (error: Error) => void,
+    eventsOptions?: CuBrokerEventsOptions,
   ): http.ClientRequest | null {
     const socket = liveSocket();
     if (!socket) return null;
+    const headers: http.OutgoingHttpHeaders = {
+      host: 'localhost',
+      accept: 'text/event-stream',
+      'cache-control': 'no-cache',
+    };
+    const params = new URLSearchParams();
+    const generation = typeof eventsOptions?.generation === 'string' && eventsOptions.generation.trim()
+      ? eventsOptions.generation.trim()
+      : null;
+    const cursor = typeof eventsOptions?.cursor === 'number'
+      && Number.isInteger(eventsOptions.cursor)
+      && eventsOptions.cursor >= 0
+      ? eventsOptions.cursor
+      : null;
+    if (generation !== null) params.set('generation', generation);
+    if (cursor !== null) params.set('cursor', String(cursor));
+    const explicitLastEventId = typeof eventsOptions?.lastEventId === 'string'
+      ? eventsOptions.lastEventId.replace(/[\r\n\0]+/g, '').trim().slice(0, 256)
+      : '';
+    if (generation !== null && cursor !== null) {
+      headers['last-event-id'] = `${generation}:${cursor}`;
+    } else if (explicitLastEventId) {
+      headers['last-event-id'] = explicitLastEventId;
+    }
+    const qs = params.toString();
     const req = http.request({
       socketPath: socket,
       method: 'GET',
-      path: '/v1/events',
-      headers: {
-        host: 'localhost',
-        accept: 'text/event-stream',
-        'cache-control': 'no-cache',
-      },
+      path: `/v1/events${qs ? `?${qs}` : ''}`,
+      headers,
     }, onResponse);
     req.on('error', onError);
     req.end();
@@ -153,6 +196,7 @@ export function createCuBrokerClient(options: CuBrokerClientOptions = {}): CuBro
 
   return {
     socketPath: resolveSocket,
+    configured,
     available: () => liveSocket() !== null,
     requestJson,
     openEvents,

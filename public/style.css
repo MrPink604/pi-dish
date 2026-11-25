@@ -7757,6 +7757,11 @@ body.standalone-file-page {
   background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
   color: var(--text-bright);
 }
+.cu-seat-badge[data-tone="agent"][data-owner="other"] {
+  border-color: var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+}
 .cu-seat-badge[data-tone="self"] {
   border-color: color-mix(in srgb, var(--success) 55%, var(--border));
   background: color-mix(in srgb, var(--success) 18%, var(--bg-card));
@@ -8016,6 +8021,12 @@ body.standalone-file-page {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: color-mix(in srgb, var(--accent) 70%, var(--text-bright));
+}
+.cu-seat-cue[data-tone="agent"][data-owner="other"],
+.cu-panel-summary[data-tone="agent"][data-owner="other"] {
+  border-color: var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
 }
 .cu-seat-cue[data-tone="self"] {
   border-color: color-mix(in srgb, var(--success) 50%, transparent);

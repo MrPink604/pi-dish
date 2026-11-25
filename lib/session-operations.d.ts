@@ -16,6 +16,10 @@ export interface SessionOperationObservations {
     getActiveSessions(): readonly ActiveSessionObservation[];
     readSessionCwd(source: SessionSource): unknown;
     recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string, sourceBasis?: string | null): void;
+    /** Invoked after a session is explicitly closed or hibernated so external leases release/cancel cleanly. */
+    onSessionStopped?(sessionId: string): Promise<void> | void;
+    /** Optional non-secret CU seat disposition for async spawn completion. */
+    cuSeatState?(sessionId: string): 'waiting_for_desktop' | null;
 }
 export interface CreateSessionOptions {
     harness?: unknown;
@@ -49,10 +53,16 @@ export type SessionSpawnOperation = {
     status: 'ready';
     createdAt: number;
     sessionId: string;
+    cuSeat?: 'waiting_for_desktop';
 } | {
     status: 'error';
     createdAt: number;
     error: string;
+    code?: string;
+    httpStatus?: number;
+    state?: string | null;
+    epoch?: number | null;
+    holder?: Record<string, unknown> | null;
 };
 interface CloseIntentState {
     preserve: boolean;

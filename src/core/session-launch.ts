@@ -18,6 +18,7 @@ import type { ModelRef } from './helper-types';
 import { dishDir } from './dish-store';
 import { record } from './helper-values';
 import { errorMessage, errorStatus } from './http-boundary';
+import { CuBrokerUnavailableError, CuSeatBusyError, type CuAgentLeases, type CuAgentSpawnHandle } from './cu-agent-leases';
 import * as tmux from './tmux';
 
 export interface HarnessLaunchTarget {
@@ -57,6 +58,8 @@ export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
   name?: string | null;
   target?: HarnessLaunchTarget | null;
   sessionFile: string;
+  /** Canonical pi-dish route id when already known. */
+  sessionId?: string | null;
   /** Bind headless tmux launch to one exact already-running server (-N, no server creation, no RPC fallback). */
   expectedTmuxServer?: ProcessIdentity | null;
 }
@@ -81,6 +84,7 @@ export interface SpawnHarnessOptions {
   cwd?: unknown;
   name?: string | null;
   hidden?: boolean;
+  knownSessionId?: string | null;
   restartPane?: RestartPaneOptions | null;
   expectedTmuxServer?: ProcessIdentity | null;
 }
@@ -111,6 +115,7 @@ export type LaunchOutcome =
 
 export interface SessionLaunchObservations {
   runHarnessModelCommand(descriptor: HarnessDescriptor, options: { cwd?: unknown }): Promise<unknown>;
+  cuLeases?: Pick<CuAgentLeases, 'configured' | 'prepareSpawn' | 'bindSpawnedProcess' | 'attachSpawnedSession' | 'abortSpawn'>;
 }
 
 export interface SessionLaunch {
@@ -144,7 +149,8 @@ function forbidden(error: unknown): LaunchOutcome {
 
 function unclassifiedTmuxFailure(descriptor: HarnessDescriptor, error: unknown, expectedTmuxServer?: ProcessIdentity | null): LaunchOutcome {
   if (error instanceof BridgeSocketConfigError || error instanceof LifecycleInterruption
-      || error instanceof tmux.TmuxServerLostError || expectedTmuxServer) return forbidden(error);
+      || error instanceof tmux.TmuxServerLostError || error instanceof CuSeatBusyError
+      || error instanceof CuBrokerUnavailableError || expectedTmuxServer) return forbidden(error);
   // Only an unclassified launch exception permits the headless RPC fallback.
   return { kind: descriptor.rpcFallback ? 'fallback-permitted' : 'fallback-forbidden', error, status: errorStatus(error, 500) };
 }
@@ -391,7 +397,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return withPrimeLaunch(() => runTmuxLaunch(options, { daemon, snapshot: new Set() }));
   }
 
-  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, restartPane = null, expectedTmuxServer = null }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
+  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, knownSessionId = null, restartPane = null, expectedTmuxServer = null }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
     if (!tmux.isTmuxAvailable()) throw new LaunchError('tmux is not available on this host', 400);
     const socket = target.socket;
     if (!tmux.isSocketAllowed(socket)) throw new LaunchError('Invalid tmux socket', 400);
@@ -436,189 +442,240 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
         }
       }
     }
-    let paneId: string;
-    let restartedPaneProcess: ProcessIdentity | null = null;
-    try {
-      if (restartPane) {
-        paneId = restartPane.paneId;
-        await tmux.respawnPane({
-          socket, paneId, cwd: launchCwd, command, env,
-          expectedProcess: restartPane.paneProcess,
-          beforeAction: restartPane.beforeAction,
-        });
-        if (descriptor.closeMode === 'owned-agent') restartedPaneProcess = await tmux.paneProcessIdentity(socket, paneId);
-        if (restartPane.registry) pruneRegisteredSession(restartPane.registry);
-        tmux.removeSpawn(restartPane.sessionId, restartPane.spawn);
-      } else {
-        ({ paneId } = await tmux.spawnInTmux({
-          socket,
-          tmuxSession: target.tmuxSession,
-          newTmuxSessionName: target.newTmuxSession,
-          windowName: name || target.windowName || null,
-          cwd: launchCwd,
-          command,
-          env,
-          expectedServer: expectedTmuxServer,
-        }));
+    let cuLeaseHandle: CuAgentSpawnHandle | null = null;
+    let cuLeaseAttached = false;
+    if (descriptor.id === 'omp' && observations.cuLeases?.configured()) {
+      cuLeaseHandle = await observations.cuLeases.prepareSpawn({
+        knownSessionId: restartPane?.sessionId ?? knownSessionId ?? null,
+        isRestart: !!restartPane,
+      });
+      if (cuLeaseHandle) {
+        // Inject the non-secret CU_BROKER_* variables via `env` in the pane command
+        // rather than `tmux -e` so `tmux new-session` never stores them in the
+        // session environment or leaks them to sibling windows. `env` execs the
+        // target in place, preserving the pane's exact (pid, pidStartTime).
+        const cuEnvPairs = Object.entries(cuLeaseHandle.env).map(([k, v]) => `${k}=${v}`);
+        if (cuEnvPairs.length) {
+          command = ['env', ...cuEnvPairs, ...command];
+        }
       }
-    } catch (error) {
-      if (error instanceof LifecycleInterruption || error instanceof tmux.TmuxServerLostError) throw error;
-      const action = restartPane ? 'restart tmux pane' : 'open tmux window';
-      throw new LaunchError(`Failed to ${action}: ${errorMessage(error)}`, 500);
     }
+    try {
+      let paneId: string;
+      let restartedPaneProcess: ProcessIdentity | null = null;
+      try {
+        if (restartPane) {
+          paneId = restartPane.paneId;
+          await tmux.respawnPane({
+            socket, paneId, cwd: launchCwd, command, env,
+            expectedProcess: restartPane.paneProcess,
+            beforeAction: restartPane.beforeAction,
+          });
+          if (descriptor.closeMode === 'owned-agent') restartedPaneProcess = await tmux.paneProcessIdentity(socket, paneId);
+          if (restartPane.registry) pruneRegisteredSession(restartPane.registry);
+          tmux.removeSpawn(restartPane.sessionId, restartPane.spawn);
+        } else {
+          ({ paneId } = await tmux.spawnInTmux({
+            socket,
+            tmuxSession: target.tmuxSession,
+            newTmuxSessionName: target.newTmuxSession,
+            windowName: name || target.windowName || null,
+            cwd: launchCwd,
+            command,
+            env,
+            expectedServer: expectedTmuxServer,
+          }));
+        }
+      } catch (error) {
+        if (error instanceof LifecycleInterruption || error instanceof tmux.TmuxServerLostError) throw error;
+        const action = restartPane ? 'restart tmux pane' : 'open tmux window';
+        throw new LaunchError(`Failed to ${action}: ${errorMessage(error)}`, 500);
+      }
 
-    const timeoutMs = Number(process.env.PI_DISH_SPAWN_TIMEOUT_MS) || 30000;
-    const timeoutLabel = timeoutMs < 1000 ? `${timeoutMs}ms` : `${Math.round(timeoutMs / 1000)}s`;
-    const deadline = Date.now() + timeoutMs;
-    const timeoutReason = prime
-      ? `${descriptor.label} did not appear in its daemon roster within ${timeoutLabel}`
-      : `${descriptor.label} did not register within ${timeoutLabel}`;
-    const resumeFile = prime ? launchResumeFile(args) : null;
-    let registrationError: LaunchError | null = null;
-    let serverLostError: tmux.TmuxServerLostError | null = null;
-    const verifyExpectedServer = async (): Promise<void> => {
-      if (!expectedTmuxServer) return;
-      if (!processIdentityAlive(expectedTmuxServer) || !sameProcessIdentity(await tmux.serverIdentity(socket), expectedTmuxServer)) {
-        throw new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} is no longer running`, false);
+      // Bind the CU agent lease promptly to the omp pane's (pid, pidStartTime)
+      // right after spawnInTmux/respawnPane (never waiting for bridge registration)
+      // so cua-driver-mcp's claim handoff resolves immediately.
+      if (cuLeaseHandle && observations.cuLeases) {
+        const spawnedPaneProcess = await tmux.paneProcessIdentity(socket, paneId);
+        try {
+          await observations.cuLeases.bindSpawnedProcess(cuLeaseHandle, spawnedPaneProcess);
+        } catch (bindError) {
+          await tmux.killPaneAndWait(socket, paneId, { timeout: 3000 }).catch(() => {});
+          throw bindError;
+        }
       }
-    };
-    const acceptPrimeRoot = async (summary: PrimeAgentSummary): Promise<LaunchOutcome> => {
-      await verifyExpectedServer();
-      const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
-      if (restartPane && (!restartedPaneProcess || !sameProcessIdentity(paneProcess, restartedPaneProcess))) {
-        throw new Error('Prime client pane changed before replacement registration');
-      }
-      if (restartPane && (!resumeFile || !samePath(summary.sessionFile, resumeFile))) {
-        throw new Error('Prime replacement did not resume the original transcript');
-      }
-      const routeId = routeSessionId('prime', summary.nativeSessionId);
-      tmux.recordSpawn(routeId, {
-        socket, paneId, paneProcess,
-        primeAgent: {
-          daemonSocket: prime!.daemon.socketPath,
-          activeSessionId: summary.activeSessionId,
-          workerInstanceId: summary.workerInstanceId,
-          sessionFile: summary.sessionFile,
-        },
-      });
-      return { kind: 'ready', id: routeId };
-    };
-    const acceptRegistration = async ({ entry, identity }: SpawnRegistration): Promise<LaunchOutcome> => {
-      await verifyExpectedServer();
-      let accepted = entry;
-      if (descriptor.id !== 'pi') {
+
+      const timeoutMs = Number(process.env.PI_DISH_SPAWN_TIMEOUT_MS) || 30000;
+      const timeoutLabel = timeoutMs < 1000 ? `${timeoutMs}ms` : `${Math.round(timeoutMs / 1000)}s`;
+      const deadline = Date.now() + timeoutMs;
+      const timeoutReason = prime
+        ? `${descriptor.label} did not appear in its daemon roster within ${timeoutLabel}`
+        : `${descriptor.label} did not register within ${timeoutLabel}`;
+      const resumeFile = prime ? launchResumeFile(args) : null;
+      let registrationError: LaunchError | null = null;
+      let serverLostError: tmux.TmuxServerLostError | null = null;
+      const verifyExpectedServer = async (): Promise<void> => {
+        if (!expectedTmuxServer) return;
+        if (!processIdentityAlive(expectedTmuxServer) || !sameProcessIdentity(await tmux.serverIdentity(socket), expectedTmuxServer)) {
+          throw new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} is no longer running`, false);
+        }
+      };
+      const acceptPrimeRoot = async (summary: PrimeAgentSummary): Promise<LaunchOutcome> => {
+        await verifyExpectedServer();
+        const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
+        if (restartPane && (!restartedPaneProcess || !sameProcessIdentity(paneProcess, restartedPaneProcess))) {
+          throw new Error('Prime client pane changed before replacement registration');
+        }
+        if (restartPane && (!resumeFile || !samePath(summary.sessionFile, resumeFile))) {
+          throw new Error('Prime replacement did not resume the original transcript');
+        }
+        const routeId = routeSessionId('prime', summary.nativeSessionId);
+        tmux.recordSpawn(routeId, {
+          socket, paneId, paneProcess,
+          primeAgent: {
+            daemonSocket: prime!.daemon.socketPath,
+            activeSessionId: summary.activeSessionId,
+            workerInstanceId: summary.workerInstanceId,
+            sessionFile: summary.sessionFile,
+          },
+        });
+        return { kind: 'ready', id: routeId };
+      };
+      const acceptRegistration = async ({ entry, identity }: SpawnRegistration): Promise<LaunchOutcome> => {
+        await verifyExpectedServer();
+        let accepted = entry;
+        if (descriptor.id !== 'pi') {
+          invalidateRegistryCache();
+          const current = getRegisteredSessionByNativeId(identity.harnessId, identity.nativeSessionId);
+          if (!current || !sameRegistryClaim(current, entry)) {
+            throw new Error(`${descriptor.label} registry claim changed before socket identity could be proved`);
+          }
+          await proveBridgeRegistryClaim(current);
+          accepted = current;
+        }
+        const acceptedIdentity = registryIdentity(accepted);
+        if (!acceptedIdentity) throw new Error(`${descriptor.label} registry identity is unavailable`);
+        await verifyExpectedServer();
+        const routeId = routeSessionId(acceptedIdentity.harnessId, acceptedIdentity.nativeSessionId);
+        const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
+        tmux.recordSpawn(routeId, {
+          socket, paneId, spawnToken,
+          bridgeInstanceId: accepted.bridgeInstanceId || accepted.instanceId || null,
+          paneProcess, wrapperPath,
+        });
         invalidateRegistryCache();
-        const current = getRegisteredSessionByNativeId(identity.harnessId, identity.nativeSessionId);
-        if (!current || !sameRegistryClaim(current, entry)) {
-          throw new Error(`${descriptor.label} registry claim changed before socket identity could be proved`);
+        if (cuLeaseHandle && observations.cuLeases) {
+          const acceptedPid = typeof accepted.pid === 'number' && Number.isInteger(accepted.pid) && accepted.pid > 1
+            ? accepted.pid
+            : (paneProcess?.pid ?? null);
+          const acceptedStart = accepted.startTime !== undefined && accepted.startTime !== null
+            ? String(accepted.startTime)
+            : (paneProcess?.startTime ?? null);
+          observations.cuLeases.attachSpawnedSession(cuLeaseHandle, {
+            sessionId: routeId,
+            pid: acceptedPid,
+            pidStartTime: acceptedStart,
+          });
+          cuLeaseAttached = true;
         }
-        await proveBridgeRegistryClaim(current);
-        accepted = current;
-      }
-      const acceptedIdentity = registryIdentity(accepted);
-      if (!acceptedIdentity) throw new Error(`${descriptor.label} registry identity is unavailable`);
-      await verifyExpectedServer();
-      const routeId = routeSessionId(acceptedIdentity.harnessId, acceptedIdentity.nativeSessionId);
-      const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
-      tmux.recordSpawn(routeId, {
-        socket, paneId, spawnToken,
-        bridgeInstanceId: accepted.bridgeInstanceId || accepted.instanceId || null,
-        paneProcess, wrapperPath,
-      });
-      invalidateRegistryCache();
-      if (descriptor.id === 'pi') tmux.sendKeys(socket, paneId, '/dish-prime').catch(() => {});
-      return { kind: 'ready', id: routeId };
-    };
-    if (prime) {
-      const observation = await waitForPrimeRoot(prime.daemon, {
-        cwd: launchCwd, resumeFile, snapshot: prime.snapshot, timeout: timeoutMs,
-        shouldAbort: expectedTmuxServer ? () => !processIdentityAlive(expectedTmuxServer) : undefined,
-      });
-      if (expectedTmuxServer && !processIdentityAlive(expectedTmuxServer)) {
-        serverLostError = new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} died while waiting for registration`, false);
-      } else if (observation?.kind === 'ambiguous') {
-        registrationError = new LaunchError(`${descriptor.label} produced ${observation.count} daemon roots for one launch; refusing to select one.`, 409);
-      } else if (observation?.kind === 'single') {
-        try { return await acceptPrimeRoot(observation.summary); } catch (error) {
-          if (error instanceof tmux.TmuxServerLostError) serverLostError = error;
-          else registrationError = new LaunchError(`${descriptor.label} daemon identity proof failed: ${errorMessage(error)}`, 500);
-        }
-      }
-    } else {
-      while (Date.now() < deadline) {
+        if (descriptor.id === 'pi') tmux.sendKeys(socket, paneId, '/dish-prime').catch(() => {});
+        return { kind: 'ready', id: routeId };
+      };
+      if (prime) {
+        const observation = await waitForPrimeRoot(prime.daemon, {
+          cwd: launchCwd, resumeFile, snapshot: prime.snapshot, timeout: timeoutMs,
+          shouldAbort: expectedTmuxServer ? () => !processIdentityAlive(expectedTmuxServer) : undefined,
+        });
         if (expectedTmuxServer && !processIdentityAlive(expectedTmuxServer)) {
           serverLostError = new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} died while waiting for registration`, false);
-          break;
-        }
-        const scanStartedAt = Date.now();
-        const observation = findSessionBySpawnToken(spawnToken, descriptor.id);
-        if (observation?.kind === 'conflict') {
-          registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
-          break;
-        }
-        if (observation?.kind === 'single') {
-          try { return await acceptRegistration(observation.registration); } catch (error) {
+        } else if (observation?.kind === 'ambiguous') {
+          registrationError = new LaunchError(`${descriptor.label} produced ${observation.count} daemon roots for one launch; refusing to select one.`, 409);
+        } else if (observation?.kind === 'single') {
+          try { return await acceptPrimeRoot(observation.summary); } catch (error) {
             if (error instanceof tmux.TmuxServerLostError) serverLostError = error;
-            else registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
-            break;
+            else registrationError = new LaunchError(`${descriptor.label} daemon identity proof failed: ${errorMessage(error)}`, 500);
           }
         }
-        // Poll cheap registrations promptly; pace expensive scans toward 300 ms.
-        const interval = Math.min(REGISTRY_POLL_MAX_MS, Math.max(REGISTRY_POLL_MIN_MS, (Date.now() - scanStartedAt) * 20));
-        await delay(Math.min(interval, Math.max(1, deadline - Date.now())));
-      }
-      // A registration arriving in the final sleep must win over timeout cleanup.
-      const deadlineEntry = registrationError || serverLostError ? null : findSessionBySpawnToken(spawnToken, descriptor.id);
-      if (deadlineEntry?.kind === 'conflict') {
-        registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
-      }
-      if (!registrationError && !serverLostError && deadlineEntry?.kind === 'single') {
-        try { return await acceptRegistration(deadlineEntry.registration); } catch (error) {
-          if (error instanceof tmux.TmuxServerLostError) serverLostError = error;
-          else registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
+      } else {
+        while (Date.now() < deadline) {
+          if (expectedTmuxServer && !processIdentityAlive(expectedTmuxServer)) {
+            serverLostError = new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} died while waiting for registration`, false);
+            break;
+          }
+          const scanStartedAt = Date.now();
+          const observation = findSessionBySpawnToken(spawnToken, descriptor.id);
+          if (observation?.kind === 'conflict') {
+            registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
+            break;
+          }
+          if (observation?.kind === 'single') {
+            try { return await acceptRegistration(observation.registration); } catch (error) {
+              if (error instanceof tmux.TmuxServerLostError) serverLostError = error;
+              else registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
+              break;
+            }
+          }
+          // Poll cheap registrations promptly; pace expensive scans toward 300 ms.
+          const interval = Math.min(REGISTRY_POLL_MAX_MS, Math.max(REGISTRY_POLL_MIN_MS, (Date.now() - scanStartedAt) * 20));
+          await delay(Math.min(interval, Math.max(1, deadline - Date.now())));
+        }
+        // A registration arriving in the final sleep must win over timeout cleanup.
+        const deadlineEntry = registrationError || serverLostError ? null : findSessionBySpawnToken(spawnToken, descriptor.id);
+        if (deadlineEntry?.kind === 'conflict') {
+          registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
+        }
+        if (!registrationError && !serverLostError && deadlineEntry?.kind === 'single') {
+          try { return await acceptRegistration(deadlineEntry.registration); } catch (error) {
+            if (error instanceof tmux.TmuxServerLostError) serverLostError = error;
+            else registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
+          }
         }
       }
-    }
-    if (serverLostError) return forbidden(serverLostError);
-    if (expectedTmuxServer && !sameProcessIdentity(await tmux.serverIdentity(socket), expectedTmuxServer)) {
-      return forbidden(new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} was lost during launch`, false));
-    }
-    if (restartPane && descriptor.closeMode === 'owned-agent') {
-      // A resident replacement can outlive its client; pane exit doesn't prove a second writer is safe.
-      const error = new LaunchError(`${registrationError?.message || `${timeoutReason} — the tmux pane was left open for inspection; no second replacement was launched.`}`, registrationError?.status || 500);
-      return { kind: 'detached-replacement-uncertain', error, status: error.status,
-        placement: { socket, paneId, detachedWorker: true, knownProcesses: [] } };
-    }
-    // Hidden writers must be fully gone before an RPC fallback can be allowed.
-    const shouldCleanup = hidden || !descriptor.rpcFallback || !!registrationError;
-    if (shouldCleanup) {
-      const cleanupTimeoutMs = Math.min(5000, Math.max(1000, timeoutMs));
-      try { await tmux.killPaneAndWait(socket, paneId, { timeout: cleanupTimeoutMs }); } catch (cleanupError) {
-        const message = registrationError
-          ? `${registrationError.message}, and tmux cleanup failed: ${errorMessage(cleanupError)}`
-          : descriptor.rpcFallback
-            ? `${timeoutReason}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${errorMessage(cleanupError)}`
-            : `${timeoutReason}, and tmux cleanup failed: ${errorMessage(cleanupError)}`;
-        const error = new LaunchError(message, 500);
-        return { kind: 'cleanup-incomplete', error, status: error.status,
-          cleanup: { socket, paneId, knownProcesses: cleanupProcesses(cleanupError) ?? [], timeout: cleanupTimeoutMs } };
+      if (serverLostError) return forbidden(serverLostError);
+      if (expectedTmuxServer && !sameProcessIdentity(await tmux.serverIdentity(socket), expectedTmuxServer)) {
+        return forbidden(new tmux.TmuxServerLostError(`expected tmux server pid ${expectedTmuxServer.pid} was lost during launch`, false));
+      }
+      if (restartPane && descriptor.closeMode === 'owned-agent') {
+        // A resident replacement can outlive its client; pane exit doesn't prove a second writer is safe.
+        const error = new LaunchError(`${registrationError?.message || `${timeoutReason} — the tmux pane was left open for inspection; no second replacement was launched.`}`, registrationError?.status || 500);
+        return { kind: 'detached-replacement-uncertain', error, status: error.status,
+          placement: { socket, paneId, detachedWorker: true, knownProcesses: [] } };
+      }
+      // Hidden writers must be fully gone before an RPC fallback can be allowed.
+      const shouldCleanup = hidden || !descriptor.rpcFallback || !!registrationError;
+      if (shouldCleanup) {
+        const cleanupTimeoutMs = Math.min(5000, Math.max(1000, timeoutMs));
+        try { await tmux.killPaneAndWait(socket, paneId, { timeout: cleanupTimeoutMs }); } catch (cleanupError) {
+          const message = registrationError
+            ? `${registrationError.message}, and tmux cleanup failed: ${errorMessage(cleanupError)}`
+            : descriptor.rpcFallback
+              ? `${timeoutReason}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${errorMessage(cleanupError)}`
+              : `${timeoutReason}, and tmux cleanup failed: ${errorMessage(cleanupError)}`;
+          const error = new LaunchError(message, 500);
+          return { kind: 'cleanup-incomplete', error, status: error.status,
+            cleanup: { socket, paneId, knownProcesses: cleanupProcesses(cleanupError) ?? [], timeout: cleanupTimeoutMs } };
+        }
+      }
+      if (registrationError) return forbidden(registrationError);
+      const wrapperHint = prime
+        ? `Ensure the Prime daemon socket ${prime.daemon.socketPath} is reachable.`
+        : descriptor.wrapperEntrypoint
+          ? `Ensure ${descriptor.label} can load ${descriptor.wrapperEntrypoint}.`
+          : 'Ensure the pi-dish-bridge extension is installed in Pi’s global extensions.';
+      const error = new LaunchError(`${timeoutReason} — ${shouldCleanup ? 'the tmux window was closed' : 'the tmux window was left open for inspection'}. ${wrapperHint}`, 500);
+      if (!shouldCleanup) {
+        const state = await tmux.paneProcessState(socket, paneId);
+        if (state.paneExists || state.knownProcesses.length) {
+          return { kind: 'explicit-uncertain', error, status: error.status,
+            placement: { socket, paneId, knownProcesses: state.knownProcesses } };
+        }
+      }
+      return unclassifiedTmuxFailure(descriptor, error, expectedTmuxServer);
+    } finally {
+      if (cuLeaseHandle && !cuLeaseAttached && observations.cuLeases) {
+        await observations.cuLeases.abortSpawn(cuLeaseHandle);
       }
     }
-    if (registrationError) return forbidden(registrationError);
-    const wrapperHint = prime
-      ? `Ensure the Prime daemon socket ${prime.daemon.socketPath} is reachable.`
-      : descriptor.wrapperEntrypoint
-        ? `Ensure ${descriptor.label} can load ${descriptor.wrapperEntrypoint}.`
-        : 'Ensure the pi-dish-bridge extension is installed in Pi’s global extensions.';
-    const error = new LaunchError(`${timeoutReason} — ${shouldCleanup ? 'the tmux window was closed' : 'the tmux window was left open for inspection'}. ${wrapperHint}`, 500);
-    if (!shouldCleanup) {
-      const state = await tmux.paneProcessState(socket, paneId);
-      if (state.paneExists || state.knownProcesses.length) {
-        return { kind: 'explicit-uncertain', error, status: error.status,
-          placement: { socket, paneId, knownProcesses: state.knownProcesses } };
-      }
-    }
-    return unclassifiedTmuxFailure(descriptor, error, expectedTmuxServer);
   }
 
   async function spawnHarnessInTmux(options: SpawnHarnessOptions): Promise<LaunchOutcome> {
@@ -759,11 +816,11 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     } catch (error) { return forbidden(error); }
   }
 
-  async function launchResumedSession({ descriptor, sessionFile, cwd, name, target, model, thinking, expectedTmuxServer }: ResumeSessionLaunchOptions): Promise<LaunchOutcome> {
+  async function launchResumedSession({ descriptor, sessionFile, sessionId, cwd, name, target, model, thinking, expectedTmuxServer }: ResumeSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
       const args = descriptor.argv.resume({ file: sessionFile, model: model ?? undefined });
       if (thinking && (descriptor.id === 'pi' || descriptor.id === 'omp')) args.push('--thinking', thinking);
-      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name, expectedTmuxServer }, 'resume',
+      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name, knownSessionId: sessionId ?? null, expectedTmuxServer }, 'resume',
         () => resumeRpcSession({ sessionFile, cwd, model, thinking }));
     } catch (error) { return forbidden(error); }
   }

@@ -10,7 +10,7 @@ import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, 
 import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
 import { hibernationSummary } from './hibernation';
 import { botClosedKey, botCollapseKey, buildBotSessionTree, type BotSessionTree, type BotTreeNode, type SidebarBot } from './bots';
-import type { CuSessionListCue } from './cu-viewer-data';
+import type { CuSeatSessionContext, CuSessionListCue } from './cu-viewer-data';
 export interface SidebarHost extends HelperHost { state: string; key: string; color: string; dot: string; hasCache: boolean }
 export interface SidebarRenderOptions {
   active: readonly SessionEntry[]; previous: readonly SessionEntry[]; selected: SessionEntry | null;
@@ -25,8 +25,8 @@ export interface SidebarRenderOptions {
   /** Legacy fallback when a caller assumes bots live on `self` and omits `botsHostId`. */
   selfHostId?: string | null;
   unread: (row: SessionEntry) => boolean; hostChip: (id?: string | null) => string;
-  /** Host-level computer-use seat cue (agent/human) while the host's seat is held. */
-  cuSeat?: (hostId?: string | null) => CuSessionListCue | null;
+  /** Session-scoped or host-level computer-use seat cue while the host's seat is held. */
+  cuSeat?: (hostId?: string | null, context?: CuSeatSessionContext) => CuSessionListCue | null;
 }
 export interface SidebarProjection {
   readonly layout: string;
@@ -119,6 +119,11 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
   for (const list of [options.active, options.previous]) {
     parts.push(list.length);
     for (const session of list) {
+      const rowCue = options.cuSeat?.(session.host || options.selfHostId || null, {
+        cuOwnerId: session.cuOwnerId ?? null,
+        waitingForDesktop: session.cuWaitingForDesktop === true,
+        sessionScoped: true,
+      }) ?? null;
       parts.push(
         session.id, session.host, session.hostLabel, session.name, session.model,
         session.harnessId, session.harnessLabel, session.thinkingLevel,
@@ -127,6 +132,8 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
         sessionSupports(session, 'close') ? 1 : 0, session.closeMode,
         session.contextPercent, session.contextTokens, session.cwd, session.routine, session.routineId,
         session.private ? 1 : 0,
+        session.cuOwnerId ?? '', session.cuWaitingForDesktop ? 1 : 0,
+        rowCue ? `${rowCue.state}\0${rowCue.tone}\0${rowCue.owner ?? ''}\0${rowCue.label}\0${rowCue.title}` : '',
         session.parentId, session.parentSource, session.familyParentId, session.searchScore,
         session.searchSnippet, session.lastActivity, relativeTimeFingerprint(session.lastActivity, now),
         cacheExpiryFingerprint(session.cacheExpiry, now), options.unread(session) ? 1 : 0,
@@ -252,10 +259,15 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const privateChip = session.private
     ? '<span class="private-chip" title="Private session — hidden until the PIN is entered; stored outside backed-up session folders">private</span>'
     : '';
-  // Host-level computer-use seat cue while the host's seat is held (agent or human).
-  const cuSeat = options.cuSeat?.(session.host || options.selfHostId || null) ?? null;
+  // Session-scoped or host-level computer-use seat cue while the host's seat is held.
+  const cuSeat = options.cuSeat?.(session.host || options.selfHostId || null, {
+    cuOwnerId: session.cuOwnerId ?? null,
+    waitingForDesktop: session.cuWaitingForDesktop === true,
+    sessionScoped: true,
+  }) ?? null;
+  const cuSeatOwnerAttr = cuSeat?.owner ? ` data-owner="${escapeHtml(cuSeat.owner)}"` : '';
   const cuSeatChip = cuSeat
-    ? `<span class="cu-seat-cue" data-state="${escapeHtml(cuSeat.state)}" data-holder="${escapeHtml(cuSeat.holderKind)}" data-tone="${escapeHtml(cuSeat.tone)}" title="${escapeHtml(cuSeat.title)}" aria-label="${escapeHtml(cuSeat.title)}">${escapeHtml(cuSeat.label)}</span>`
+    ? `<span class="cu-seat-cue" data-state="${escapeHtml(cuSeat.state)}" data-holder="${escapeHtml(cuSeat.holderKind)}" data-tone="${escapeHtml(cuSeat.tone)}"${cuSeatOwnerAttr} title="${escapeHtml(cuSeat.title)}" aria-label="${escapeHtml(cuSeat.title)}">${escapeHtml(cuSeat.label)}</span>`
     : '';
   const bridgeChip = opts.bridge
     ? '<span class="session-bridge-chip" title="Closed intermediate parent kept visible to anchor active descendants">closed</span>'

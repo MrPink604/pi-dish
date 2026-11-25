@@ -561,3 +561,70 @@ test('sidebar renders host-level computer-use seat cue, invalidates memo on seat
     }), memo);
     assert.deepEqual([...(collapsedHost.visibleHostIds ?? [])], [SELF], 'collapsed CU host section leaves visibleHostIds');
 });
+test('sidebar renders per-session opaque ownerId cues with full-string matching and waiting-for-desktop state', () => {
+    const CU = '44444444-4444-4444-8444-444444444444';
+    const SELF = '11111111-1111-4111-8111-111111111111';
+    const { cuSessionListCue } = context.PiDishBrowser;
+    const hosts = [
+        { hostId: SELF, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+        { hostId: CU, self: false, label: 'cu-sandbox', state: 'reachable', key: CU, color: '#fa1', dot: '', hasCache: true },
+    ];
+    const fullOwnerA = 'cu-owner-0123456789abcdef0123456789aaaa';
+    const nearMissOwnerB = 'cu-owner-0123456789abcdef0123456789aaab';
+    const active = [
+        { id: 's-cu-1', host: CU, name: 'CU One', cwd: '/work', isActive: true, lastActivity: 2000, cuOwnerId: fullOwnerA },
+        { id: 's-cu-2', host: CU, name: 'CU Two', cwd: '/work', isActive: true, lastActivity: 1500, cuOwnerId: nearMissOwnerB },
+        { id: 's-cu-3', host: CU, name: 'CU Waiting', cwd: '/work', isActive: true, lastActivity: 1200, cuWaitingForDesktop: true },
+    ];
+    const agentStatus = {
+        state: 'agent',
+        epoch: 5,
+        lease: {
+            leaseId: 'a5',
+            sessionId: 'cu-agent-opaque',
+            ownerId: fullOwnerA,
+            holderKind: 'agent',
+            holderId: fullOwnerA,
+            label: 'omp',
+            reason: null,
+            acquiredAt: null,
+            expiresAt: null,
+            hardExpiresAt: null,
+            reservedUntil: null,
+        },
+        preempted: null,
+        health: null,
+    };
+    const memo = {};
+    const rendered = renderSidebar(options({
+        active, tab: 'active', multiHost: true, hosts, selfHostId: SELF,
+        cuSeat: (hostId, ctx) => hostId === CU ? cuSessionListCue(agentStatus, null, ctx) : null,
+    }), memo);
+    assert.match(rendered.html, /data-id="s-cu-1"[\s\S]*?data-owner="this"[^>]*>agent: this session<\/span>/);
+    assert.match(rendered.html, /data-id="s-cu-2"[\s\S]*?data-owner="other"[^>]*>agent: other session<\/span>/, 'near-miss prefix ownerId must NOT match');
+    const humanStatus = {
+        state: 'human',
+        epoch: 6,
+        lease: {
+            leaseId: 'h6',
+            sessionId: null,
+            ownerId: null,
+            holderKind: 'human',
+            holderId: 'jacob',
+            label: 'pi-dish',
+            reason: null,
+            acquiredAt: null,
+            expiresAt: null,
+            hardExpiresAt: null,
+            reservedUntil: null,
+        },
+        preempted: { sessionId: 'cu-agent-opaque', ownerId: fullOwnerA, label: 'omp' },
+        health: null,
+    };
+    const waitingRendered = renderSidebar(options({
+        active, tab: 'active', multiHost: true, hosts, selfHostId: SELF,
+        cuSeat: (hostId, ctx) => hostId === CU ? cuSessionListCue(humanStatus, null, ctx) : null,
+    }), memo);
+    assert.notEqual(waitingRendered, rendered, 'changing to human + waitingForDesktop invalidates memo');
+    assert.match(waitingRendered.html, /data-id="s-cu-3"[\s\S]*?data-tone="waiting"[^>]*>waiting for desktop<\/span>/);
+});

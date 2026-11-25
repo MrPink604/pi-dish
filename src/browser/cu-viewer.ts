@@ -30,7 +30,12 @@ export interface CuViewerOptions {
   request: ApiRequest;
   hosts: () => readonly CuViewerHost[];
   host: (id: string | null | undefined) => CuViewerHost | null;
-  currentSession: () => { id?: string | null; host?: string | null } | null;
+  currentSession: () => {
+    id?: string | null;
+    host?: string | null;
+    cuOwnerId?: string | null;
+    cuWaitingForDesktop?: boolean;
+  } | null;
   supports: (host: CuViewerHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
   ticket: (host: HostEndpoint) => Promise<string>;
@@ -50,7 +55,7 @@ interface ViewerNotice {
   text: string;
 }
 
-const SSE_EVENTS = ['hello', 'lease_changed', 'preempted', 'hand_back', 'seat_idle', 'attention_needed'] as const;
+const SSE_EVENTS = ['hello', 'resync', 'lease_changed', 'preempted', 'hand_back', 'seat_idle', 'attention_needed'] as const;
 // Outermost deadline in the CU call chain:
 // browser (25s) > hub relay (15s) > guest spaces proxy (10s) > broker (8s).
 const CU_REQUEST_TIMEOUT_MS = 25_000;
@@ -65,6 +70,7 @@ export function createCuViewer(options: CuViewerOptions) {
   let generation = 0;
   let ticketSequence = 0;
   let latestEpoch = -1;
+  let brokerGeneration: string | null = null;
   let activeHost: CuViewerHost | null = null;
   let activeHostKey: string | null = null;
   let status: CuStatus | null = null;
@@ -423,8 +429,14 @@ export function createCuViewer(options: CuViewerOptions) {
     ownerGen: number,
     ownerHostKey: string,
     endpoint: Readonly<HostEndpoint>,
+    updateOpts: { authoritativeReset?: boolean } = {},
   ): void {
     if (!owns(ownerGen, ownerHostKey)) return;
+    const genChanged = !!next.generation && !!brokerGeneration && next.generation !== brokerGeneration;
+    if (updateOpts.authoritativeReset || genChanged) {
+      latestEpoch = -1;
+    }
+    if (next.generation) brokerGeneration = next.generation;
     // Ignore stale status/SSE snapshots from an older epoch so a delayed poll
     // response cannot discard a newly acquired takeover lease.
     if (next.epoch < latestEpoch) return;
@@ -559,7 +571,11 @@ export function createCuViewer(options: CuViewerOptions) {
       let parsed: unknown;
       try { parsed = JSON.parse(String(event.data || '')); } catch { return; }
       const decoded = decodeCuStatus(parsed);
-      if (decoded) applyStatusUpdate(decoded, ownerGen, ownerHostKey, endpoint);
+      if (decoded) {
+        applyStatusUpdate(decoded, ownerGen, ownerHostKey, endpoint, {
+          authoritativeReset: event.type === 'resync',
+        });
+      }
     };
     for (const type of SSE_EVENTS) {
       source.addEventListener(type, handleEvent as EventListener);
@@ -753,6 +769,7 @@ export function createCuViewer(options: CuViewerOptions) {
     const ownerGen = ++generation;
     ++ticketSequence;
     latestEpoch = -1;
+    brokerGeneration = null;
     streamRetryAttempt = 0;
     const hostKey = keyOf(host);
     const endpoint = Object.freeze({ ...host });
@@ -803,6 +820,7 @@ export function createCuViewer(options: CuViewerOptions) {
     ++generation;
     ++ticketSequence;
     latestEpoch = -1;
+    brokerGeneration = null;
     disconnectStream();
     clearHeartbeat();
     clearCountdown();

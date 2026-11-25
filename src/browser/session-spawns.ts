@@ -27,7 +27,7 @@ export interface PendingSessionSpawn {
 }
 export type SpawnStatus = Readonly<{ status: 'starting' }>
   | Readonly<{ status: 'ready'; sessionId: string }>
-  | Readonly<{ status: 'error'; error: string }>;
+  | Readonly<{ status: 'error'; error: string; code?: string; httpStatus?: number }>;
 export function decodeSpawnId(value: unknown): string {
   if (!record(value) || typeof value.spawnId !== 'string' || !value.spawnId) throw new Error('Failed to start session');
   return value.spawnId;
@@ -35,7 +35,16 @@ export function decodeSpawnId(value: unknown): string {
 export function decodeSpawnStatus(value: unknown): SpawnStatus {
   if (record(value)) {
     if (value.status === 'starting') return { status: 'starting' };
-    if (value.status === 'error') return { status: 'error', error: typeof value.error === 'string' && value.error ? value.error : 'Session failed to start' };
+    if (value.status === 'error') {
+      const code = typeof value.code === 'string' && value.code ? value.code : undefined;
+      const httpStatus = typeof value.httpStatus === 'number' && Number.isFinite(value.httpStatus) ? Math.trunc(value.httpStatus) : undefined;
+      return {
+        status: 'error',
+        error: typeof value.error === 'string' && value.error ? value.error : 'Session failed to start',
+        ...(code ? { code } : {}),
+        ...(httpStatus !== undefined ? { httpStatus } : {}),
+      };
+    }
     if (value.status === 'ready' && typeof value.sessionId === 'string' && value.sessionId) return { status: 'ready', sessionId: value.sessionId };
   }
   throw new Error('Session spawn returned an invalid result');

@@ -9,6 +9,7 @@ import dishStore = require('./dish-store');
 import { canonicalSessionId } from './session-key';
 import { record as isRecord } from './helper-values';
 import type { HibernationState } from './session-api';
+import { CuBrokerUnavailableError, CuSeatBusyError } from './cu-agent-leases';
 import { errorMessage } from './http-boundary';
 
 export type HibernationMode = 'pressure' | 'off';
@@ -360,8 +361,18 @@ export function createSessionHibernation<Authority, Inspection extends Hibernati
       let pending = wakes.get(id);
       if (!pending) {
         if (!readRecords().has(id)) return false;
-        // A failed resume leaves an ordinary inactive session, not a retry loop.
-        pending = ports.resume(id).finally(() => { forget(id); wakes.delete(id); });
+        // A temporary CU seat refusal must keep the session hibernated so the
+        // next message wakes it once the desktop is free; hard failures still
+        // clear hibernation to avoid a retry loop.
+        pending = ports.resume(id).then(
+          () => { forget(id); },
+          (error: unknown) => {
+            if (!(error instanceof CuSeatBusyError || error instanceof CuBrokerUnavailableError)) {
+              forget(id);
+            }
+            throw error;
+          },
+        ).finally(() => { wakes.delete(id); });
         wakes.set(id, pending);
       }
       await pending;

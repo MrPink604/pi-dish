@@ -5,6 +5,7 @@ export type CuSeatState = 'idle' | 'agent' | 'waiting_for_human' | 'human';
 export interface CuLeaseInfo {
   readonly leaseId: string | null;
   readonly sessionId: string | null;
+  readonly ownerId?: string | null;
   readonly holderKind: string | null;
   readonly holderId: string | null;
   readonly label: string | null;
@@ -17,6 +18,7 @@ export interface CuLeaseInfo {
 
 export interface CuPreemptedInfo {
   readonly sessionId: string | null;
+  readonly ownerId?: string | null;
   readonly label: string | null;
 }
 
@@ -33,6 +35,8 @@ export interface CuHealthInfo {
 export interface CuStatus {
   readonly state: CuSeatState;
   readonly epoch: number;
+  readonly generation?: string | null;
+  readonly cursor?: number | null;
   readonly lease: CuLeaseInfo | null;
   readonly preempted: CuPreemptedInfo | null;
   readonly health: CuHealthInfo | null;
@@ -82,11 +86,18 @@ export interface CuLocalHumanLease {
   expiresAt: string | null;
 }
 
+export interface CuSeatSessionContext {
+  readonly cuOwnerId?: string | null;
+  readonly waitingForDesktop?: boolean;
+  readonly sessionScoped?: boolean;
+}
+
 export interface CuSeatPresentation {
   readonly tone: 'idle' | 'agent' | 'waiting' | 'human' | 'self';
   readonly badge: string;
   readonly detail: string;
   readonly ownControl: boolean;
+  readonly owner?: 'this' | 'other';
 }
 
 export interface CuSessionListCue {
@@ -95,6 +106,7 @@ export interface CuSessionListCue {
   readonly tone: 'agent' | 'waiting' | 'human' | 'self';
   readonly label: string;
   readonly title: string;
+  readonly owner?: 'this' | 'other';
 }
 
 export const CU_PANEL_STORAGE_PREFIX = 'pi-dish-cu-panel:';
@@ -129,6 +141,7 @@ export function decodeCuLease(value: unknown): CuLeaseInfo | null {
   if (!record(value)) return null;
   const leaseId = str(value.leaseId) ?? str(value.id);
   const sessionId = str(value.sessionId);
+  const ownerId = str(value.ownerId);
   const holderKind = str(value.holderKind) ?? str(value.kind);
   const holderId = str(value.holderId);
   const label = str(value.label);
@@ -137,16 +150,17 @@ export function decodeCuLease(value: unknown): CuLeaseInfo | null {
   const expiresAt = str(value.expiresAt);
   const hardExpiresAt = str(value.hardExpiresAt);
   const reservedUntil = str(value.reservedUntil);
-  if (!leaseId && !sessionId && !holderKind && !holderId && !label && !expiresAt) return null;
-  return { leaseId, sessionId, holderKind, holderId, label, reason, acquiredAt, expiresAt, hardExpiresAt, reservedUntil };
+  if (!leaseId && !sessionId && !ownerId && !holderKind && !holderId && !label && !expiresAt) return null;
+  return { leaseId, sessionId, ownerId, holderKind, holderId, label, reason, acquiredAt, expiresAt, hardExpiresAt, reservedUntil };
 }
 
 function decodePreempted(value: unknown): CuPreemptedInfo | null {
   if (!record(value)) return null;
   const sessionId = str(value.sessionId);
+  const ownerId = str(value.ownerId);
   const label = str(value.label);
-  if (!sessionId && !label) return null;
-  return { sessionId, label };
+  if (!sessionId && !ownerId && !label) return null;
+  return { sessionId, ownerId, label };
 }
 
 function decodeHealth(value: unknown): CuHealthInfo | null {
@@ -166,9 +180,13 @@ export function decodeCuStatus(value: unknown): CuStatus | null {
   if (!record(value)) return null;
   const state = parseSeatState(value.state);
   const epoch = finite(value.epoch) ? Math.trunc(value.epoch) : 0;
+  const generation = str(value.generation);
+  const cursor = finite(value.cursor) ? Math.trunc(value.cursor) : null;
   return {
     state,
     epoch,
+    ...(generation !== null ? { generation } : {}),
+    ...(cursor !== null ? { cursor } : {}),
     lease: decodeCuLease(value.lease),
     preempted: decodePreempted(value.preempted),
     health: decodeHealth(value.health),
@@ -281,12 +299,28 @@ export function isOwnHumanLease(
   return true;
 }
 
+/** Exact full-string comparison of opaque broker ownerIds (never truncated). */
+export function matchesSessionOwner(
+  leaseOwnerId: string | null | undefined,
+  sessionOwnerId: string | null | undefined,
+): boolean {
+  return typeof leaseOwnerId === 'string'
+    && leaseOwnerId.length > 0
+    && typeof sessionOwnerId === 'string'
+    && sessionOwnerId.length > 0
+    && leaseOwnerId === sessionOwnerId;
+}
+
 export function cuSeatPresentation(
   status: CuStatus | null,
   localLease: Pick<CuLocalHumanLease, 'leaseId' | 'epoch' | 'expiresAt'> | null,
   nowMs: number,
+  context?: CuSeatSessionContext,
 ): CuSeatPresentation {
   if (!status) {
+    if (context?.waitingForDesktop) {
+      return { tone: 'waiting', badge: 'Waiting for desktop', detail: 'Desktop held by human', ownControl: false };
+    }
     return { tone: 'idle', badge: 'Connecting…', detail: 'Checking seat status', ownControl: false };
   }
   const ownControl = isOwnHumanLease(status, localLease);
@@ -300,11 +334,19 @@ export function cuSeatPresentation(
     if (ownControl) {
       const parts = [remaining ?? 'active'];
       if (status.preempted) {
-        parts.push(`paused ${status.preempted.label || status.preempted.sessionId || 'agent'}`);
+        parts.push(`paused ${status.preempted.label || 'agent'}`);
       }
       return { tone: 'self', badge: 'You have control', detail: parts.join(' · '), ownControl: true };
     }
     const holder = formatLeaseHolder(status.lease, 'human');
+    if (context?.waitingForDesktop) {
+      return {
+        tone: 'waiting',
+        badge: 'Waiting for desktop',
+        detail: [holder, remaining].filter(Boolean).join(' · ') || 'Desktop held by human',
+        ownControl: false,
+      };
+    }
     return {
       tone: 'human',
       badge: 'Human',
@@ -312,12 +354,33 @@ export function cuSeatPresentation(
       ownControl: false,
     };
   }
+  const hasOwnerSignal = context?.sessionScoped === true && !!(status.lease?.ownerId || context.cuOwnerId);
   if (status.state === 'waiting_for_human') {
     const holder = formatLeaseHolder(status.lease, 'agent');
     const parts = [holder, status.lease?.reason, remaining].filter(Boolean);
+    if (hasOwnerSignal) {
+      const isThis = matchesSessionOwner(status.lease?.ownerId, context?.cuOwnerId);
+      return {
+        tone: isThis ? 'waiting' : 'agent',
+        badge: isThis ? 'Waiting for you' : 'Agent: other session',
+        detail: parts.join(' · '),
+        ownControl: false,
+        owner: isThis ? 'this' : 'other',
+      };
+    }
     return { tone: 'waiting', badge: 'Waiting for you', detail: parts.join(' · '), ownControl: false };
   }
   const holder = formatLeaseHolder(status.lease, 'agent');
+  if (hasOwnerSignal) {
+    const isThis = matchesSessionOwner(status.lease?.ownerId, context?.cuOwnerId);
+    return {
+      tone: 'agent',
+      badge: isThis ? 'Agent: this session' : 'Agent: other session',
+      detail: [holder, remaining].filter(Boolean).join(' · '),
+      ownControl: false,
+      owner: isThis ? 'this' : 'other',
+    };
+  }
   return {
     tone: 'agent',
     badge: 'Agent',
@@ -343,13 +406,24 @@ export function cuSpacesViewerUrl(base: string, ticket: Pick<CuTicketResult, 'ti
 }
 
 /**
- * Host-level session-list cue shown while a computer-use host's seat is held
- * (agent, waiting_for_human, or human). Returns null when unknown or idle.
+ * Session-scoped or host-level sidebar seat cue while a computer-use host's
+ * seat is held (agent, waiting_for_human, or human) or while a session is
+ * waiting for a human-held desktop. Returns null when unknown or idle.
  */
 export function cuSessionListCue(
   status: CuStatus | null,
   localLease: Pick<CuLocalHumanLease, 'leaseId' | 'epoch'> | null = null,
+  context?: CuSeatSessionContext,
 ): CuSessionListCue | null {
+  if (context?.waitingForDesktop && (!status || status.state === 'human')) {
+    return {
+      state: 'human',
+      holderKind: 'human',
+      tone: 'waiting',
+      label: 'waiting for desktop',
+      title: 'Session waiting for desktop while human holds control',
+    };
+  }
   if (!status || status.state === 'idle') return null;
   if (status.state === 'human') {
     if (isOwnHumanLease(status, localLease)) {
@@ -370,14 +444,37 @@ export function cuSessionListCue(
       title: `Desktop seat held by ${holder} (host-level)`,
     };
   }
+  const hasOwnerSignal = context?.sessionScoped === true && !!(status.lease?.ownerId || context.cuOwnerId);
   if (status.state === 'waiting_for_human') {
     const holder = formatLeaseHolder(status.lease, 'agent');
+    if (hasOwnerSignal) {
+      const isThis = matchesSessionOwner(status.lease?.ownerId, context?.cuOwnerId);
+      return {
+        state: 'waiting_for_human',
+        holderKind: 'agent',
+        tone: isThis ? 'waiting' : 'agent',
+        owner: isThis ? 'this' : 'other',
+        label: isThis ? 'desktop: waiting' : 'agent: other session',
+        title: isThis ? 'This session is waiting for human input on the desktop' : 'Desktop seat held by another session',
+      };
+    }
     return {
       state: 'waiting_for_human',
       holderKind: 'agent',
       tone: 'waiting',
       label: 'desktop: waiting',
       title: `Desktop waiting for you (${holder}, host-level)`,
+    };
+  }
+  if (hasOwnerSignal) {
+    const isThis = matchesSessionOwner(status.lease?.ownerId, context?.cuOwnerId);
+    return {
+      state: 'agent',
+      holderKind: 'agent',
+      tone: 'agent',
+      owner: isThis ? 'this' : 'other',
+      label: isThis ? 'agent: this session' : 'agent: other session',
+      title: isThis ? 'Desktop seat held by this session' : 'Desktop seat held by another session',
     };
   }
   const holder = formatLeaseHolder(status.lease, 'agent');

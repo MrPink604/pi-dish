@@ -1,6 +1,8 @@
 // Generated from src/core/cu-handlers.ts; edit that source and run npm run build:core.
 import type { IncomingMessage, OutgoingHttpHeaders } from 'node:http';
 import type { Duplex } from 'node:stream';
+import { type CuBrokerClient } from './cu-broker';
+import type { CuBrokerEvent } from './cu-agent-leases';
 import type { TransportHandler, TransportRequest, TransportResponse } from './access-handlers';
 export declare const SPACES_HTTP_TIMEOUT_MS = 10000;
 export declare const CU_FETCH_CREDS_JS = "(() => {\n  const orig = globalThis.fetch.bind(globalThis);\n  globalThis.fetch = (input, init) => {\n    try {\n      const raw = typeof input === 'string' || input instanceof URL ? String(input) : input.url;\n      const url = new URL(raw, location.href);\n      if (url.origin === location.origin && init && init.credentials === 'omit') {\n        init = { ...init, credentials: 'same-origin' };\n      }\n    } catch {}\n    return orig(input, init);\n  };\n})();\n";
@@ -89,8 +91,12 @@ export type ParsedOpenMediaResponse = {
 export declare function parseOpenMediaResponse(contentType: string | string[] | undefined, grpcStatusHeader: string | string[] | undefined, body: Buffer): ParsedOpenMediaResponse;
 export interface CuHandlersPorts {
     upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+    /** Optional shared broker client (created internally when omitted). */
+    broker?: CuBrokerClient;
     /** Optional test seam for the broker socket path. */
     socketPath?: () => string | null;
+    /** Optional listener for parsed broker SSE events (preemption, hand_back, resync, hello, etc.). */
+    onBrokerEvent?: (event: CuBrokerEvent) => void;
     /** Optional test seam for the loopback cua-spacesd port (host is always 127.0.0.1). */
     spacesPort?: number;
     /** Optional test seam for the WebSocket keepalive ping interval. */
@@ -102,6 +108,10 @@ export interface CuHandlersPorts {
     /** Optional test seam for SSE event/error buffer caps. */
     maxSseEventBytes?: number;
     maxSseErrorBytes?: number;
+    /** Optional test seam for slow SSE client backpressure drain timeout. */
+    sseDrainTimeoutMs?: number;
+    /** Optional test seam for max SSE client buffered bytes before eviction. */
+    sseMaxBufferedBytes?: number;
 }
 export interface CuHandlers {
     available(): boolean;

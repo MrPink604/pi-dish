@@ -56,6 +56,10 @@ export interface SessionFields<Timestamp = string | number> {
     hibernation?: HibernationState | null;
     /** Transcript lives in the harness's private root, outside fleet backups. */
     private?: boolean;
+    /** Opaque computer-use agent lease owner ID for exact per-session UI matching (never a private route). */
+    cuOwnerId?: string;
+    /** True while a CU-host session was spawned during a human takeover and awaits desktop release. */
+    cuWaitingForDesktop?: boolean;
 }
 /** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>, Pick<SessionFields, 'name' | 'model' | 'harnessId' | 'thinkingLevel' | 'isActive' | 'capabilities'> {

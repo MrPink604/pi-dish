@@ -2,6 +2,7 @@
 import type { BridgeRegistryEntry, HarnessDescriptor, ProcessIdentity, ProcessIdentityInput } from './contracts';
 import { LifecycleInterruption } from './session-ownership';
 import type { BeforeLifecycleAction } from './session-ownership';
+import { type CuAgentLeases } from './cu-agent-leases';
 import * as tmux from './tmux';
 export interface HarnessLaunchTarget {
     type?: string;
@@ -36,6 +37,8 @@ export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
     name?: string | null;
     target?: HarnessLaunchTarget | null;
     sessionFile: string;
+    /** Canonical pi-dish route id when already known. */
+    sessionId?: string | null;
     /** Bind headless tmux launch to one exact already-running server (-N, no server creation, no RPC fallback). */
     expectedTmuxServer?: ProcessIdentity | null;
 }
@@ -57,6 +60,7 @@ export interface SpawnHarnessOptions {
     cwd?: unknown;
     name?: string | null;
     hidden?: boolean;
+    knownSessionId?: string | null;
     restartPane?: RestartPaneOptions | null;
     expectedTmuxServer?: ProcessIdentity | null;
 }
@@ -97,6 +101,7 @@ export interface SessionLaunchObservations {
     runHarnessModelCommand(descriptor: HarnessDescriptor, options: {
         cwd?: unknown;
     }): Promise<unknown>;
+    cuLeases?: Pick<CuAgentLeases, 'configured' | 'prepareSpawn' | 'bindSpawnedProcess' | 'attachSpawnedSession' | 'abortSpawn'>;
 }
 export interface SessionLaunch {
     validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotValidationInput): Promise<void>;

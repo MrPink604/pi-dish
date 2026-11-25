@@ -2,7 +2,8 @@ import type { RequestHandler } from 'express';
 import type { ParsedQs } from 'qs';
 import type { LiveSession, liveSessionSupports } from './session-ownership';
 import { messageHoldWindowMs, peerSender, type MessageHold } from './message-hold';
-import { errorMessage, httpError } from './http-boundary';
+import { errorMessage, errorStatus, httpError } from './http-boundary';
+import { CuBrokerUnavailableError, CuSeatBusyError } from './cu-agent-leases';
 import { asRecord } from './wire-protocol';
 
 type CommandHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
@@ -106,7 +107,22 @@ export function createSessionCommandHandlers(ports: SessionCommandPorts): {
       const result = operation === 'steer' ? await session.steer(text, opts) : await session.prompt(text, opts);
       res.json({ success: true, result });
     } catch (error) {
-      res.status(500).json({ error: errorMessage(error) });
+      if (error instanceof CuSeatBusyError) {
+        return res.status(409).json({
+          code: error.code,
+          state: error.state,
+          epoch: error.epoch,
+          holder: error.holder,
+          error: error.message,
+        });
+      }
+      if (error instanceof CuBrokerUnavailableError) {
+        return res.status(503).json({
+          code: error.code,
+          error: error.message,
+        });
+      }
+      res.status(errorStatus(error, 500)).json({ error: errorMessage(error) });
     }
   }
 

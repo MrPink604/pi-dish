@@ -722,7 +722,7 @@ function renderSessions() {
       expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
       closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
       bots: bots.list, botRetireArmed: bots.armed, botsHostId: bots.hostId, selfHostId: hostDirectory.self.hostId,
-      unread: sidebarActivity.unread, hostChip, cuSeat: hostId => cuViewerController.seatCue(hostId),
+      unread: sidebarActivity.unread, hostChip, cuSeat: (hostId, context) => cuViewerController.seatCue(hostId, context),
       hosts: effectiveHosts().map(host => {
         const cache = hostSessionLoader.getCache(host);
         return { ...host, state: hostConnections.stateOf(host), key: hostKeyOf(host), color: hostPresentation.colorFor(host.hostId || null),

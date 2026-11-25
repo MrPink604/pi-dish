@@ -691,3 +691,161 @@ fixtures_js_1.test.describe('session Desktop panel version skew', () => {
         (0, fixtures_js_1.expect)(errors).toEqual([]);
     });
 });
+(0, fixtures_js_1.test)('Slice 2 phone (390x844): per-session full ownerId badges, waiting-for-desktop cue, and SSE resync epoch reset', async ({ page, fleet }) => {
+    await installTrackedCuEventSource(page);
+    const ownerOne = 'cu-owner-abcdef0123456789abcdef0123456701';
+    const ownerTwoNearMiss = 'cu-owner-abcdef0123456789abcdef0123456702';
+    const expiresAgent = new Date(Date.now() + 90_000).toISOString();
+    const expiresHuman = new Date(Date.now() + 600_000).toISOString();
+    let seatState = 'agent';
+    let epoch = 7;
+    let generation = 'gen-1';
+    let activeOwner = ownerOne;
+    let rowTwoWaiting = false;
+    await page.route(`${fleet.self.base}/api/hosts`, async (route) => {
+        const response = await route.fetch();
+        const json = (await response.json());
+        await route.fulfill({
+            json: {
+                hosts: [
+                    ...json.hosts,
+                    {
+                        name: 'cu-sandbox',
+                        base: RELAY_BASE,
+                        kind: 'direct',
+                        reachable: true,
+                        hostId: RELAY_HOST_ID,
+                        label: 'cu-sandbox',
+                        version: '1.0.0',
+                        capabilities: { sessions: true, hostHealth: true, computerUse: true },
+                    },
+                ],
+            },
+        });
+    });
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/sessions*`, route => route.fulfill({
+        json: {
+            active: [
+                { id: fixtures_js_1.ROOT, name: 'sandbox-one', cwd: '/work', isActive: true, host: RELAY_HOST_ID, lastActivity: Date.now(), cuOwnerId: ownerOne },
+                {
+                    id: fixtures_js_1.CHILD,
+                    name: 'sandbox-two',
+                    cwd: '/work',
+                    isActive: true,
+                    host: RELAY_HOST_ID,
+                    lastActivity: Date.now() - 1000,
+                    cuOwnerId: rowTwoWaiting ? undefined : ownerTwoNearMiss,
+                    ...(rowTwoWaiting ? { cuWaitingForDesktop: true } : {}),
+                },
+            ],
+            previous: [],
+        },
+    }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/sessions/*/messages*`, route => {
+        const label = route.request().url().includes(fixtures_js_1.CHILD) ? 'sandbox two transcript' : 'sandbox one transcript';
+        return route.fulfill({
+            json: { messages: [{ role: 'user', index: 0, content: [{ type: 'text', text: label }] }], total: 1, hasMore: false, nextBefore: null },
+        });
+    });
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/sessions/*/stream*`, route => route.fulfill({
+        status: 200, contentType: 'text/event-stream', body: ': keepalive\n\n',
+    }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/sessions/*/artifacts`, route => route.fulfill({ json: { artifacts: [] } }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/sessions/*/related`, route => route.fulfill({ json: { related: [] } }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/sessions/*/reviews`, route => route.fulfill({ json: { reviews: [] } }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/sessions/*/commands`, route => route.fulfill({ json: { commands: [] } }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/pages`, route => route.fulfill({ json: [] }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/models*`, route => route.fulfill({ json: { models: [] } }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/status`, route => route.fulfill({
+        json: seatState === 'agent'
+            ? {
+                ok: true,
+                generation,
+                state: 'agent',
+                epoch,
+                lease: { leaseId: `a-${epoch}`, sessionId: 'cu-agent-opaque', ownerId: activeOwner, holderKind: 'agent', label: 'omp', expiresAt: expiresAgent },
+                preempted: null,
+            }
+            : {
+                ok: true,
+                generation,
+                state: 'human',
+                epoch,
+                lease: { leaseId: `h-${epoch}`, holderKind: 'human', label: 'pi-dish', expiresAt: expiresHuman },
+                preempted: { sessionId: 'cu-agent-opaque', ownerId: ownerOne, label: 'omp' },
+            },
+    }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/viewer/ticket`, route => route.fulfill({
+        json: { ok: true, epoch, mode: 'view-only', ticket: 'slice2-phone-1', path: '/viewer/#ticket=slice2-phone-1', spacesPath: '/api/cu/spaces/viewer/#ticket=slice2-phone-1' },
+    }));
+    await page.route(`${fleet.self.base}${RELAY_BASE}/api/cu/spaces/viewer/*`, route => route.fulfill({
+        status: 200, contentType: 'text/html; charset=utf-8', body: FAKE_VIEWER_HTML,
+    }));
+    await page.setViewportSize(PHONE_VIEWPORT);
+    await page.reload();
+    await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
+    await page.locator('#tabAll').click();
+    const rowOne = page.locator(`.session-item[data-id="${fixtures_js_1.ROOT}"][data-host="${RELAY_HOST_ID}"]`);
+    const rowTwo = page.locator(`.session-item[data-id="${fixtures_js_1.CHILD}"][data-host="${RELAY_HOST_ID}"]`);
+    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveText('agent: this session');
+    await (0, fixtures_js_1.expect)(rowOne.locator('.cu-seat-cue')).toHaveAttribute('data-owner', 'this');
+    // Near-miss prefix ownerId on rowTwo MUST render as other session (proves full ownerId comparison).
+    await (0, fixtures_js_1.expect)(rowTwo.locator('.cu-seat-cue')).toHaveText('agent: other session');
+    await (0, fixtures_js_1.expect)(rowTwo.locator('.cu-seat-cue')).toHaveAttribute('data-owner', 'other');
+    // Open rowOne at 390x844 -> view-only panel header displays "Agent: this session" with zero overflow.
+    await rowOne.click();
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSummary')).toHaveText('agent: this session');
+    await page.locator('#cuSessionPanelToggle').click();
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Agent: this session');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveAttribute('data-owner', 'this');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelHandBackBtn')).toHaveCount(0);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    (0, fixtures_js_1.expect)(overflow).toBeLessThanOrEqual(0);
+    // Switch to rowTwo -> panel summary reflects "agent: other session", then SSE `event: resync`
+    // with a new generation and lower epoch (0 < 7) switches ownership to ownerTwoNearMiss!
+    await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
+    await rowTwo.click();
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSummary')).toHaveText('agent: other session');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSummary')).toHaveAttribute('data-owner', 'other');
+    generation = 'gen-2';
+    epoch = 0;
+    activeOwner = ownerTwoNearMiss;
+    await page.evaluate(({ owner }) => {
+        const streams = Reflect.get(window, '__cuPanelStreams');
+        const open = [...streams].reverse().find(s => s.readyState === 1);
+        open.dispatchEvent(new MessageEvent('resync', {
+            data: JSON.stringify({
+                generation: 'gen-2',
+                cursor: 0,
+                reason: 'generation_mismatch',
+                state: 'agent',
+                epoch: 0,
+                lease: { leaseId: 'a-0', sessionId: 'cu-agent-new', ownerId: owner, holderKind: 'agent', label: 'omp' },
+                preempted: null,
+            }),
+        }));
+    }, { owner: ownerTwoNearMiss });
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSummary')).toHaveText('agent: this session');
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSummary')).toHaveAttribute('data-owner', 'this');
+    // Human takeover + waiting-for-desktop flag on rowTwo -> displays "waiting for desktop".
+    seatState = 'human';
+    epoch = 1;
+    rowTwoWaiting = true;
+    await page.evaluate(() => {
+        const streams = Reflect.get(window, '__cuPanelStreams');
+        const open = [...streams].reverse().find(s => s.readyState === 1);
+        open.dispatchEvent(new MessageEvent('lease_changed', {
+            data: JSON.stringify({
+                generation: 'gen-2',
+                cursor: 1,
+                state: 'human',
+                epoch: 1,
+                lease: { leaseId: 'h-1', holderKind: 'human', label: 'pi-dish' },
+                preempted: null,
+            }),
+        }));
+    });
+    await page.evaluate(() => fixtureApp.features.sidebarLists.refresh());
+    await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
+    await (0, fixtures_js_1.expect)(rowTwo.locator('.cu-seat-cue')).toHaveText('waiting for desktop');
+});

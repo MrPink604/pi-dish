@@ -10,6 +10,7 @@ import type { IncomingMessage, OutgoingHttpHeaders } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type * as WS from 'ws';
 import { createCuBrokerClient, TAKEOVER_BROKER_TIMEOUT_MS, type CuBrokerClient } from './cu-broker';
+import type { CuBrokerEvent } from './cu-agent-leases';
 import type { TransportHandler, TransportRequest, TransportResponse } from './access-handlers';
 import { errorMessage, errorStatus, requestBody } from './http-boundary';
 import { record as isRecord } from './helper-values';
@@ -752,10 +753,72 @@ function withSpacesViewerPath(viewer: unknown): Record<string, unknown> | null {
   return { ...viewer, spacesPath };
 }
 
+const AGENT_SECRET_KEYS = new Set(['sessionSecret', 'tokenHash', 'claimNonce', 'mcpToken']);
+const NESTED_SCRUB_KEYS = ['lease', 'preempted', 'handedBackTo', 'displaced', 'previous', 'released', 'holder', 'cancelled', 'reaped', 'cancelledReservation'] as const;
+const DEFAULT_SSE_DRAIN_TIMEOUT_MS = 15_000;
+const DEFAULT_SSE_MAX_BUFFERED_BYTES = 256 * 1024;
+
+function stripAgentSecretsRecord(source: Record<string, unknown>): Record<string, unknown> {
+  let changed = false;
+  const out: Record<string, unknown> = { ...source };
+  for (const secretKey of AGENT_SECRET_KEYS) {
+    if (secretKey in out) {
+      delete out[secretKey];
+      changed = true;
+    }
+  }
+  for (const nestedKey of NESTED_SCRUB_KEYS) {
+    const val = out[nestedKey];
+    if (isRecord(val)) {
+      const scrubbed = stripAgentSecretsRecord(val);
+      if (scrubbed !== val) {
+        out[nestedKey] = scrubbed;
+        changed = true;
+      }
+    }
+  }
+  for (const listKey of ['entries', 'events'] as const) {
+    const list = out[listKey];
+    if (!Array.isArray(list)) continue;
+    let listChanged = false;
+    const scrubbedList = list.map((item: unknown) => {
+      if (!isRecord(item)) return item;
+      const scrubbed = stripAgentSecretsRecord(item);
+      if (scrubbed !== item) listChanged = true;
+      return scrubbed;
+    });
+    if (listChanged) {
+      out[listKey] = scrubbedList;
+      changed = true;
+    }
+  }
+  return changed ? out : source;
+}
+
+function stripAgentSecrets<T>(value: T): T {
+  if (!isRecord(value)) return value;
+  return stripAgentSecretsRecord(value) as T;
+}
+
+function parseBrokerEventId(eventId: string | null): { generation: string; cursor: number } | null {
+  if (!eventId) return null;
+  const sep = eventId.lastIndexOf(':');
+  if (sep <= 0 || sep === eventId.length - 1) return null;
+  const generation = eventId.slice(0, sep).trim();
+  const rawCursor = eventId.slice(sep + 1).trim();
+  if (!generation || !/^\d+$/.test(rawCursor)) return null;
+  const cursor = Number(rawCursor);
+  return Number.isSafeInteger(cursor) && cursor >= 0 ? { generation, cursor } : null;
+}
+
 export interface CuHandlersPorts {
   upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+  /** Optional shared broker client (created internally when omitted). */
+  broker?: CuBrokerClient;
   /** Optional test seam for the broker socket path. */
   socketPath?: () => string | null;
+  /** Optional listener for parsed broker SSE events (preemption, hand_back, resync, hello, etc.). */
+  onBrokerEvent?: (event: CuBrokerEvent) => void;
   /** Optional test seam for the loopback cua-spacesd port (host is always 127.0.0.1). */
   spacesPort?: number;
   /** Optional test seam for the WebSocket keepalive ping interval. */
@@ -767,6 +830,10 @@ export interface CuHandlersPorts {
   /** Optional test seam for SSE event/error buffer caps. */
   maxSseEventBytes?: number;
   maxSseErrorBytes?: number;
+  /** Optional test seam for slow SSE client backpressure drain timeout. */
+  sseDrainTimeoutMs?: number;
+  /** Optional test seam for max SSE client buffered bytes before eviction. */
+  sseMaxBufferedBytes?: number;
 }
 
 export interface CuHandlers {
@@ -784,7 +851,7 @@ export interface CuHandlers {
 }
 
 export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
-  const broker: CuBrokerClient = createCuBrokerClient({ socketPath: ports.socketPath });
+  const broker: CuBrokerClient = ports.broker ?? createCuBrokerClient({ socketPath: ports.socketPath });
   const spacesPort = Number.isInteger(ports.spacesPort) && ports.spacesPort! > 0 && ports.spacesPort! <= 65535
     ? ports.spacesPort!
     : DEFAULT_SPACES_PORT;
@@ -793,6 +860,8 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   const watchRetryMs = ports.watchRetryMs ?? EPOCH_WATCH_RETRY_MS;
   const maxSseEventBytes = ports.maxSseEventBytes ?? MAX_SSE_EVENT_BYTES;
   const maxSseErrorBytes = ports.maxSseErrorBytes ?? MAX_SSE_ERROR_BYTES;
+  const sseDrainTimeoutMs = ports.sseDrainTimeoutMs ?? DEFAULT_SSE_DRAIN_TIMEOUT_MS;
+  const sseMaxBufferedBytes = ports.sseMaxBufferedBytes ?? DEFAULT_SSE_MAX_BUFFERED_BYTES;
 
   const { WebSocket, WebSocketServer } = require('ws') as typeof WS;
   const negotiatedProtocols = new WeakMap<IncomingMessage, string>();
@@ -822,6 +891,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   const activeMediaSockets = new Set<(reason: string) => void>();
   const pendingMediaUpgrades = new Set<(statusLine: string) => void>();
   const activeSpacesRequests = new Set<(reason: string) => void>();
+  const activeBrokerStreams = new Set<() => void>();
 
   let stopped = false;
   let watcherReq: http.ClientRequest | null = null;
@@ -830,6 +900,8 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   let brokerWatchSynced = false;
   let brokerState: string | null = null;
   let latestEpoch = -1;
+  let watchGeneration: string | null = null;
+  let watchCursor: number | null = null;
   let watchSyncWaiters: Array<() => void> = [];
 
   function isHumanControlActive(): boolean {
@@ -930,22 +1002,26 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   function applyBrokerSnapshot(
     state: string,
     epoch: number,
-    options: { authoritativeHello?: boolean } = {},
+    options: { authoritativeHello?: boolean; resetEpoch?: boolean; generationChanged?: boolean } = {},
   ): boolean {
+    const prevEpoch = latestEpoch;
+    if (options.resetEpoch) {
+      latestEpoch = -1;
+    }
     // Ignore stale status/ticket/release/event responses from an older epoch
-    // unless this is a fresh authoritative hello snapshot after (re)connect.
-    if (!options.authoritativeHello && epoch < latestEpoch) return false;
+    // unless this is a fresh authoritative hello or resync/generation reset.
+    if (!options.authoritativeHello && !options.resetEpoch && epoch < latestEpoch) return false;
     const wasHuman = brokerState === 'human';
-    const humanEpochEnded = wasHuman && (state !== 'human' || epoch !== latestEpoch);
+    const humanEpochEnded = wasHuman && (state !== 'human' || epoch !== prevEpoch || options.generationChanged === true);
 
-    if (options.authoritativeHello) brokerWatchSynced = true;
+    if (options.authoritativeHello || options.resetEpoch) brokerWatchSynced = true;
     brokerState = state;
     latestEpoch = epoch;
-    if (options.authoritativeHello) resolveWatchSyncWaiters();
+    if (options.authoritativeHello || options.resetEpoch) resolveWatchSyncWaiters();
 
     revokeInteractiveTickets(state === 'human' ? epoch : null);
 
-    if (humanEpochEnded || (options.authoritativeHello && state !== 'human')) {
+    if (humanEpochEnded || ((options.authoritativeHello || options.resetEpoch) && state !== 'human')) {
       revokeAllActive('Human lease ended');
     }
     return true;
@@ -991,6 +1067,8 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       return;
     }
     let buffer = '';
+    let eventName = '';
+    let eventId = '';
     let dataLines: string[] = [];
     let eventBytes = 0;
     let sawFirstEvent = false;
@@ -1010,6 +1088,10 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     };
 
     const flushEvent = () => {
+      const currentEventName = eventName;
+      const currentEventId = eventId;
+      eventName = '';
+      eventId = '';
       if (!dataLines.length) return;
       const payload = dataLines.join('\n');
       dataLines = [];
@@ -1020,10 +1102,60 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       const state = typeof parsed.state === 'string' ? parsed.state : null;
       const epoch = typeof parsed.epoch === 'number' && Number.isFinite(parsed.epoch) ? parsed.epoch : null;
       if (state === null || epoch === null) return;
-      const authoritativeHello = !sawFirstEvent;
+
+      const parsedId = parseBrokerEventId(currentEventId || null);
+      const generation = (typeof parsed.generation === 'string' && parsed.generation.trim() ? parsed.generation.trim() : null)
+        ?? parsedId?.generation
+        ?? null;
+      const cursor = (typeof parsed.cursor === 'number' && Number.isInteger(parsed.cursor) && parsed.cursor >= 0 ? parsed.cursor : null)
+        ?? parsedId?.cursor
+        ?? null;
+      const isHello = currentEventName === 'hello' || (!sawFirstEvent && currentEventName === '');
+      const isResync = currentEventName === 'resync';
+      const resume = isHello && isRecord(parsed.resume) ? parsed.resume : null;
+      const resumeStatus = resume && typeof resume.status === 'string' ? resume.status : null;
+      const resyncReason = isResync && typeof parsed.reason === 'string'
+        ? parsed.reason
+        : (resume && typeof resume.resyncReason === 'string' ? resume.resyncReason : null);
+      const helloResyncRequired = resumeStatus === 'resync_required';
+      const generationChanged = generation !== null && watchGeneration !== null && generation !== watchGeneration;
+      const shouldReset = isResync || helloResyncRequired || generationChanged;
+
       sawFirstEvent = true;
-      applyBrokerSnapshot(state, epoch, { authoritativeHello });
+
+      if (shouldReset) {
+        if (generation !== null) watchGeneration = generation;
+        watchCursor = cursor !== null ? cursor : (generationChanged ? 0 : watchCursor);
+      } else if (isHello && resumeStatus === 'replayed') {
+        // §9.5: while replaying missed frames, do not advance cursor past un-replayed frames.
+        if (generation !== null) watchGeneration = generation;
+      } else {
+        if (generation !== null) watchGeneration = generation;
+        if (cursor !== null) watchCursor = cursor;
+      }
+
+      applyBrokerSnapshot(state, epoch, {
+        authoritativeHello: isHello,
+        resetEpoch: shouldReset,
+        generationChanged,
+      });
+
+      ports.onBrokerEvent?.({
+        eventName: currentEventName || (isHello ? 'hello' : 'message'),
+        eventId: currentEventId || null,
+        authoritativeHello: isHello,
+        isResync: isResync || helloResyncRequired,
+        resyncReason,
+        generation,
+        cursor,
+        generationChanged,
+        payload: parsed,
+      });
     };
+
+    const resumeOptions = watchGeneration !== null && watchCursor !== null
+      ? { generation: watchGeneration, cursor: watchCursor, lastEventId: `${watchGeneration}:${watchCursor}` }
+      : undefined;
 
     const req = broker.openEvents(
       (res) => {
@@ -1049,6 +1181,10 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
             buffer = buffer.slice(nl + 1);
             if (line === '') {
               flushEvent();
+            } else if (line.startsWith('event:')) {
+              eventName = line.slice(6).trim();
+            } else if (line.startsWith('id:')) {
+              eventId = line.slice(3).trim();
             } else if (line.startsWith('data:')) {
               const value = line.slice(5).replace(/^ /, '');
               eventBytes += Buffer.byteLength(value, 'utf8');
@@ -1066,6 +1202,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         res.on('error', disconnected);
       },
       () => failWatcher(req, watcherRes),
+      resumeOptions,
     );
     if (!req) {
       handleWatchLost();
@@ -1108,7 +1245,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   }
 
   function sendBrokerReply(res: TransportResponse, status: number, body: unknown): void {
-    res.status(status).json(normalizeBrokerErrorBody(status, body));
+    res.status(status).json(stripAgentSecrets(normalizeBrokerErrorBody(status, body)));
   }
 
   function sendBrokerFailure(res: TransportResponse, error: unknown): void {
@@ -1134,6 +1271,17 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   const stream: TransportHandler = (req, res) => {
     if (!ensureAvailable(res)) return;
     let closed = false;
+    const rawGen = typeof req.query.generation === 'string' && req.query.generation.trim()
+      ? req.query.generation.trim()
+      : null;
+    const rawCursor = typeof req.query.cursor === 'string'
+      ? req.query.cursor
+      : (typeof req.query.after === 'string' ? req.query.after : null);
+    const parsedCursor = rawCursor !== null && /^\d+$/.test(rawCursor) ? Number(rawCursor) : null;
+    const reqLastEventId = typeof req.headers['last-event-id'] === 'string' && req.headers['last-event-id'].trim()
+      ? req.headers['last-event-id'].trim()
+      : null;
+
     const upstream = broker.openEvents(
       (brokerRes) => {
         if (closed) { brokerRes.destroy(); return; }
@@ -1172,20 +1320,149 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('X-Accel-Buffering', 'no');
         res.flushHeaders();
-        brokerRes.pipe(res);
-        brokerRes.on('error', () => { try { res.end(); } catch {} });
-        res.on('close', () => { closed = true; try { brokerRes.destroy(); } catch {} });
+
+        let sseBuffer = '';
+        let frameHeaderLines: string[] = [];
+        let frameDataLines: string[] = [];
+        let frameBytes = 0;
+        let waitingDrain = false;
+        let drainTimer: NodeJS.Timeout | null = null;
+
+        const clearDrainTimer = () => {
+          if (drainTimer) {
+            clearTimeout(drainTimer);
+            drainTimer = null;
+          }
+        };
+
+        const closeClient = () => {
+          if (closed) return;
+          closed = true;
+          clearDrainTimer();
+          res.removeListener('drain', onDrain);
+          activeBrokerStreams.delete(closeClient);
+          try { brokerRes.destroy(); } catch {}
+          if (!res.writableEnded && !res.destroyed) {
+            try { res.end(); } catch {}
+          }
+        };
+
+        const onDrain = () => {
+          waitingDrain = false;
+          clearDrainTimer();
+          if (!closed) {
+            try { brokerRes.resume(); } catch {}
+          }
+        };
+
+        const writeAtomicFrame = (frame: string): boolean => {
+          if (closed || res.writableEnded || res.destroyed) {
+            closeClient();
+            return false;
+          }
+          const frameLen = Buffer.byteLength(frame, 'utf8');
+          const buffered = typeof res.writableLength === 'number' ? res.writableLength : 0;
+          if (buffered + frameLen > sseMaxBufferedBytes) {
+            closeClient();
+            return false;
+          }
+          let ok: boolean;
+          try {
+            ok = res.write(frame);
+            res.flush?.();
+          } catch {
+            closeClient();
+            return false;
+          }
+          if (!ok && !waitingDrain) {
+            waitingDrain = true;
+            try { brokerRes.pause(); } catch {}
+            res.once('drain', onDrain);
+            if (sseDrainTimeoutMs > 0) {
+              drainTimer = setTimeout(closeClient, sseDrainTimeoutMs);
+              drainTimer.unref();
+            }
+          }
+          return true;
+        };
+
+        const flushCompleteFrame = (): boolean => {
+          if (!frameHeaderLines.length && !frameDataLines.length) return true;
+          const outLines: string[] = [...frameHeaderLines];
+          if (frameDataLines.length) {
+            const rawData = frameDataLines.join('\n');
+            let parsed: unknown;
+            let isJson = false;
+            try { parsed = JSON.parse(rawData); isJson = true; } catch {}
+            if (isJson) {
+              outLines.push(`data: ${JSON.stringify(stripAgentSecrets(parsed))}`);
+            } else {
+              for (const dataLine of frameDataLines) outLines.push(`data: ${dataLine}`);
+            }
+          }
+          frameHeaderLines = [];
+          frameDataLines = [];
+          frameBytes = 0;
+          return writeAtomicFrame(`${outLines.join('\n')}\n\n`);
+        };
+
+        activeBrokerStreams.add(closeClient);
+        brokerRes.setEncoding('utf8');
+        brokerRes.on('data', (chunk: string) => {
+          if (closed) return;
+          sseBuffer += chunk;
+          if (Buffer.byteLength(sseBuffer, 'utf8') > maxSseEventBytes) {
+            closeClient();
+            return;
+          }
+          for (;;) {
+            if (closed) return;
+            const nl = sseBuffer.indexOf('\n');
+            if (nl < 0) break;
+            const line = sseBuffer.slice(0, nl).replace(/\r$/, '');
+            sseBuffer = sseBuffer.slice(nl + 1);
+            if (line === '') {
+              if (!flushCompleteFrame()) return;
+            } else if (line.startsWith(':') && frameHeaderLines.length === 0 && frameDataLines.length === 0) {
+              if (!writeAtomicFrame(`${line}\n\n`)) return;
+            } else if (line.startsWith('data:')) {
+              const value = line.slice(5).replace(/^ /, '');
+              frameBytes += Buffer.byteLength(value, 'utf8') + 6;
+              if (frameBytes > maxSseEventBytes) {
+                closeClient();
+                return;
+              }
+              frameDataLines.push(value);
+            } else {
+              frameBytes += Buffer.byteLength(line, 'utf8') + 1;
+              if (frameBytes > maxSseEventBytes) {
+                closeClient();
+                return;
+              }
+              frameHeaderLines.push(line);
+            }
+          }
+        });
+        brokerRes.on('end', closeClient);
+        brokerRes.on('error', closeClient);
+        res.on('close', closeClient);
       },
       (error) => {
         if (closed) return;
         sendBrokerFailure(res, Object.assign(error, { statusCode: 503 }));
+      },
+      {
+        generation: rawGen,
+        cursor: parsedCursor,
+        lastEventId: reqLastEventId,
       },
     );
     if (!upstream) {
       res.status(404).json({ error: 'Computer-use is not available on this host' });
       return;
     }
-    req.on('close', () => {
+    res.on('close', () => {
+      if (closed) return;
       closed = true;
       try { upstream.destroy(); } catch {}
     });
@@ -1258,7 +1535,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
           });
         }
         const out = viewer ? { ...reply.body, viewer } : reply.body;
-        res.status(200).json(out);
+        res.status(200).json(stripAgentSecrets(out));
         return;
       }
       sendBrokerReply(res, reply.status, reply.body);
@@ -1954,6 +2231,10 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     brokerState = null;
     viewerTickets.clear();
     mediaTickets.clear();
+    for (const closeStream of [...activeBrokerStreams]) {
+      try { closeStream(); } catch {}
+    }
+    activeBrokerStreams.clear();
     stopEpochWatcher();
     resolveWatchSyncWaiters();
     revokeAllActive('Server shutting down');

@@ -20,6 +20,8 @@ import { knownWorkspaceCwds } from './skill-feature-handlers';
 import { getHarness, listHarnesses } from './harnesses';
 import { dishDir, readDishSettings, readStore, replaceFile } from './dish-store';
 import { createAccessHandlers } from './access-handlers';
+import { createCuBrokerClient } from './cu-broker';
+import { createCuAgentLeases, CuBrokerUnavailableError, CuSeatBusyError, type CuCommandTarget } from './cu-agent-leases';
 import { createCuHandlers } from './cu-handlers';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';
@@ -31,7 +33,7 @@ import { createReviewHandlers } from './review-handlers';
 import { createFeatureHandlers } from './feature-handlers';
 import { harnessCommandAvailable, runHarnessModelCommand } from './harness-feature-commands';
 import { decodeLaunchParents } from './session-catalog';
-import { createSessionOwnership, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
+import { createSessionOwnership, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity, sessionSwitchRouteData } from './session-ownership';
 import { createSessionLaunch } from './session-launch';
 import { createSessionOperations } from './session-operations';
 import { createMessageHold } from './message-hold';
@@ -132,8 +134,11 @@ export function startServer(rootDirectory: string): Server {
     knowledgeAvailable: () => knowledge() !== null,
     computerUseAvailable: () => cuHandlers.available(),
   });
+  const cuBroker = createCuBrokerClient();
   const cuHandlers = createCuHandlers({
+    broker: cuBroker,
     upgradeAuthorized: req => accessHandlers.bearerUpgradeAuthorized(req),
+    onBrokerEvent: event => { cuAgentLeases.handleBrokerEvent(event); },
   });
   // Raw cua-spacesd viewer/gRPC-Web proxy: mounted before compression and
   // jsonBody so binary gRPC-Web payloads pass untouched, behind strict bearer auth.
@@ -200,8 +205,20 @@ export function startServer(rootDirectory: string): Server {
   app.delete('/api/fleet-artifacts/:token', relayHandlers.removeArtifact);
   app.get('/api/hosts', relayHandlers.hosts);
 
+  const cuBridgeCloseObserved = new WeakSet<LiveSession>();
   const ownership = createSessionOwnership({
-    onLive: session => lifecycleObserver(session),
+    onLive: session => {
+      lifecycleObserver(session);
+      if (session instanceof BridgeSession && !cuBridgeCloseObserved.has(session)) {
+        cuBridgeCloseObserved.add(session);
+        session.on('close', () => {
+          const harnessId = getHarness(session.harnessId)?.id || 'pi';
+          if (harnessId === 'omp') {
+            cuAgentLeases.handleSessionRetired(routeSessionId(harnessId, session.id));
+          }
+        });
+      }
+    },
     onRetired: route => { fileHandlers.retireSession(route); },
     readSessionTailEntry,
   });
@@ -211,6 +228,108 @@ export function startServer(rootDirectory: string): Server {
     adoptBridgeSessionSwitch, locatePiPane,
     liveSourceObservations,
   } = ownership;
+
+  function findLiveOmpSessionByProcess(expected: { readonly pid: number; readonly startTime: string }): string | null {
+    const scanRegistry = (): string | null => {
+      for (const entry of listRegisteredSessions()) {
+        const identity = registryIdentity(entry);
+        if (!identity || identity.harnessId !== 'omp') continue;
+        const regPid = Number(entry.pid);
+        if (!Number.isInteger(regPid) || regPid <= 1) continue;
+        const regProc = processIdentity(regPid);
+        if (regProc && processBelongsToPane(regProc, expected)) {
+          return routeSessionId('omp', identity.nativeSessionId);
+        }
+      }
+      return null;
+    };
+    const found = scanRegistry();
+    if (found) return found;
+    invalidateRegistryCache();
+    const afterRefresh = scanRegistry();
+    if (afterRefresh) return afterRefresh;
+    for (const [routeId, placement] of Object.entries(tmux.listSpawns())) {
+      const identity = routeIdentity(routeId);
+      if (!identity || identity.harnessId !== 'omp') continue;
+      if (isRecord(placement.paneProcess) && sameProcessIdentity(placement.paneProcess, expected) && getRegisteredSession(routeId)) {
+        return routeId;
+      }
+    }
+    return null;
+  }
+
+  function bridgeMatchesExpectedProcess(sessionId: string, expected: ProcessIdentity | null): boolean {
+    if (!expected) return true;
+    if (!processIdentityAlive(expected)) return false;
+    let reg = getRegisteredSession(sessionId);
+    if (!reg) {
+      invalidateRegistryCache();
+      reg = getRegisteredSession(sessionId);
+    }
+    const regPid = Number(reg?.pid);
+    if (Number.isInteger(regPid) && regPid > 1) {
+      const liveProc = processIdentity(regPid);
+      return !!liveProc && processBelongsToPane(liveProc, expected);
+    }
+    const spawn = tmux.getSpawn(sessionId);
+    if (spawn && isRecord(spawn.paneProcess) && sameProcessIdentity(spawn.paneProcess, expected)) {
+      return true;
+    }
+    return false;
+  }
+
+  const cuAgentLeases = createCuAgentLeases({
+    broker: cuBroker,
+    findSessionIdByProcess: findLiveOmpSessionByProcess,
+    abortSession: async (target: CuCommandTarget) => {
+      if (!target.isStillValid()) return false;
+      const expected = target.pid !== null && target.pidStartTime
+        ? { pid: target.pid, startTime: target.pidStartTime }
+        : null;
+      const live = await getLiveSession(target.sessionId).catch(() => null);
+      if (!live || !live.alive || !liveSessionSupports(live, 'abort')) return false;
+      if (live instanceof BridgeSession) {
+        await live.waitForHello({ timeout: 2000 }).catch(() => {});
+      }
+      // Recheck owner and OS process identity right before sending abort.
+      if (!live.alive || !target.isStillValid() || !bridgeMatchesExpectedProcess(target.sessionId, expected)) {
+        return false;
+      }
+      await live.abort();
+      return true;
+    },
+    resumeSession: async (target: CuCommandTarget, nudgeText: string) => {
+      if (!target.isStillValid()) return false;
+      const expected = target.pid !== null && target.pidStartTime
+        ? { pid: target.pid, startTime: target.pidStartTime }
+        : null;
+      // Never wake a closed or hibernated session on hand-back.
+      const live = await getLiveSession(target.sessionId).catch(() => null);
+      if (!live || !live.alive) return false;
+      if (live instanceof BridgeSession) {
+        await live.waitForHello({ timeout: 2000 }).catch(() => {});
+      }
+      if (!live.alive || !liveSessionSupports(live, 'prompt')) return false;
+      // Recheck owner and OS process identity right before sending nudge.
+      if (!target.isStillValid() || !bridgeMatchesExpectedProcess(target.sessionId, expected)) {
+        return false;
+      }
+      if (live instanceof BridgeSession) {
+        const queued = live.promptOrFollowUp(nudgeText);
+        if (queued) {
+          await queued;
+          return true;
+        }
+        await live.prompt(
+          nudgeText,
+          liveSessionSupports(live, 'followUp') && live.turnInProgress ? { deliverAs: 'followUp' } : {},
+        );
+        return true;
+      }
+      await live.prompt(nudgeText);
+      return true;
+    },
+  });
 
   async function liveOrWake(sessionId: string): Promise<LiveSession | null> {
     const live = await getLiveSession(sessionId);
@@ -315,7 +434,13 @@ export function startServer(rootDirectory: string): Server {
   const streamViewers = new Map<string, number>();
   const lifecycleObserver = createSessionLifecycleObserver({
     wakeSession: routeId => { messageHold.wake(routeId); },
-    adoptSessionSwitch: (session, data) => { adoptBridgeSessionSwitch(session, data); },
+    adoptSessionSwitch: (session, data) => {
+      const routed = sessionSwitchRouteData(session, data);
+      adoptBridgeSessionSwitch(session, data);
+      if (routed && routed.sessionId !== routed.previousSessionId) {
+        cuAgentLeases.adoptSessionSwitch(routed.previousSessionId, routed.sessionId);
+      }
+    },
   });
   const catalog = createCatalogRuntime({ ownership, onPrimeSession: lifecycleObserver });
 
@@ -405,13 +530,15 @@ export function startServer(rootDirectory: string): Server {
     sessionIsPrivate,
     privateRefused: privateSessions.refused,
   });
-  const sessionLaunch = createSessionLaunch({ runHarnessModelCommand });
+  const sessionLaunch = createSessionLaunch({ runHarnessModelCommand, cuLeases: cuAgentLeases });
   const sessionOperations = createSessionOperations({
     ownership,
     launch: sessionLaunch,
     getActiveSessions: catalog.getActiveSessions,
     readSessionCwd,
     recordLaunchProvenance: (id, sourceId, operationId, sourceBasis) => sessionProvenance.recordLaunch(id, sourceId, operationId, sourceBasis),
+    onSessionStopped: id => cuAgentLeases.releaseSession(id),
+    cuSeatState: id => cuAgentLeases.getSessionSeatState(id),
   });
   const featureHandlers = createFeatureHandlers({
     catalog, ownership, findSessionSource,
@@ -447,6 +574,8 @@ export function startServer(rootDirectory: string): Server {
     catalog,
     hibernated: () => hibernation.records(),
     privateUnlocked,
+    cuOwnerId: id => cuAgentLeases.ownerIdForSession(id),
+    cuWaitingForDesktop: id => cuAgentLeases.isWaitingForDesktop(id),
   });
   const relationHandlers = createSessionRelationHandlers({ catalog, resolveSessionCandidate, privateUnlocked });
   const agySessionHandlers = createAgySessionHandlers({ ownership, findSessionSource });
@@ -713,20 +842,39 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/diff/patch', fileHandlers.diffPatch);
   app.get('/api/sessions/:id/diff', fileHandlers.diffSummary);
 
-  const createHandlers = createSessionCreateHandlers({ sessionOperations, sessionLaunch, sessionKnown });
+  const createHandlers = createSessionCreateHandlers({
+    sessionOperations,
+    sessionLaunch,
+    sessionKnown,
+    cuSeatState: id => cuAgentLeases.getSessionSeatState(id),
+  });
   app.post('/api/sessions/new', createHandlers.create);
   app.get('/api/session-spawns/:id', createHandlers.spawnStatus);
 
   app.post('/api/sessions/:id/resume', async (req: ApplicationRequest, res: ApplicationResponse) => {
     const body = requestBody(req);
     try {
-      res.json(await sessionOperations.resumeSessionById(req.params.id, {
+      const result = await sessionOperations.resumeSessionById(req.params.id, {
         model: body.model,
         target: body.target as HarnessLaunchTarget | null | undefined,
-      }));
+      });
+      const cuSeat = cuAgentLeases.getSessionSeatState(result.id);
+      res.json(cuSeat ? { ...result, cuSeat } : result);
       hibernation.forget(req.params.id);
       messageHold.wake(req.params.id);
     } catch (error) {
+      if (error instanceof CuSeatBusyError) {
+        return res.status(error.status).json({
+          error: error.message,
+          code: error.code,
+          state: error.state,
+          epoch: error.epoch,
+          holder: error.holder,
+        });
+      }
+      if (error instanceof CuBrokerUnavailableError) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
+      }
       res.status(errorStatus(error, 500)).json({ error: errorMessage(error) });
     }
   });
@@ -1307,6 +1455,7 @@ export function startServer(rootDirectory: string): Server {
     // Detach from Prime's daemon: the poller and socket belong to this server.
     getPrimeDaemon().shutdown();
     if (shareServer) { try { shareServer.close(); } catch {} }
+    cuAgentLeases.stop();
     cuHandlers.stop();
     remoteHosts.shutdown();
     sessionBounces.stop();
@@ -1430,8 +1579,11 @@ export function startServer(rootDirectory: string): Server {
       }
       // Prime roots live in the daemon roster, not the bridge registry, so poll it.
       getPrimeDaemon().start();
-      // A restored idle session is interrupted work, not a completed oneShot.
-      recoveryRunner.start()
+      // Reconcile persisted CU agent leases against broker status before restart recovery
+      // so dead pre-restart orphans are released/cancelled before recovered sessions spawn.
+      cuAgentLeases.reconcile()
+        .catch(error => console.error(`[cu-lease] startup reconciliation failed: ${errorMessage(error)}`))
+        .then(() => recoveryRunner.start())
         .then(() => { tmuxServerWatch?.checkNow(); return routineRunner?.recoverAfterRestart(); })
         .then(() => { if (!recoveryStopped) routineRunner?.start(); })
         .catch((error) => console.error(`Session restart recovery failed: ${errorMessage(error)}`));

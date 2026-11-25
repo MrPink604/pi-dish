@@ -7,6 +7,7 @@ import {
   decodeCuStatus,
   decodeCuTicket,
   type CuLocalHumanLease,
+  type CuSeatSessionContext,
   type CuSessionListCue,
   type CuStatus,
 } from './cu-viewer-data';
@@ -27,7 +28,12 @@ export interface CuSessionPanelOptions {
   root: HTMLElement;
   request: ApiRequest;
   host: (id: string | null | undefined) => CuPanelHost | null;
-  currentSession: () => { id?: string | null; host?: string | null } | null;
+  currentSession: () => {
+    id?: string | null;
+    host?: string | null;
+    cuOwnerId?: string | null;
+    cuWaitingForDesktop?: boolean;
+  } | null;
   supports: (host: CuPanelHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
   ticket: (host: HostEndpoint) => Promise<string>;
@@ -50,6 +56,7 @@ interface DisplayHostEntry {
   readonly subscribers: Set<DisplayHostSubscriber>;
   status: CuStatus | null;
   latestEpoch: number;
+  brokerGeneration: string | null;
   connGen: number;
   disconnected: boolean;
   awaitingReconnectHello: boolean;
@@ -61,7 +68,7 @@ interface DisplayHostEntry {
   generation: number;
 }
 
-const SSE_EVENTS = ['hello', 'lease_changed', 'preempted', 'hand_back', 'seat_idle', 'attention_needed'] as const;
+const SSE_EVENTS = ['hello', 'resync', 'lease_changed', 'preempted', 'hand_back', 'seat_idle', 'attention_needed'] as const;
 const CU_REQUEST_TIMEOUT_MS = 25_000;
 const TAKEOVER_CLASSES = [
   'usage-open',
@@ -146,14 +153,28 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     } catch {}
   }
 
-  function cueFingerprint(cue: CuSessionListCue | null): string {
-    return cue ? `${cue.state}\0${cue.tone}\0${cue.label}\0${cue.title}` : '';
+  function sessionCueContext(
+    session: { cuOwnerId?: string | null; cuWaitingForDesktop?: boolean } | null | undefined,
+  ): CuSeatSessionContext {
+    return {
+      cuOwnerId: session?.cuOwnerId ?? null,
+      waitingForDesktop: session?.cuWaitingForDesktop === true,
+      sessionScoped: true,
+    };
+  }
+
+  function statusCueFingerprint(status: CuStatus | null, cue: CuSessionListCue | null): string {
+    const base = cue ? `${cue.state}\0${cue.tone}\0${cue.label}\0${cue.title}` : '';
+    const owner = status?.lease?.ownerId ?? '';
+    const preemptedOwner = status?.preempted?.ownerId ?? '';
+    const gen = status?.generation ?? '';
+    return base || owner || preemptedOwner ? `${base}\0${owner}\0${preemptedOwner}\0${gen}` : '';
   }
 
   function notifySeatCueIfChanged(entry: DisplayHostEntry, nextStatus: CuStatus | null): void {
     const leaseHint = nextStatus ? options.paneLocalLease(entry.endpoint) : null;
     const cue = cuSessionListCue(nextStatus, leaseHint);
-    const nextFp = cueFingerprint(cue);
+    const nextFp = statusCueFingerprint(nextStatus, cue);
     const prevFp = lastCueFingerprints.get(entry.hostKey) ?? '';
     if (nextFp) lastCueFingerprints.set(entry.hostKey, nextFp);
     else lastCueFingerprints.delete(entry.hostKey);
@@ -293,22 +314,27 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     if (!session || !hostSupported(host)) {
       summaryEl.hidden = true;
       summaryEl.textContent = '';
+      delete summaryEl.dataset.owner;
       return;
     }
     const entry = displayHosts.get(keyOf(host));
     if (!entry || entry.disconnected) {
       summaryEl.hidden = true;
       summaryEl.textContent = '';
+      delete summaryEl.dataset.owner;
       return;
     }
-    const cue = cuSessionListCue(entry.status, options.paneLocalLease(host));
+    const cue = cuSessionListCue(entry.status, options.paneLocalLease(host), sessionCueContext(session));
     if (!cue) {
       summaryEl.hidden = true;
       summaryEl.textContent = '';
+      delete summaryEl.dataset.owner;
       return;
     }
     summaryEl.hidden = false;
     summaryEl.dataset.tone = cue.tone;
+    if (cue.owner) summaryEl.dataset.owner = cue.owner;
+    else delete summaryEl.dataset.owner;
     summaryEl.textContent = cue.label;
     summaryEl.title = cue.title;
   }
@@ -329,7 +355,7 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
 
     const status = currentPanelDisplayStatus();
     const leaseHint = status ? options.paneLocalLease(panelHost) : null;
-    const presentation = cuSeatPresentation(status, leaseHint, now());
+    const presentation = cuSeatPresentation(status, leaseHint, now(), sessionCueContext(options.currentSession()));
 
     const modePill = doc.getElementById('cuPanelModePill');
     if (modePill) {
@@ -340,6 +366,8 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     if (badgeEl) {
       badgeEl.textContent = presentation.badge;
       badgeEl.dataset.tone = presentation.tone;
+      if (presentation.owner) badgeEl.dataset.owner = presentation.owner;
+      else delete badgeEl.dataset.owner;
     }
     const detailEl = doc.getElementById('cuPanelSeatDetail');
     if (detailEl) detailEl.textContent = presentation.detail;
@@ -366,7 +394,7 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     if (!isPanelOpen() || !panelHost) return;
     const status = currentPanelDisplayStatus();
     const leaseHint = status ? options.paneLocalLease(panelHost) : null;
-    const presentation = cuSeatPresentation(status, leaseHint, now());
+    const presentation = cuSeatPresentation(status, leaseHint, now(), sessionCueContext(options.currentSession()));
     const detailEl = doc.getElementById('cuPanelSeatDetail');
     if (detailEl) detailEl.textContent = presentation.detail;
   }
@@ -411,9 +439,11 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
   ): void {
     if (disposed || displayHosts.get(entry.hostKey) !== entry) return;
     if (acceptOpts.connGen !== undefined && acceptOpts.connGen !== entry.connGen) return;
-    if (!acceptOpts.authoritativeHello && next.epoch < entry.latestEpoch) return;
+    const genChanged = !!next.generation && !!entry.brokerGeneration && next.generation !== entry.brokerGeneration;
+    if (!acceptOpts.authoritativeHello && !genChanged && next.epoch < entry.latestEpoch) return;
     entry.disconnected = false;
-    if (acceptOpts.authoritativeHello) entry.awaitingReconnectHello = false;
+    if (acceptOpts.authoritativeHello || genChanged) entry.awaitingReconnectHello = false;
+    if (next.generation) entry.brokerGeneration = next.generation;
     entry.latestEpoch = next.epoch;
     entry.status = next;
     notifySeatCueIfChanged(entry, next);
@@ -452,6 +482,20 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
       const decoded = decodeCuStatus(parsed);
       if (!decoded) return;
       const isHello = event.type === 'hello';
+      const isResync = event.type === 'resync';
+      const genChanged = !!decoded.generation && !!entry.brokerGeneration && decoded.generation !== entry.brokerGeneration;
+      if (isResync || genChanged) {
+        entry.connGen += 1;
+        entry.latestEpoch = -1;
+        entry.awaitingReconnectHello = false;
+        if (decoded.generation) entry.brokerGeneration = decoded.generation;
+        entry.disconnected = false;
+        acceptDisplayStatus(entry, decoded, { connGen: entry.connGen, authoritativeHello: true });
+        if (panelOpen && panelHostKey === entry.hostKey && !panelIframeUrl && panelTicketInFlight === 0) {
+          void loadPanelTicket(panelGeneration, entry.hostKey, entry.endpoint, 0);
+        }
+        return;
+      }
       if (isHello) {
         // Display-only connection generation: an authoritative reconnect or
         // broker-restart hello accepts a lower epoch (e.g. 0) and discards
@@ -466,6 +510,7 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
           entry.latestEpoch = -1;
           entry.awaitingReconnectHello = false;
         }
+        if (decoded.generation) entry.brokerGeneration = decoded.generation;
         entry.disconnected = false;
         acceptDisplayStatus(entry, decoded, { connGen: entry.connGen, authoritativeHello });
         if (authoritativeHello && panelOpen && panelHostKey === entry.hostKey && !panelIframeUrl && panelTicketInFlight === 0) {
@@ -491,6 +536,7 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
       entry.awaitingReconnectHello = true;
       entry.connGen += 1;
       entry.latestEpoch = -1;
+      entry.brokerGeneration = null;
       entry.status = null;
       notifySeatCueIfChanged(entry, null);
       if (panelOpen && panelHostKey === entry.hostKey) renderPanelHeader();
@@ -553,6 +599,7 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
         subscribers: new Set([sub]),
         status: null,
         latestEpoch: -1,
+        brokerGeneration: null,
         connGen: 1,
         disconnected: false,
         awaitingReconnectHello: false,
@@ -771,7 +818,11 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
       teardownPanel();
     }
 
-    renderPanelSummary();
+    if (panelOpen && panelHostKey === nextHostKey) {
+      renderPanelHeader();
+    } else {
+      renderPanelSummary();
+    }
 
     if (sKey && restoredPanelSessionKey !== sKey) {
       restoredPanelSessionKey = sKey;
@@ -827,13 +878,13 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
     acceptDisplayStatus(entry, nextStatus, { connGen: entry.connGen });
   }
 
-  function seatCue(hostId?: string | null): CuSessionListCue | null {
+  function seatCue(hostId?: string | null, context?: CuSeatSessionContext): CuSessionListCue | null {
     if (disposed) return null;
     const host = options.host(hostId ?? null);
     if (!hostSupported(host)) return null;
     const entry = displayHosts.get(keyOf(host));
     if (!entry || entry.disconnected) return null;
-    return cuSessionListCue(entry.status, options.paneLocalLease(host));
+    return cuSessionListCue(entry.status, options.paneLocalLease(host), context);
   }
 
   function dispose(): void {

@@ -17,6 +17,7 @@ import { LifecycleInterruption, OwnershipRefusal, liveSessionSupports, recoveryR
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import { cleanupProcesses } from './session-launch';
 import type { CleanupEvidence, HarnessLaunchTarget, LaunchOutcome, ResumeUncertainty, SessionLaunch } from './session-launch';
+import { CuBrokerUnavailableError, CuSeatBusyError } from './cu-agent-leases';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryControl, RecoveryRecord } from './session-recovery';
 import * as tmux from './tmux';
@@ -34,6 +35,10 @@ export interface SessionOperationObservations {
   getActiveSessions(): readonly ActiveSessionObservation[];
   readSessionCwd(source: SessionSource): unknown;
   recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string, sourceBasis?: string | null): void;
+  /** Invoked after a session is explicitly closed or hibernated so external leases release/cancel cleanly. */
+  onSessionStopped?(sessionId: string): Promise<void> | void;
+  /** Optional non-secret CU seat disposition for async spawn completion. */
+  cuSeatState?(sessionId: string): 'waiting_for_desktop' | null;
 }
 
 export interface CreateSessionOptions {
@@ -66,8 +71,17 @@ export interface ResumeSessionResult {
 
 export type SessionSpawnOperation =
   | { status: 'starting'; createdAt: number }
-  | { status: 'ready'; createdAt: number; sessionId: string }
-  | { status: 'error'; createdAt: number; error: string };
+  | { status: 'ready'; createdAt: number; sessionId: string; cuSeat?: 'waiting_for_desktop' }
+  | {
+    status: 'error';
+    createdAt: number;
+    error: string;
+    code?: string;
+    httpStatus?: number;
+    state?: string | null;
+    epoch?: number | null;
+    holder?: Record<string, unknown> | null;
+  };
 
 interface CloseIntentState {
   preserve: boolean;
@@ -243,12 +257,34 @@ export function createSessionOperations(observations: SessionOperationObservatio
       })
       .then(sessionId => {
         if (options.sourceSessionId) recordSessionLaunch(sessionId, options.sourceSessionId, spawnId, options.sourceBasis);
-        operation = { status: 'ready', createdAt, sessionId };
+        const cuSeat = observations.cuSeatState?.(sessionId) ?? null;
+        operation = { status: 'ready', createdAt, sessionId, ...(cuSeat ? { cuSeat } : {}) };
         sessionSpawnOperations.set(spawnId, operation);
       })
       .catch(error => {
         console.error('Failed to create session:', error);
-        operation = { status: 'error', createdAt, error: errorMessage(error) };
+        if (error instanceof CuSeatBusyError) {
+          operation = {
+            status: 'error',
+            createdAt,
+            error: error.message,
+            code: error.code,
+            httpStatus: error.status,
+            state: error.state,
+            epoch: error.epoch,
+            holder: error.holder,
+          };
+        } else if (error instanceof CuBrokerUnavailableError) {
+          operation = {
+            status: 'error',
+            createdAt,
+            error: error.message,
+            code: error.code,
+            httpStatus: error.status,
+          };
+        } else {
+          operation = { status: 'error', createdAt, error: errorMessage(error) };
+        }
         sessionSpawnOperations.set(spawnId, operation);
       })
       .finally(() => {
@@ -288,6 +324,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
         stopped = true;
         tmux.removeSpawn(routeId, spawn);
         pruneRegisteredSession(registry);
+        try { await observations.onSessionStopped?.(routeId); } catch {}
         return { kind: 'stopped' };
       } catch (error) {
         return { kind: 'cleanup-failed', stopped, status: 500, error: `Failed to close the owned ${descriptor.label} pane: ${errorMessage(error)}`, cause: error };
@@ -604,18 +641,27 @@ export function createSessionOperations(observations: SessionOperationObservatio
         });
       }
       // R/L is asymmetric: close never checks this file flight, and an already-active R may return above.
-      if (closeFlights.has(sessionId)) throw new SessionOperationError(409, 'The session is being closed; retry after close completes.');
+      const rollbackRecoveryLaunch = () => {
+        if (!recovery) return;
+        const currentControl = recoveryStore.getControl(recovery.harnessId, recovery.nativeSessionId);
+        recoveryStore.patchControl(recovery.harnessId, recovery.nativeSessionId, {
+          attempt: { ...currentControl.attempt, launch: previousLaunch ?? null },
+        });
+      };
+      if (closeFlights.has(sessionId)) {
+        rollbackRecoveryLaunch();
+        throw new SessionOperationError(409, 'The session is being closed; retry after close completes.');
+      }
       const outcome = await launch.launchResumedSession({
-        descriptor, sessionFile, cwd, name: recovery?.name || null, target, model, thinking, expectedTmuxServer,
+        descriptor, sessionFile, sessionId, cwd, name: recovery?.name || null, target, model, thinking, expectedTmuxServer,
       });
       if (outcome.kind !== 'ready') {
         if (outcome.error instanceof tmux.TmuxServerLostError) {
-          if (recovery && outcome.error.beforeSpawn) {
-            const currentControl = recoveryStore.getControl(recovery.harnessId, recovery.nativeSessionId);
-            recoveryStore.patchControl(recovery.harnessId, recovery.nativeSessionId, {
-              attempt: { ...currentControl.attempt, launch: previousLaunch ?? null },
-            });
-          }
+          if (outcome.error.beforeSpawn) rollbackRecoveryLaunch();
+          throw outcome.error;
+        }
+        if (outcome.error instanceof CuSeatBusyError || outcome.error instanceof CuBrokerUnavailableError) {
+          rollbackRecoveryLaunch();
           throw outcome.error;
         }
         if (target?.type === 'tmux') rememberUncertainPlacement(sessionFile, outcome);
