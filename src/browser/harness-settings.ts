@@ -37,6 +37,8 @@ export function createHarnessSettings(options: {
   request: ApiRequest;
   fallbackModels: (host: Readonly<DirectoryHost>, harness: string) => readonly Readonly<CatalogModel>[];
   onSaved: (scope: HarnessSettingsScope) => void;
+  openOmpModels?: () => void;
+  ompModelsAvailable?: () => boolean | null;
 }) {
   const { root } = options;
   const AGENT_MODEL_ROLE_REFS = OMP_MODEL_ROLES.map(role => `@${role.key}`);
@@ -123,6 +125,7 @@ export function createHarnessSettings(options: {
     $('harnessAgentsBody').textContent = 'Loading…';
     $('harnessSettingsDefaults').textContent = 'Loading…';
     disposePickers();
+    root.querySelector('.hs-omp-allowlist-callout')?.remove();
     $('modelRolesBody').innerHTML = '';
     $('hsDynamicTabs').innerHTML = '';
     $('hsSettingsBody').innerHTML = '';
@@ -208,7 +211,29 @@ export function createHarnessSettings(options: {
       spellcheck="false" autocomplete="off"><div class="cwd-dropdown"></div></div>`;
   }
 
+  function renderOmpAllowlistCallout(): void {
+    const pane = $('hsPaneModels');
+    pane.querySelector('.hs-omp-allowlist-callout')?.remove();
+    if (harnessSettings?.scope.harnessId !== 'omp' || !options.openOmpModels) return;
+    const known = options.ompModelsAvailable?.() ?? null;
+    const callout = root.ownerDocument.createElement('div');
+    callout.className = 'hs-omp-allowlist-callout';
+    callout.innerHTML = `<div class="hs-omp-allowlist-copy">
+      <strong>Fleet model allow-list (<code>enabledModels</code>)</strong>
+      <small>Managed in <code>fleet.yml</code> (overrides <code>~/.omp/agent/config.yml</code> across hosts).</small>
+    </div>${known === false
+      ? '<small class="omp-models-unavailable-hint">Unavailable on this host</small>'
+      : '<button type="button" class="btn-small" id="hsOpenOmpModels">Edit allow-list</button>'}`;
+    const btn = callout.querySelector<HTMLButtonElement>('#hsOpenOmpModels');
+    btn?.addEventListener('click', () => {
+      close();
+      options.openOmpModels?.();
+    });
+    pane.insertBefore(callout, $('modelRolesBody'));
+  }
+
   function renderModelRoles() {
+    renderOmpAllowlistCallout();
     const body = $('modelRolesBody');
     disposePickers(body);
     const rows = buildRoleRows(harnessSettings?.config);

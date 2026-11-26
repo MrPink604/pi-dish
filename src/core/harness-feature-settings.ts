@@ -219,6 +219,8 @@ async function readSettings(descriptor: HarnessDescriptor, cwd?: string) {
   for (const [key, entry] of Object.entries(global)) {
     const meta = schema.get(key);
     if (!meta || meta.tab === 'internal' || typeof entry.type !== 'string') continue;
+    // Fleet's fleet.yml overrides OMP's local config.yml for enabledModels; keep it out of `omp config set`.
+    if (descriptor.id === 'omp' && key === 'enabledModels') continue;
     const row: SettingRow = { key, tab: meta.tab, type: entry.type, description: typeof entry.description === 'string' ? entry.description : '' };
     if (entry.type === 'enum' && meta.typeDisplay.includes('|')) row.values = meta.typeDisplay.split('|');
     if (entry.redacted === true) row.redacted = true;
@@ -457,6 +459,9 @@ export const updateHarnessSettings = harnessRoute({
     if (!patch.length) return res.status(400).json({ error: 'settings must name at least one setting' });
     for (const [key] of patch) {
       if (!SETTING_KEY.test(key)) return res.status(400).json({ error: `Invalid setting key: ${key}` });
+      if (descriptor.id === 'omp' && key === 'enabledModels') {
+        return res.status(400).json({ error: 'OMP enabledModels is managed via fleet.yml (config.yml is overridden); use the OMP model allow-list editor (/api/omp-models).' });
+      }
     }
     res.json(await queueHarnessConfigWrite(descriptor.id, async () => {
       const rows = new Map((await readSettings(descriptor)).settings.map(row => [row.key, row]));

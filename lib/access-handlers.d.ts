@@ -22,6 +22,8 @@ export interface AccessPorts {
     knowledgeAvailable(): boolean;
     /** True where the guest cu-broker Unix socket exists (PI_DISH_CU_BROKER_SOCKET). */
     computerUseAvailable?(): boolean;
+    /** True where the local `fleet omp-models` helper exists on this host. */
+    ompModelsAvailable?(): boolean;
 }
 export interface AccessHandlers {
     compression: TransportHandler;
@@ -31,6 +33,7 @@ export interface AccessHandlers {
     sameOriginOnly: TransportHandler;
     checkCuMutationIngress(req: TransportRequest, res: TransportResponse): boolean;
     cuMutationGuard: TransportHandler;
+    ompModelsMutationGuard: TransportHandler;
     requireBearer: TransportHandler;
     apiGate: TransportHandler;
     hostsGate: TransportHandler;

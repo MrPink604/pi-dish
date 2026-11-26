@@ -79,6 +79,7 @@ import { createPrivateSessionHandlers } from './private-session-handlers';
 import { isPrivateSessionFile } from './private-sessions';
 import { createSessionDelete } from './session-delete';
 import { createUploadHandlers, uploadMaxBytes } from './upload-handlers';
+import { createOmpModelsHandlers } from './omp-models';
 import { errorMessage, errorStatus, requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
 import type { NextFunction } from 'express';
 import type { Server } from 'node:http';
@@ -125,6 +126,7 @@ export function startServer(rootDirectory: string): Server {
     }
   }
 
+  const ompModelsHandlers = createOmpModelsHandlers();
   const accessHandlers = createAccessHandlers({
     version: packageVersion,
     readDishSettings,
@@ -133,6 +135,7 @@ export function startServer(rootDirectory: string): Server {
     botsAvailable: () => bots() !== null,
     knowledgeAvailable: () => knowledge() !== null,
     computerUseAvailable: () => cuHandlers.available(),
+    ompModelsAvailable: () => ompModelsHandlers.available(),
   });
   const cuBroker = createCuBrokerClient();
   const cuHandlers = createCuHandlers({
@@ -771,6 +774,10 @@ export function startServer(rootDirectory: string): Server {
   app.put('/api/harnesses/:id/settings', featureHandlers.updateHarnessSettings);
   app.get('/api/models', featureHandlers.models);
   app.put('/api/models/enabled', featureHandlers.updateEnabledModels);
+  app.get('/api/omp-models', ompModelsHandlers.get);
+  app.post('/api/omp-models/preview', accessHandlers.ompModelsMutationGuard, ompModelsHandlers.preview);
+  app.post('/api/omp-models/dry-run', accessHandlers.ompModelsMutationGuard, ompModelsHandlers.dryRun);
+  app.post('/api/omp-models/apply', accessHandlers.ompModelsMutationGuard, ompModelsHandlers.apply);
   app.get('/api/commands', featureHandlers.commands);
 
   app.post('/api/sessions/:id/abort', mutationHandlers.abort);
@@ -1489,6 +1496,7 @@ export function startServer(rootDirectory: string): Server {
     hibernation.stop();
     pushNotifier.stop();
     agyImport.stop();
+    ompModelsHandlers.dispose();
     botRegistry?.close();
     botRegistry = null;
   }

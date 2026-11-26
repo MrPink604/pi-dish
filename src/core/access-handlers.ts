@@ -36,6 +36,8 @@ export interface AccessPorts {
   knowledgeAvailable(): boolean;
   /** True where the guest cu-broker Unix socket exists (PI_DISH_CU_BROKER_SOCKET). */
   computerUseAvailable?(): boolean;
+  /** True where the local `fleet omp-models` helper exists on this host. */
+  ompModelsAvailable?(): boolean;
 }
 
 export interface AccessHandlers {
@@ -46,6 +48,7 @@ export interface AccessHandlers {
   sameOriginOnly: TransportHandler;
   checkCuMutationIngress(req: TransportRequest, res: TransportResponse): boolean;
   cuMutationGuard: TransportHandler;
+  ompModelsMutationGuard: TransportHandler;
   requireBearer: TransportHandler;
   apiGate: TransportHandler;
   hostsGate: TransportHandler;
@@ -244,6 +247,7 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (ports.botsAvailable()) capabilities.bots = true;
     if (ports.knowledgeAvailable()) capabilities.knowledge = true;
     if (ports.computerUseAvailable?.()) capabilities.computerUse = true;
+    if (ports.ompModelsAvailable?.()) capabilities.ompModels = true;
     return {
       hostId,
       label,
@@ -272,8 +276,8 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
   const cors: TransportHandler = (req, res, next) => {
     // Never expose unauthenticated agent controls to another browser origin.
     if (!authToken) return next();
-    // Page forms and computer-use routes answer pi-dish's own pages only, never another origin.
-    if (/^\/api\/(?:page-forms|cu)(?:\/|$)/i.test(req.path) || /^\/hosts\/[^/]+\/api\/cu(?:\/|$)/i.test(req.path)) return next();
+    // Page forms, computer-use and local omp-models routes answer pi-dish's own pages only, never another origin.
+    if (/^\/api\/(?:page-forms|cu|omp-models)(?:\/|$)/i.test(req.path) || /^\/hosts\/[^/]+\/api\/cu(?:\/|$)/i.test(req.path)) return next();
     const origin = req.headers.origin;
     if (origin && allowedOrigins().includes(origin)) {
       res.header('Access-Control-Allow-Origin', origin);
@@ -351,6 +355,23 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     }
     next();
   };
+  const ompModelsMutationGuard: TransportHandler = (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    const originError = checkCuMutationOrigin(req, publicOrigins);
+    if (originError) {
+      res.status(403).json({ error: originError.replace(/computer-use/g, 'OMP model allow-list') });
+      return;
+    }
+    if (!req.is('application/json')) {
+      res.status(415).json({ error: 'Expected Content-Type: application/json' });
+      return;
+    }
+    if (req.headers['content-length'] === '0' || !isRecord(req.body)) {
+      res.status(400).json({ error: 'Expected a JSON object body' });
+      return;
+    }
+    next();
+  };
 
   function tokenGate(exempt: (req: TransportRequest) => boolean): TransportHandler {
     return (req, res, next) => {
@@ -376,5 +397,5 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (!authToken) { res.json({ ticket: null }); return; }
     res.json(mintTicket(purpose));
   };
-  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, checkCuMutationIngress, cuMutationGuard, requireBearer, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized, bearerUpgradeAuthorized };
+  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, checkCuMutationIngress, cuMutationGuard, ompModelsMutationGuard, requireBearer, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized, bearerUpgradeAuthorized };
 }

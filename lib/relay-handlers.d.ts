@@ -17,6 +17,8 @@ export declare function namesPageForms(path: string): boolean;
  * or Spaces route allowlist.
  */
 export declare function namesCuRoute(reqPath: string): boolean;
+/** Matches `/omp-models` routes, which are strictly local-host only (never proxied to peers). */
+export declare function namesOmpModelsRoute(reqPath: string): boolean;
 /** Strict hub->guest header allowlist for CU control-plane GET/SSE requests. */
 export declare function buildHubCuReadHeaders(incoming: IncomingMessage['headers']): OutgoingHttpHeaders;
 /** Strict hub->guest header allowlist for CU Spaces gRPC-Web POST requests. */

@@ -63,6 +63,7 @@ import { createComposerSubmit } from './composer-submit';
 import { createSessionSpawns, pendingComposerKey } from './session-spawns';
 import { createNewSession } from './new-session';
 import { createHarnessSettings } from './harness-settings';
+import { createOmpModels, type OmpModelsController } from './omp-models';
 import { createCwdAutocomplete as createCwdAutocompleteBase } from './cwd-autocomplete';
 import { groupToolActivity } from './message-groups';
 import { createStreamingRenderer } from './streaming-render';
@@ -808,6 +809,7 @@ const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDi
   persistFilters: (value, host) => sidebarQuery.persistFilters([...value], host),
   metadataChanged: () => responseDetailsController.update(), contextChanged: () => renderSessions(), alert: message => alert(message),
   edgeHandle: (container, signal) => edgeHandle.renderSettings(container, signal),
+  ompModels: (container, signal) => ompModelsController.renderSettings(container, signal),
   notifications: (container, signal) => pushNotifications.renderSettings(container, signal),
   sentPrompts: (container, signal) => promptHistory.renderSettings(container, signal),
   privateSessions: (container, signal) => privateSessions.renderSettings(container, signal),
@@ -1101,6 +1103,19 @@ function harnessSupportsSettings(session: SessionEntry | null) {
   return !!session?.harnessId && !!harnessDiscovery.row(sessionReferences.hostId(session), session.harnessId)?.pilotConfig;
 }
 
+function localOmpModelsAvailable(): boolean | null {
+  const self = selfHostEntry();
+  if (!self?.capabilities) return null;
+  return self.capabilities.ompModels === true;
+}
+
+const ompModelsController: OmpModelsController = createOmpModels({
+  document,
+  request,
+  localAvailable: localOmpModelsAvailable,
+  beforeOpen: () => { closeSettingsModal(); harnessSettingsController.close(); sidebarQuery.close(); },
+});
+
 const harnessSettingsController: ReturnType<typeof createHarnessSettings> = createHarnessSettings({
   root: (document.getElementById('harnessSettingsModal') as HTMLElement), host: hostEntryFor, request,
   fallbackModels: (host, harness) => modelCatalog.scope?.harnessId === harness
@@ -1109,6 +1124,8 @@ const harnessSettingsController: ReturnType<typeof createHarnessSettings> = crea
     if (newSessionController.isOpen() && newSessionController.selectedHarness() === scope.harnessId
         && newSessionController.hostId() === scope.hostId && newSessionController.cwd() === scope.cwd) void newSessionConfigPreview.load(newSessionController.cwd());
   },
+  openOmpModels: () => { void ompModelsController.open(); },
+  ompModelsAvailable: localOmpModelsAvailable,
 });
 
 function openSessionHarnessSettings() {
@@ -1250,6 +1267,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); anchoredCommentController.close();
   } else if ((document.getElementById('responseDetailsModal') as HTMLElement).style.display !== 'none') {
     e.preventDefault(); responseDetailsController.close();
+  } else if (ompModelsController.isOpen()) {
+    e.preventDefault(); ompModelsController.close();
   } else if (harnessSettingsController.isOpen()) {
     // Modal only — the new-session takeover underneath stays open.
     e.preventDefault(); harnessSettingsController.close();
@@ -1354,7 +1373,7 @@ const mainPane = createMainPane({
     file: { close: () => fileViews.closeFile(), closeOnTakeover: true },
   },
   overlays: {
-    settings: () => closeSettingsModal(),
+    settings: () => { closeSettingsModal(); ompModelsController.close(); },
     sidebar: () => sidebarQuery.close(),
     session: {
       stats: () => sessionInfo.closeStats(),

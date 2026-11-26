@@ -54,6 +54,18 @@ export function namesCuRoute(reqPath: string): boolean {
   return /^\/cu(?:\/|$)/.test(decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase());
 }
 
+/** Matches `/omp-models` routes, which are strictly local-host only (never proxied to peers). */
+export function namesOmpModelsRoute(reqPath: string): boolean {
+  let decoded = reqPath;
+  for (let round = 0; round < 3; round++) {
+    let next: string;
+    try { next = decodeURIComponent(decoded); } catch { return true; }
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return /^\/omp-models(?:\/|$)/.test(decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase());
+}
+
 const HUB_CU_READ_HEADERS: readonly string[] = [
   'accept',
   'accept-language',
@@ -387,6 +399,10 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     // same-origin check) may carry them, never the generic API proxy.
     if (namesPageForms(req.path)) {
       return res.status(403).json({ error: 'page forms are answered through /api/page-forms on this host, not the /hosts proxy' });
+    }
+    // OMP model allow-list management is local-host only (no peer proxying).
+    if (namesOmpModelsRoute(req.path)) {
+      return res.status(501).json({ available: false, error: 'unavailable', message: 'OMP model allow-list management is only available on the local host.' });
     }
     // Computer-use routes use strict header allowlists, ingress CSRF checks,
     // vendored local viewer assets, and allowlisted Spaces RPC routes.

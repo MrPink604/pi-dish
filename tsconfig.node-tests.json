@@ -85,6 +85,7 @@
     "test/tmux-recovery.test.ts",
     "test/cu-agent-leases.test.ts",
     "test/cu-viewer.test.ts",
-    "test/task-subagent-link.test.ts"
+    "test/task-subagent-link.test.ts",
+    "test/omp-models.test.ts"
   ]
 }
