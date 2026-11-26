@@ -85,6 +85,64 @@ function freePort() {
         });
     });
 }
+/**
+ * Reserve an ephemeral loopback TCP port via bind() without listen() so no
+ * parallel test can reuse it while connect() still gets ECONNREFUSED. Falls
+ * back to freePort() only if python3 is unavailable (node:net cannot bind a
+ * TCP socket without calling listen()).
+ */
+function reserveRefusedPort() {
+    return new Promise((resolve, reject) => {
+        const holder = (0, node_child_process_1.spawn)('python3', [
+            '-c',
+            'import socket, sys; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1], flush=True); sys.stdin.read()',
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        holder.stdin.on('error', () => { });
+        holder.stderr.resume();
+        let stdout = '';
+        let settled = false;
+        const release = () => new Promise(done => {
+            if (holder.exitCode !== null || holder.signalCode !== null)
+                return done();
+            holder.once('exit', () => done());
+            try {
+                holder.stdin.end();
+            }
+            catch { }
+            try {
+                holder.kill('SIGTERM');
+            }
+            catch { }
+        });
+        const fallback = () => {
+            if (settled)
+                return;
+            settled = true;
+            try {
+                holder.kill('SIGKILL');
+            }
+            catch { }
+            freePort().then(port => resolve({ port, release: async () => { } }), reject);
+        };
+        holder.once('error', fallback);
+        holder.once('exit', fallback);
+        holder.stdout.setEncoding('utf8');
+        holder.stdout.on('data', (chunk) => {
+            if (settled)
+                return;
+            stdout += chunk;
+            const newline = stdout.indexOf('\n');
+            if (newline === -1)
+                return;
+            const line = stdout.slice(0, newline).trim();
+            if (!/^\d+$/.test(line))
+                return fallback();
+            settled = true;
+            children.push(holder);
+            resolve({ port: Number(line), release });
+        });
+    });
+}
 function listenHttp(server, port = 0) {
     return new Promise((resolve, reject) => {
         server.once('error', reject);
@@ -408,7 +466,7 @@ test('boot a peer, an echo peer and a hub that knows about them', async () => {
     closables.push(echoServer);
     echoPort = await listenHttp(echoServer);
     echo = echoServer;
-    downPort = await freePort();
+    downPort = (await reserveRefusedPort()).port;
     const hubHome = makeHome();
     writeSettings(hubHome, {
         hostLabel: 'hub',
@@ -1036,7 +1094,10 @@ test('a hub token gates /hosts/* exactly like /api/*', async () => {
 });
 test('the proxy trips a breaker on a down peer and re-dials when the slot expires', async () => {
     // Its own hub, so the ladder position is exactly what this test put there.
-    const port = await freePort(); // nothing listening yet
+    // Hold the port bound without listen() until the peer actually comes up so
+    // neither breakerHub nor parallel tests can steal it before the first dial.
+    const flap = await reserveRefusedPort();
+    const port = flap.port;
     const home = makeHome();
     writeSettings(home, { remotes: [{ name: 'flap', url: `http://127.0.0.1:${port}` }] });
     const breakerHub = await boot(home);
@@ -1048,6 +1109,7 @@ test('the proxy trips a breaker on a down peer and re-dials when the slot expire
     assert.equal(body.reason, 'connection_refused');
     // The peer comes up immediately - and is still refused, because the answer
     // now comes from the cached failure rather than a dial.
+    await flap.release();
     const peerUp = http.createServer((req, res) => {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ awake: true }));
