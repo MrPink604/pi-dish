@@ -778,6 +778,7 @@ test('Slice 2 phone (390x844): per-session full ownerId badges, desktop-access-l
   let generation = 'gen-1';
   let activeOwner: string | null = ownerOne;
   let rowTwoAccessLost = false;
+  let rowTwoChecking = false;
 
   await page.route(`${fleet.self.base}/api/hosts`, async route => {
     const response = await route.fetch();
@@ -812,8 +813,9 @@ test('Slice 2 phone (390x844): per-session full ownerId badges, desktop-access-l
           isActive: true,
           host: RELAY_HOST_ID,
           lastActivity: Date.now() - 1000,
-          cuOwnerId: rowTwoAccessLost ? undefined : ownerTwoNearMiss,
+          cuOwnerId: rowTwoAccessLost || rowTwoChecking ? undefined : ownerTwoNearMiss,
           ...(rowTwoAccessLost ? { cuDesktopAccessLost: true } : {}),
+          ...(rowTwoChecking ? { cuDesktopChecking: true } : {}),
         },
       ],
       previous: [],
@@ -937,6 +939,16 @@ test('Slice 2 phone (390x844): per-session full ownerId badges, desktop-access-l
   await expect(page.locator('#cuPanelSeatBadge')).toHaveText('Desktop access lost — restart session');
   await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
   await expect(rowTwo.locator('.cu-seat-cue')).toHaveText('desktop access lost — restart session');
+
+  // While startup reconcile is still checking, cuDesktopChecking holds the sidebar badge
+  // (no transient desktop-access-lost flash) and shows "Checking…" in the open panel header.
+  rowTwoAccessLost = false;
+  rowTwoChecking = true;
+  await page.evaluate(() => fixtureApp.features.sidebarLists.refresh());
+  await expect(rowTwo.locator('.cu-seat-cue')).toHaveCount(0);
+  await rowTwo.click();
+  await expect(page.locator('#cuPanelSummary')).toBeHidden();
+  await expect(page.locator('#cuPanelSeatBadge')).toHaveText('Checking…');
 });
 
 export {};

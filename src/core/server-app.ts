@@ -21,7 +21,7 @@ import { getHarness, listHarnesses } from './harnesses';
 import { dishDir, readDishSettings, readStore, replaceFile } from './dish-store';
 import { createAccessHandlers } from './access-handlers';
 import { createCuBrokerClient } from './cu-broker';
-import { createCuAgentLeases, CuBrokerUnavailableError, CuSeatBusyError, type CuCommandTarget } from './cu-agent-leases';
+import { createCuAgentLeases, CuBrokerUnavailableError, CuSeatBusyError, cuBrokerUnavailableResponseFields, type CuCommandTarget } from './cu-agent-leases';
 import { createCuHandlers } from './cu-handlers';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';
@@ -562,6 +562,8 @@ export function startServer(rootDirectory: string): Server {
     recordLaunchProvenance: (id, sourceId, operationId, sourceBasis) => sessionProvenance.recordLaunch(id, sourceId, operationId, sourceBasis),
     onSessionStopped: id => cuAgentLeases.releaseSession(id),
     cuCheckSlice2: () => cuAgentLeases.supportsSlice2(),
+    cuCheckCapabilities: () => cuAgentLeases.probeCapabilities(),
+    cuCanTransferSession: id => cuAgentLeases.canTransferSession(id),
   });
   const featureHandlers = createFeatureHandlers({
     catalog, ownership, findSessionSource,
@@ -599,6 +601,7 @@ export function startServer(rootDirectory: string): Server {
     privateUnlocked,
     cuOwnerId: id => cuAgentLeases.ownerIdForSession(id),
     cuDesktopAccessLost: id => cuAgentLeases.isDesktopAccessLost(id),
+    cuDesktopChecking: id => cuAgentLeases.isDesktopChecking(id),
   });
   const relationHandlers = createSessionRelationHandlers({ catalog, resolveSessionCandidate, privateUnlocked });
   const agySessionHandlers = createAgySessionHandlers({ ownership, findSessionSource });
@@ -894,7 +897,7 @@ export function startServer(rootDirectory: string): Server {
         });
       }
       if (error instanceof CuBrokerUnavailableError) {
-        return res.status(error.status).json({ error: error.message, code: error.code });
+        return res.status(error.status).json({ error: error.message, ...cuBrokerUnavailableResponseFields(error) });
       }
       res.status(errorStatus(error, 500)).json({ error: errorMessage(error) });
     }

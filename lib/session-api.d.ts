@@ -60,6 +60,8 @@ export interface SessionFields<Timestamp = string | number> {
     cuOwnerId?: string;
     /** True when a CU-host session lost desktop access (e.g. unredeemed lease across pi-dish restart or expired lease) and must restart to regain it. */
     cuDesktopAccessLost?: boolean;
+    /** True while startup reconciliation is still verifying this session's CU lease after a pi-dish restart. */
+    cuDesktopChecking?: boolean;
 }
 /** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>, Pick<SessionFields, 'name' | 'model' | 'harnessId' | 'thinkingLevel' | 'isActive' | 'capabilities'> {

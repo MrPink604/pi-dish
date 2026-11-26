@@ -728,12 +728,35 @@ function pickBoolean(source: Record<string, unknown>, key: string): boolean | un
   return typeof value === 'boolean' ? value : undefined;
 }
 
+const RETRYABLE_BROKER_503_CODES = new Set([
+  'broker_shutting_down',
+  'broker_busy',
+  'worker_exit_unconfirmed',
+  'state_persist_failed',
+  'claim_file_error',
+  'connection_limit',
+  'sse_capacity',
+]);
+
 function normalizeBrokerErrorBody(status: number, body: unknown): unknown {
   if (!isRecord(body)) return body ?? { error: `Broker returned HTTP ${status}` };
   if (status < 400) return body;
   const out: Record<string, unknown> = { ...body };
+  const code = typeof out.code === 'string' && out.code ? out.code : null;
+  if (out.applied === 'unknown') {
+    out.uncertain = true;
+    if (status === 503 && out.retryable === undefined) out.retryable = true;
+  }
+  if (code === 'broker_shutting_down' || (status === 503 && code !== null && RETRYABLE_BROKER_503_CODES.has(code))) {
+    if (out.retryable === undefined) out.retryable = true;
+  }
+  if (status === 409 && code === 'transition_pending' && out.retryable === undefined) {
+    out.retryable = true;
+  }
   if (typeof out.error !== 'string' || !out.error) {
     if (typeof out.message === 'string' && out.message) out.error = out.message;
+    else if (out.applied === 'unknown') out.error = 'Computer-use broker request outcome is uncertain; check state before retrying';
+    else if (code === 'broker_shutting_down') out.error = 'Computer-use broker is shutting down; retry shortly';
     else if (status === 409) out.error = 'Computer-use seat is busy';
     else out.error = `Broker returned HTTP ${status}`;
   }
@@ -1554,6 +1577,14 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     if (hardCapSec !== undefined) payload.hardCapSec = hardCapSec;
     const ticketTtlSec = pickFiniteNumber(raw, 'ticketTtlSec');
     if (ticketTtlSec !== undefined) payload.ticketTtlSec = ticketTtlSec;
+    if (raw.requestId !== undefined) {
+      const requestId = pickString(raw, 'requestId');
+      if (!requestId) {
+        res.status(400).json({ error: 'requestId must be a non-empty string', code: 'invalid_request_id' });
+        return;
+      }
+      payload.requestId = requestId;
+    }
 
     try {
       const reply = await broker.requestJson('POST', '/v1/lease/takeover', payload, { timeoutMs: TAKEOVER_BROKER_TIMEOUT_MS });

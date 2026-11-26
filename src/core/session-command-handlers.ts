@@ -3,7 +3,7 @@ import type { ParsedQs } from 'qs';
 import type { LiveSession, liveSessionSupports } from './session-ownership';
 import { messageHoldWindowMs, peerSender, type MessageHold } from './message-hold';
 import { errorMessage, errorStatus, httpError } from './http-boundary';
-import { CuBrokerUnavailableError, CuSeatBusyError } from './cu-agent-leases';
+import { CuBrokerUnavailableError, CuSeatBusyError, cuBrokerUnavailableResponseFields } from './cu-agent-leases';
 import { asRecord } from './wire-protocol';
 
 type CommandHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
@@ -118,7 +118,7 @@ export function createSessionCommandHandlers(ports: SessionCommandPorts): {
       }
       if (error instanceof CuBrokerUnavailableError) {
         return res.status(503).json({
-          code: error.code,
+          ...cuBrokerUnavailableResponseFields(error),
           error: error.message,
         });
       }

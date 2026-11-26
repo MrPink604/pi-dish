@@ -38,7 +38,7 @@ import { record as isRecord } from './helper-values';
 import { processIdentity, processIdentityAlive } from './process-identity';
 
 export const CU_HAND_BACK_NUDGE =
-  'The desktop has been returned to you after human take-over. Inspect the current screen and browser state before continuing.';
+  'Desktop control has been returned to you. You can continue your task.';
 
 export const BROKER_AGENT_LABEL = 'omp';
 
@@ -49,18 +49,43 @@ export const REQUIRED_SLICE2_CAPABILITIES = [
   'claim_handoff',
 ] as const;
 
+export const SLICE2B_CAPABILITIES = {
+  bindTransfer: 'bind_transfer',
+  ownerMatch: 'owner_match',
+  leaseRenew: 'lease_renew',
+  claimReclaim: 'claim_reclaim',
+  deferredClaim: 'deferred_claim',
+} as const;
+
 const DEFAULT_AGENT_HEARTBEAT_SEC = 20;
 const DEFAULT_LIVENESS_CHECK_MS = 2_000;
 const DEFAULT_COMMAND_RETRY_MS = 200;
 const MAX_COMMAND_RETRIES = 6;
 const CLAIM_BIND_TIMEOUT_SEC = 30;
+const MAX_TRANSIENT_BROKER_RETRIES = 2;
 const LEASE_STORE_VERSION = 1;
 const LEASE_STORE_FILENAME = 'cu-agent-leases.json';
 const MAX_STORE_BYTES = 256 * 1024;
 const SECRET_KEYS = new Set(['sessionSecret', 'tokenHash', 'leaseToken', 'token', 'claimNonce', 'mcpToken']);
 const TRANSPORT_ERROR_CODES = new Set(['ENOENT', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EAGAIN', 'ENOTSOCK']);
+const RETRYABLE_BROKER_CODES = new Set([
+  'broker_shutting_down',
+  'broker_busy',
+  'worker_exit_unconfirmed',
+  'state_persist_failed',
+  'claim_file_error',
+  'connection_limit',
+  'sse_capacity',
+]);
 
-export type ManagedLeaseStatus = 'holding' | 'preempted' | 'access_lost' | 'idle';
+export type ManagedLeaseStatus = 'checking' | 'holding' | 'preempted' | 'access_lost' | 'idle';
+
+export interface CuBrokerCapabilities {
+  readonly slice2: boolean;
+  readonly bindTransfer: boolean;
+  readonly ownerMatch: boolean;
+  readonly leaseRenew: boolean;
+}
 
 export interface CuSeatBusyDetails {
   readonly state: string | null;
@@ -85,15 +110,72 @@ export class CuSeatBusyError extends Error {
   }
 }
 
-/** Structured 503 error raised when a CU host's configured broker socket is unreachable or times out. */
+export interface CuBrokerUnavailableDetails {
+  readonly code?: string;
+  readonly brokerCode?: string | null;
+  readonly retryable?: boolean;
+  readonly applied?: boolean | 'unknown' | null;
+  readonly uncertain?: boolean;
+  readonly retryAfterMs?: number | null;
+}
+
+/** Structured 503 error raised when a CU host's configured broker socket is unreachable, shutting down, busy, or uncertain. */
 export class CuBrokerUnavailableError extends Error {
   readonly status = 503;
-  readonly code = 'cu_broker_unavailable' as const;
+  readonly code: string;
+  readonly brokerCode: string | null;
+  readonly retryable: boolean;
+  readonly applied: boolean | 'unknown' | null;
+  readonly uncertain: boolean;
+  readonly retryAfterMs: number | null;
 
-  constructor(message = 'Computer-use broker is unavailable') {
+  constructor(message = 'Computer-use broker is unavailable', details: CuBrokerUnavailableDetails = {}) {
     super(message);
     this.name = 'CuBrokerUnavailableError';
+    const brokerCode = details.brokerCode ?? null;
+    const applied = details.applied ?? null;
+    const uncertain = details.uncertain ?? (applied === 'unknown');
+    this.brokerCode = brokerCode;
+    this.applied = applied;
+    this.uncertain = uncertain;
+    this.code = details.code
+      ?? (brokerCode === 'broker_shutting_down'
+        ? 'broker_shutting_down'
+        : uncertain
+          ? 'cu_broker_uncertain'
+          : 'cu_broker_unavailable');
+    this.retryable = details.retryable ?? (brokerCode === null || RETRYABLE_BROKER_CODES.has(brokerCode));
+    this.retryAfterMs = details.retryAfterMs ?? null;
   }
+}
+
+/** Internal pre-respawn signal indicating no active/displaced lease is available to transfer in place. */
+export class CuTransferUnavailableError extends Error {
+  readonly status = 409;
+  readonly code = 'cu_transfer_unavailable' as const;
+
+  constructor(message = 'Computer-use lease is not transferable in place') {
+    super(message);
+    this.name = 'CuTransferUnavailableError';
+  }
+}
+
+export function cuBrokerUnavailableResponseFields(error: CuBrokerUnavailableError): {
+  code: string;
+  retryable: boolean;
+  brokerCode?: string;
+  applied?: boolean | 'unknown';
+  uncertain?: true;
+  retryAfterMs?: number;
+} {
+  return {
+    code: error.code,
+    retryable: error.retryable,
+    ...(error.brokerCode ? { brokerCode: error.brokerCode } : {}),
+    ...(error.applied !== null ? { applied: error.applied } : {}),
+    ...(error.uncertain ? { uncertain: true as const } : {}),
+    ...(error.retryAfterMs !== null ? { retryAfterMs: error.retryAfterMs } : {}),
+  };
 }
 
 export interface CuBrokerEvent {
@@ -109,11 +191,19 @@ export interface CuBrokerEvent {
   readonly payload: Record<string, unknown>;
 }
 
+export interface CuTransferHandleDetails {
+  readonly claimId: string;
+  readonly expectedEpoch: number | null;
+  readonly expectedPid: number;
+  readonly expectedPidStartTime: string;
+}
+
 export interface CuAgentSpawnHandle {
   readonly brokerSessionId: string;
   readonly leaseOwnerId: string;
   readonly env: Readonly<Record<string, string>>;
   readonly acquiredEpoch: number;
+  readonly transfer?: CuTransferHandleDetails;
 }
 
 export interface CuBindProcessInfo {
@@ -177,8 +267,13 @@ export interface CuAgentLeases {
   available(): boolean;
   /** Probes §9.1 capabilities before mutation. Returns false on non-CU or Slice-1 broker; throws 503 if configured broker is unreachable. */
   supportsSlice2(): Promise<boolean>;
+  /** Probes Slice-2 and Slice-2b capabilities before mutation; throws 503 if configured broker is unreachable. */
+  probeCapabilities(): Promise<CuBrokerCapabilities>;
+  /** True when the session holds an authenticated active/displaced lease and the broker advertises `bind_transfer`. */
+  canTransferSession(sessionId: string): boolean;
   reconcile(): Promise<void>;
   prepareSpawn(options: { knownSessionId?: string | null; assumeSlice2?: boolean }): Promise<CuAgentSpawnHandle | null>;
+  prepareTransfer(options: { sessionId: string; expectedPid?: number | null; expectedPidStartTime?: string | null }): Promise<CuAgentSpawnHandle | null>;
   bindSpawnedProcess(handle: CuAgentSpawnHandle, process: CuBindProcessInfo | null): Promise<void>;
   attachSpawnedSession(handle: CuAgentSpawnHandle, info: CuAttachSessionInfo): void;
   abortSpawn(handle: CuAgentSpawnHandle): Promise<void>;
@@ -188,6 +283,7 @@ export interface CuAgentLeases {
   handleBrokerEvent(event: CuBrokerEvent): void;
   ownerIdForSession(sessionId: string): string | null;
   isDesktopAccessLost(sessionId: string): boolean;
+  isDesktopChecking(sessionId: string): boolean;
   stop(): void;
 }
 
@@ -220,7 +316,9 @@ interface ManagedLeaseRecord {
   pid: number | null;
   pidStartTime: string | null;
   adoptedWithoutSecret: boolean;
+  reAdopted: boolean;
   pendingStartupReconcile: boolean;
+  pendingTransferClaimId: string | null;
   heartbeatTimer: NodeJS.Timeout | null;
   heartbeatIntervalMs: number;
   delivery: DeliveryTracker;
@@ -266,10 +364,28 @@ function formatPidStartTimeForBroker(startTime: string): number | string {
   return startTime;
 }
 
+export function extractCapabilities(body: unknown): Set<string> {
+  if (!isRecord(body) || !Array.isArray(body.capabilities)) return new Set();
+  return new Set(body.capabilities.filter((item): item is string => typeof item === 'string'));
+}
+
 export function hasSlice2Capabilities(body: unknown): boolean {
-  if (!isRecord(body) || !Array.isArray(body.capabilities)) return false;
-  const caps = new Set(body.capabilities.filter((item): item is string => typeof item === 'string'));
+  const caps = extractCapabilities(body);
   return REQUIRED_SLICE2_CAPABILITIES.every(cap => caps.has(cap));
+}
+
+function parseBrokerApplied(body: Record<string, unknown>): boolean | 'unknown' | null {
+  if (body.applied === 'unknown') return 'unknown';
+  if (typeof body.applied === 'boolean') return body.applied;
+  return null;
+}
+
+function boundedRetryDelay(rawRetryAfterMs: number | null): Promise<void> {
+  const delayMs = Math.min(400, Math.max(10, rawRetryAfterMs ?? 100));
+  return new Promise<void>(resolve => {
+    const timer = setTimeout(resolve, delayMs);
+    timer.unref();
+  });
 }
 
 function extractRef(value: unknown): BrokerRef | null {
@@ -364,15 +480,30 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   const recordsByBrokerId = new Map<string, ManagedLeaseRecord>();
   const recordsByOwnerId = new Map<string, ManagedLeaseRecord>();
   const brokerIdBySessionId = new Map<string, string>();
+  const transferStates = new WeakMap<CuAgentSpawnHandle, { aborted: boolean }>();
 
   let stopped = false;
   let reconciled = false;
   let reconcileFlight: Promise<void> | null = null;
+  let advertisedCapabilities: Set<string> | null = null;
   let knownGeneration: string | null = null;
   let knownCursor = -1;
   let knownEpoch = -1;
   let lastResyncHandledKey: string | null = null;
   let livenessTimer: NodeJS.Timeout | null = null;
+
+  function recordCapabilities(body: unknown): void {
+    if (!isRecord(body)) return;
+    if (Array.isArray(body.capabilities)) {
+      advertisedCapabilities = extractCapabilities(body);
+    } else if (!('capabilities' in body)) {
+      advertisedCapabilities = new Set();
+    }
+  }
+
+  function hasCap(cap: string): boolean {
+    return advertisedCapabilities?.has(cap) === true;
+  }
 
   function hasLiveClaimedPeer(obj: Record<string, unknown> | null): boolean {
     if (!obj || obj.mcpClaimed !== true) return false;
@@ -484,14 +615,16 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           leaseId: persisted.leaseId,
           sessionSecret: null,
           sessionId: null,
-          status: 'access_lost',
+          status: 'checking',
           epoch: persisted.epoch,
           lastCursor: -1,
           generation: persisted.generation,
           pid: persisted.pid,
           pidStartTime: persisted.pidStartTime,
           adoptedWithoutSecret: true,
+          reAdopted: true,
           pendingStartupReconcile: true,
+          pendingTransferClaimId: null,
           heartbeatTimer: null,
           heartbeatIntervalMs: resolveHeartbeatMs(null),
           delivery: createDeliveryTracker(persisted.generation ?? 'default', birth),
@@ -519,7 +652,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     if (!ports.broker.configured()) return;
     const leases: PersistedCuLeaseRecord[] = [];
     for (const rec of recordsByBrokerId.values()) {
-      if (rec.status !== 'holding' && rec.status !== 'preempted' && rec.status !== 'access_lost') continue;
+      if (rec.status !== 'checking' && rec.status !== 'holding' && rec.status !== 'preempted' && rec.status !== 'access_lost') continue;
       leases.push({
         leaseOwnerId: rec.leaseOwnerId,
         brokerSessionId: rec.brokerSessionId,
@@ -581,7 +714,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   function maybeStopLivenessMonitor(): void {
     if (!livenessTimer) return;
     for (const rec of recordsByBrokerId.values()) {
-      if (rec.pid !== null && rec.pidStartTime && (rec.status === 'holding' || rec.status === 'preempted' || rec.status === 'access_lost')) {
+      if (rec.pid !== null && rec.pidStartTime && (rec.status === 'checking' || rec.status === 'holding' || rec.status === 'preempted' || rec.status === 'access_lost')) {
         return;
       }
     }
@@ -594,7 +727,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     livenessTimer = setInterval(() => {
       if (stopped) return;
       for (const rec of [...recordsByBrokerId.values()]) {
-        if (rec.pendingStartupReconcile) continue;
+        if (rec.pendingStartupReconcile || rec.pendingTransferClaimId !== null) continue;
         if (rec.pid === null || !rec.pidStartTime) continue;
         if (processAlive({ pid: rec.pid, startTime: rec.pidStartTime })) continue;
         void releaseRecord(rec);
@@ -740,7 +873,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     if (!sessionId) {
       // Bridge not yet visible (or ambiguous descendant match -> refused).
       // For re-adopted records (no attachSpawnedSession coming), schedule a bounded retry.
-      if (rec.adoptedWithoutSecret) {
+      if (rec.reAdopted || rec.adoptedWithoutSecret) {
         const retries = kind === 'abort' ? ++tracker.abortRetries : ++tracker.nudgeRetries;
         if (retries <= MAX_COMMAND_RETRIES && commandRetryMs > 0 && !stopped) {
           const delayMs = Math.min(2_000, commandRetryMs * retries);
@@ -884,6 +1017,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         clearHeartbeat(rec);
         return;
       }
+      if (rec.pendingTransferClaimId !== null) return;
       if (rec.pid !== null && rec.pidStartTime && !processAlive({ pid: rec.pid, startTime: rec.pidStartTime })) {
         void releaseRecord(rec);
         return;
@@ -987,26 +1121,162 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     return recordsByOwnerId.get(ref.ownerId) ?? null;
   }
 
+  function snapshotObjMatchesOwner(
+    obj: unknown,
+    ownerId: string,
+    brokerSessionId: string,
+  ): boolean {
+    if (!isRecord(obj)) return false;
+    return pickString(obj, 'ownerId') === ownerId && pickString(obj, 'sessionId') === brokerSessionId;
+  }
+
+  async function ownerMatchedReleaseOrCancel(params: {
+    brokerSessionId: string;
+    leaseOwnerId: string;
+    sessionSecret: string | null;
+    pid: number | null;
+    pidStartTime: string | null;
+    epoch: number | null;
+    initialTarget: 'active' | 'displaced';
+  }): Promise<void> {
+    if (!ports.broker.available()) return;
+    let target: 'active' | 'displaced' = params.initialTarget;
+    let attemptEpoch: number | null = params.epoch !== null && params.epoch >= 1 ? params.epoch : null;
+    let switchedTarget = false;
+    let retriedEpoch = false;
+    let transientRetries = 0;
+
+    for (let step = 0; step < 6; step++) {
+      if (stopped) return;
+      const endpoint = target === 'displaced' ? '/v1/lease/cancel-preempted' : '/v1/lease/release';
+      const payload: Record<string, unknown> = {
+        ownerId: params.leaseOwnerId,
+        sessionId: params.brokerSessionId,
+        expectedState: target === 'displaced' ? 'displaced' : 'active',
+      };
+      if (params.sessionSecret) {
+        payload.sessionSecret = params.sessionSecret;
+      }
+      if (params.pid !== null && params.pid > 1 && params.pidStartTime) {
+        payload.expectedPid = params.pid;
+        payload.expectedPidStartTime = formatPidStartTimeForBroker(params.pidStartTime);
+      }
+      if (attemptEpoch !== null && attemptEpoch >= 1) {
+        payload.expectedEpoch = attemptEpoch;
+      }
+
+      const reply = await ports.broker.requestJson('POST', endpoint, payload);
+      if (reply.status === 200) return;
+
+      const body = isRecord(reply.body) ? reply.body : {};
+      const code = pickString(body, 'code');
+
+      if (reply.status === 409) {
+        const conflictEpoch = pickFiniteNumber(body, 'epoch');
+        const conflictState = pickString(body, 'state');
+        const activeMatchesUs = conflictState !== 'human'
+          && (!isRecord(body.lease) || pickString(body.lease, 'holderKind') !== 'human')
+          && snapshotObjMatchesOwner(body.lease, params.leaseOwnerId, params.brokerSessionId);
+        const displacedMatchesUs = snapshotObjMatchesOwner(body.preempted, params.leaseOwnerId, params.brokerSessionId);
+
+        if (target === 'active' && code === 'lease_preempted' && !switchedTarget) {
+          switchedTarget = true;
+          target = 'displaced';
+          attemptEpoch = conflictEpoch !== null && conflictEpoch >= 1 ? conflictEpoch : null;
+          continue;
+        }
+        if (target === 'displaced' && code === 'lease_active' && !switchedTarget) {
+          switchedTarget = true;
+          target = 'active';
+          attemptEpoch = conflictEpoch !== null && conflictEpoch >= 1 ? conflictEpoch : null;
+          continue;
+        }
+        if (code === 'epoch_mismatch' && !retriedEpoch && conflictEpoch !== null && conflictEpoch >= 1) {
+          retriedEpoch = true;
+          if (activeMatchesUs) {
+            target = 'active';
+            attemptEpoch = conflictEpoch;
+            continue;
+          }
+          if (displacedMatchesUs) {
+            target = 'displaced';
+            attemptEpoch = conflictEpoch;
+            continue;
+          }
+          return;
+        }
+        if (target === 'active' && code === 'transition_pending') {
+          // Broker leftover tolerance: release can answer 409 transition_pending after
+          // reaping the seat to idle while stopping workers are still exiting.
+          if (conflictState === 'idle' || (conflictState !== null && !activeMatchesUs && !displacedMatchesUs)) {
+            return;
+          }
+          if (transientRetries < MAX_TRANSIENT_BROKER_RETRIES) {
+            transientRetries += 1;
+            await boundedRetryDelay(pickNonNegInt(body, 'retryAfterMs'));
+            continue;
+          }
+          return;
+        }
+        // owner_mismatch, state_mismatch, lease_mismatch, pid_mismatch, lease_not_found,
+        // no_preempted_lease: never force-release a lease we cannot prove we own.
+        return;
+      }
+
+      if (reply.status === 503) {
+        if (
+          (code === 'worker_exit_unconfirmed' || code === 'state_persist_failed' || code === 'broker_busy')
+          && transientRetries < MAX_TRANSIENT_BROKER_RETRIES
+        ) {
+          transientRetries += 1;
+          await boundedRetryDelay(pickNonNegInt(body, 'retryAfterMs'));
+          continue;
+        }
+        return;
+      }
+
+      // 403 / 400 / other: stop cleanly, never escalate to force:true.
+      return;
+    }
+  }
+
   async function releaseRecord(rec: ManagedLeaseRecord): Promise<void> {
     const {
       brokerSessionId,
       leaseOwnerId,
       status,
       sessionSecret,
+      pid,
+      pidStartTime,
+      epoch,
     } = rec;
     removeRecord(rec, { persist: true });
     if (status === 'idle' || status === 'access_lost') {
       return;
     }
-    // P1-2: Never issue force:true mutations for secretless / re-adopted records.
-    // Leave cleanup to broker TTL/PID reaping.
-    if (!sessionSecret) {
-      return;
-    }
     if (!ports.broker.available()) {
       return;
     }
+    const useOwnerMatch = hasCap(SLICE2B_CAPABILITIES.ownerMatch);
+    // P1-2: Without broker owner_match, never issue force:true mutations for secretless
+    // / re-adopted records — leave cleanup to broker TTL/PID reaping.
+    if (!useOwnerMatch && !sessionSecret) {
+      return;
+    }
     try {
+      if (useOwnerMatch) {
+        await ownerMatchedReleaseOrCancel({
+          brokerSessionId,
+          leaseOwnerId,
+          sessionSecret,
+          pid,
+          pidStartTime,
+          epoch: epoch >= 1 ? epoch : null,
+          initialTarget: status === 'preempted' ? 'displaced' : 'active',
+        });
+        return;
+      }
+      if (!sessionSecret) return;
       if (status === 'preempted') {
         const cancelReply = await ports.broker.requestJson('POST', '/v1/lease/cancel-preempted', {
           sessionId: brokerSessionId,
@@ -1037,7 +1307,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         }
       }
     } catch (error) {
-      log(`[cu-lease] authenticated release/cancel failed for ${leaseOwnerId}: ${errorMessage(error)}`);
+      log(`[cu-lease] release/cancel failed for ${leaseOwnerId}: ${errorMessage(error)}`);
     }
   }
 
@@ -1049,10 +1319,24 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     try {
       const reply = await ports.broker.requestJson(method, endpoint, body);
       if (reply.status === 502 || reply.status === 503 || reply.status === 504) {
-        const msg = isRecord(reply.body)
-          ? (pickString(reply.body, 'message') ?? pickString(reply.body, 'error') ?? 'Computer-use broker is unavailable')
-          : 'Computer-use broker is unavailable';
-        throw new CuBrokerUnavailableError(msg);
+        const resBody = isRecord(reply.body) ? reply.body : {};
+        const brokerCode = pickString(resBody, 'code');
+        const applied = parseBrokerApplied(resBody);
+        const retryAfterMs = pickNonNegInt(resBody, 'retryAfterMs');
+        const uncertain = applied === 'unknown';
+        const defaultMsg = uncertain
+          ? 'Computer-use broker request outcome is uncertain (may have been applied)'
+          : brokerCode === 'broker_shutting_down'
+            ? 'Computer-use broker is shutting down; retry shortly'
+            : 'Computer-use broker is unavailable';
+        const msg = pickString(resBody, 'message') ?? pickString(resBody, 'error') ?? defaultMsg;
+        throw new CuBrokerUnavailableError(msg, {
+          brokerCode,
+          applied,
+          uncertain,
+          retryAfterMs,
+          retryable: uncertain || brokerCode === null || RETRYABLE_BROKER_CODES.has(brokerCode),
+        });
       }
       return reply;
     } catch (error) {
@@ -1065,29 +1349,128 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         || errHttpStatus === 504
         || (errCode !== null && TRANSPORT_ERROR_CODES.has(errCode))
       ) {
-        throw new CuBrokerUnavailableError(`Computer-use broker is unavailable: ${errorMessage(error)}`);
+        throw new CuBrokerUnavailableError(`Computer-use broker is unavailable: ${errorMessage(error)}`, {
+          retryable: true,
+        });
       }
       throw error;
     }
   }
 
   /**
-   * P1-4: Feature-detect Slice 2 via §9.1 `capabilities` array BEFORE any mutation.
-   * - Unconfigured host -> false (non-CU host).
+   * P1-4 + Slice 2b: Feature-detect Slice 2 & Slice 2b via `capabilities` BEFORE any mutation.
+   * - Unconfigured host -> all false (non-CU host).
    * - Configured but missing/unreachable/timing-out socket -> throws CuBrokerUnavailableError (503 fail-closed).
-   * - Responding Slice-1 broker (missing required capabilities) -> false (legacy launch preserved).
-   * - Responding Slice-2 broker -> true.
+   * - Responding Slice-1 broker (missing required Slice-2 capabilities) -> slice2: false (legacy launch preserved).
+   * - Responding Slice-2 / Slice-2b broker -> reports each advertised capability individually.
    */
-  async function supportsSlice2(): Promise<boolean> {
-    if (stopped || !ports.broker.configured()) return false;
+  async function probeCapabilities(): Promise<CuBrokerCapabilities> {
+    if (stopped || !ports.broker.configured()) {
+      return { slice2: false, bindTransfer: false, ownerMatch: false, leaseRenew: false };
+    }
     if (!ports.broker.available()) {
-      throw new CuBrokerUnavailableError('Computer-use broker is unavailable');
+      throw new CuBrokerUnavailableError('Computer-use broker is unavailable', { retryable: true });
     }
     const reply = await requestBrokerOrUnavailable('GET', '/v1/status');
     if (reply.status !== 200 || !isRecord(reply.body)) {
       throw new CuBrokerUnavailableError(`Computer-use broker status check failed (${reply.status})`);
     }
-    return hasSlice2Capabilities(reply.body);
+    recordCapabilities(reply.body);
+    return {
+      slice2: hasSlice2Capabilities(reply.body),
+      bindTransfer: hasCap(SLICE2B_CAPABILITIES.bindTransfer),
+      ownerMatch: hasCap(SLICE2B_CAPABILITIES.ownerMatch),
+      leaseRenew: hasCap(SLICE2B_CAPABILITIES.leaseRenew),
+    };
+  }
+
+  async function supportsSlice2(): Promise<boolean> {
+    return (await probeCapabilities()).slice2;
+  }
+
+  async function renewAdoptedRecord(
+    rec: ManagedLeaseRecord,
+    initialEpoch: number,
+    matchedObj: Record<string, unknown>,
+  ): Promise<
+    | { ok: true; body: Record<string, unknown>; sessionSecret: string }
+    | { ok: false; reason: string }
+  > {
+    if (rec.pid === null || rec.pid <= 1 || !rec.pidStartTime) {
+      return { ok: false, reason: 'missing_birth' };
+    }
+    let attemptEpoch: number | null = initialEpoch >= 1 ? initialEpoch : null;
+    let retriedEpoch = false;
+    let transientRetries = 0;
+
+    for (let step = 0; step < 5; step++) {
+      if (stopped) return { ok: false, reason: 'stopped' };
+      const payload: Record<string, unknown> = {
+        sessionId: rec.brokerSessionId,
+        ownerId: rec.leaseOwnerId,
+        pid: rec.pid,
+        pidStartTime: formatPidStartTimeForBroker(rec.pidStartTime),
+        issueClaim: false,
+      };
+      if (attemptEpoch !== null && attemptEpoch >= 1) {
+        payload.expectedEpoch = attemptEpoch;
+      }
+
+      let reply: { status: number; body: unknown };
+      try {
+        reply = await ports.broker.requestJson('POST', '/v1/lease/renew', payload);
+      } catch (error) {
+        return { ok: false, reason: errorMessage(error) };
+      }
+
+      const body = isRecord(reply.body) ? reply.body : {};
+      if (reply.status === 200) {
+        const newSecret = pickString(body, 'sessionSecret') ?? pickString(body, 'token');
+        if (!newSecret) {
+          return { ok: false, reason: 'missing_session_secret' };
+        }
+        const renewTarget = pickString(body, 'target');
+        const renewObj = renewTarget === 'displaced'
+          ? (isRecord(body.preempted) ? body.preempted : matchedObj)
+          : (isRecord(body.lease) ? body.lease : matchedObj);
+        const claimObj = isRecord(body.claim) ? body.claim : null;
+        const claimStatus = claimObj ? pickString(claimObj, 'status') : null;
+        const claimUsable = claimStatus === 'refreshed'
+          || claimStatus === 'already_claimed'
+          || claimStatus === 'reclaimable'
+          || ((claimStatus === 'outstanding' || claimStatus === null) && hasLiveClaimedPeer(renewObj));
+        if (!claimUsable) {
+          return { ok: false, reason: `unusable_claim_status:${claimStatus ?? 'missing'}` };
+        }
+        return { ok: true, body, sessionSecret: newSecret };
+      }
+
+      const code = pickString(body, 'code');
+      if (reply.status === 409 && code === 'epoch_mismatch' && !retriedEpoch) {
+        retriedEpoch = true;
+        const conflictEpoch = pickFiniteNumber(body, 'epoch');
+        const stillOurs = snapshotObjMatchesOwner(body.lease, rec.leaseOwnerId, rec.brokerSessionId)
+          || snapshotObjMatchesOwner(body.preempted, rec.leaseOwnerId, rec.brokerSessionId);
+        if (stillOurs && conflictEpoch !== null && conflictEpoch >= 1) {
+          attemptEpoch = conflictEpoch;
+          continue;
+        }
+        return { ok: false, reason: 'epoch_mismatch' };
+      }
+
+      if (
+        reply.status === 503
+        && (code === 'claim_file_error' || code === 'state_persist_failed' || code === 'broker_busy')
+        && transientRetries < MAX_TRANSIENT_BROKER_RETRIES
+      ) {
+        transientRetries += 1;
+        await boundedRetryDelay(pickNonNegInt(body, 'retryAfterMs'));
+        continue;
+      }
+
+      return { ok: false, reason: code ?? `http_${reply.status}` };
+    }
+    return { ok: false, reason: 'renew_retries_exhausted' };
   }
 
   async function reconcile(): Promise<void> {
@@ -1119,6 +1502,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         reconciled = false;
         return;
       }
+      recordCapabilities(reply.body);
       if (!hasSlice2Capabilities(reply.body)) {
         // Responding Slice-1 broker: drop stale local records without mutating broker.
         for (const rec of pendingRecords) removeRecord(rec, { persist: false });
@@ -1126,6 +1510,9 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         persistStore();
         return;
       }
+
+      const canRenew = hasCap(SLICE2B_CAPABILITIES.leaseRenew);
+      const canOwnerMatch = hasCap(SLICE2B_CAPABILITIES.ownerMatch);
 
       const brokerState = pickString(reply.body, 'state') ?? 'idle';
       const brokerEpoch = pickFiniteNumber(reply.body, 'epoch') ?? 0;
@@ -1153,19 +1540,15 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       const preempted = isRecord(reply.body.preempted) ? reply.body.preempted : null;
       const preemptedRef = extractRef(preempted);
 
-      // P1-2 & P1-5: Never mutate broker with force:true on secretless startup records.
-      // Re-adopt ONLY when BOTH the omp birth is alive AND the broker lease has a live claimed MCP peer.
-      // Otherwise: dead omp -> drop locally; live omp without live claimed peer -> mark access_lost honestly.
       let skippedStaleRecord = false;
       for (const rec of pendingRecords) {
-        if (recordsByBrokerId.get(rec.brokerSessionId) !== rec) continue;
+        if (stopped || recordsByBrokerId.get(rec.brokerSessionId) !== rec) continue;
         // P1-6: If this snapshot is stale against the record's own known position,
         // skip the record entirely (no state change and no command).
         if (isRecordObservationStale(rec, pos)) {
           skippedStaleRecord = true;
           continue;
         }
-        rec.pendingStartupReconcile = false;
 
         const isActive = activeIsAgent && refMatchesRecord(activeLeaseRef, rec);
         const isDisplaced = preemptedRef !== null && refMatchesRecord(preemptedRef, rec);
@@ -1179,8 +1562,25 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           && processAlive({ pid: effectivePid, startTime: effectiveStart });
 
         if (!ompAlive) {
-          // Dead omp process: drop local record only (leave any broker cleanup to broker PID/TTL reaping).
-          removeRecord(rec, { persist: false });
+          rec.pendingStartupReconcile = false;
+          if (matchedObj && canOwnerMatch) {
+            try {
+              await ownerMatchedReleaseOrCancel({
+                brokerSessionId: rec.brokerSessionId,
+                leaseOwnerId: rec.leaseOwnerId,
+                sessionSecret: null,
+                pid: effectivePid,
+                pidStartTime: effectiveStart,
+                epoch: brokerEpoch >= 1 ? brokerEpoch : null,
+                initialTarget: isDisplaced ? 'displaced' : 'active',
+              });
+            } catch (error) {
+              log(`[cu-lease] owner-matched orphan cleanup failed for ${rec.leaseOwnerId}: ${errorMessage(error)}`);
+            }
+          }
+          if (recordsByBrokerId.get(rec.brokerSessionId) === rec) {
+            removeRecord(rec, { persist: false });
+          }
           continue;
         }
 
@@ -1191,18 +1591,71 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         resolveSessionIdForRecord(rec);
         ensureLivenessMonitor();
 
-        if (matchedObj && hasLiveClaimedPeer(matchedObj)) {
-          // Live omp + live already-claimed MCP peer -> re-adopt strictly for abort/nudge routing (no heartbeats!).
-          rec.leaseId = pickString(matchedObj, 'leaseId') ?? rec.leaseId;
-          updateRecordPosition(rec, pos);
-          rec.status = isActive ? 'holding' : 'preempted';
-          if (isDisplaced) {
-            scheduleCommand(rec, 'abort', brokerEpoch, effectiveGen);
+        if (!canRenew) {
+          // Old Slice-2 broker (no lease_renew): preserve exact fail-closed Slice-2 behavior.
+          rec.pendingStartupReconcile = false;
+          if (matchedObj && hasLiveClaimedPeer(matchedObj)) {
+            rec.leaseId = pickString(matchedObj, 'leaseId') ?? rec.leaseId;
+            updateRecordPosition(rec, pos);
+            rec.status = isActive ? 'holding' : 'preempted';
+            if (isDisplaced) {
+              scheduleCommand(rec, 'abort', brokerEpoch, effectiveGen);
+            }
+          } else {
+            markAccessLost(rec);
           }
-        } else {
-          // Live omp whose lease expired or has no live claimed MCP peer (no heartbeat source across pi-dish restart):
-          // surface honest "desktop access lost — restart session" state without mutating broker.
+          continue;
+        }
+
+        if (!matchedObj) {
+          rec.pendingStartupReconcile = false;
           markAccessLost(rec);
+          continue;
+        }
+
+        // Slice 2b: renew via POST /v1/lease/renew while keeping record in 'checking'
+        // until renewal resolves. On failure, abort + mark access_lost (never silently continue).
+        const renewed = await renewAdoptedRecord(rec, brokerEpoch, matchedObj);
+        if (stopped || recordsByBrokerId.get(rec.brokerSessionId) !== rec) continue;
+        rec.pendingStartupReconcile = false;
+
+        if (!renewed.ok) {
+          log(`[cu-lease] startup renew failed for ${rec.leaseOwnerId}: ${renewed.reason}`);
+          markAccessLost(rec);
+          scheduleCommand(rec, 'abort', Math.max(0, brokerEpoch), effectiveGen);
+          continue;
+        }
+
+        const renewBody = renewed.body;
+        const renewGen = pickString(renewBody, 'generation') ?? effectiveGen;
+        const renewCursor = pickNonNegInt(renewBody, 'cursor') ?? brokerCursor;
+        const renewEpoch = pickFiniteNumber(renewBody, 'epoch') ?? brokerEpoch;
+        const renewPos: BrokerPosition = { generation: renewGen, cursor: renewCursor, epoch: renewEpoch };
+        const renewOrder = comparePosition(renewPos, { allowNewGeneration: true });
+        if (renewOrder === 'new_generation') {
+          resetAllWatermarksForNewGeneration(renewGen);
+        }
+        if (renewOrder !== 'stale') {
+          advanceGlobalPosition(renewPos, renewOrder === 'new_generation');
+          updateRecordPosition(rec, renewPos);
+        } else {
+          updateRecordPosition(rec, pos);
+        }
+
+        rec.sessionSecret = renewed.sessionSecret;
+        rec.adoptedWithoutSecret = false;
+        rec.leaseId = pickString(renewBody, 'leaseId') ?? pickString(matchedObj, 'leaseId') ?? rec.leaseId;
+        rec.heartbeatIntervalMs = resolveHeartbeatMs(pickFiniteNumber(renewBody, 'heartbeatIntervalSec'));
+
+        const renewTarget = pickString(renewBody, 'target');
+        const renewState = pickString(renewBody, 'state') ?? brokerState;
+        const displaced = renewTarget === 'displaced' || renewState === 'human';
+        const finalGen = rec.generation ?? renewGen;
+        ensureDeliveryContext(rec, finalGen);
+        rec.status = displaced ? 'preempted' : 'holding';
+        startHeartbeat(rec);
+        if (displaced) {
+          scheduleCommand(rec, 'abort', Math.max(0, rec.epoch), finalGen);
         }
       }
 
@@ -1220,28 +1673,87 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   async function mintClaimFile(
     brokerSessionId: string,
     sessionSecret: string,
-  ): Promise<{ ok: true; claimFile: string } | { ok: false; status: number; code: string | null; message: string }> {
-    const reply = await requestBrokerOrUnavailable('POST', '/v1/lease/claim-nonce', {
-      sessionId: brokerSessionId,
-      sessionSecret,
-      bindTimeoutSec: CLAIM_BIND_TIMEOUT_SEC,
-      requireRebind: false,
-    });
-    if (reply.status === 200 && isRecord(reply.body)) {
-      const claimFile = pickString(reply.body, 'claimFile');
-      // Deliberately discard reply.body.claimNonce — never log, store, or pass it.
-      if (!claimFile) {
-        return { ok: false, status: 502, code: 'missing_claim_file', message: 'cu-broker did not return a claimFile path' };
+    options: { requireRebind?: boolean } = {},
+  ): Promise<
+    | { ok: true; claimFile: string; claimId: string | null; generation: string | null; cursor: number | null }
+    | { ok: false; status: number; code: string | null; message: string }
+  > {
+    const requireRebind = options.requireRebind === true;
+    for (let attempt = 0; attempt <= MAX_TRANSIENT_BROKER_RETRIES; attempt++) {
+      let reply: { status: number; body: unknown };
+      try {
+        reply = await requestBrokerOrUnavailable('POST', '/v1/lease/claim-nonce', {
+          sessionId: brokerSessionId,
+          sessionSecret,
+          bindTimeoutSec: CLAIM_BIND_TIMEOUT_SEC,
+          requireRebind,
+        });
+      } catch (error) {
+        if (
+          error instanceof CuBrokerUnavailableError
+          && (error.brokerCode === 'claim_file_error' || error.brokerCode === 'state_persist_failed')
+          && attempt < MAX_TRANSIENT_BROKER_RETRIES
+          && !stopped
+        ) {
+          await boundedRetryDelay(error.retryAfterMs);
+          continue;
+        }
+        throw error;
       }
-      return { ok: true, claimFile };
+      if (reply.status === 200 && isRecord(reply.body)) {
+        const claimFile = pickString(reply.body, 'claimFile');
+        const claimId = pickString(reply.body, 'claimId');
+        // Deliberately discard reply.body.claimNonce — never log, store, or pass it.
+        if (!claimFile) {
+          return { ok: false, status: 502, code: 'missing_claim_file', message: 'cu-broker did not return a claimFile path' };
+        }
+        return {
+          ok: true,
+          claimFile,
+          claimId,
+          generation: pickString(reply.body, 'generation'),
+          cursor: pickNonNegInt(reply.body, 'cursor'),
+        };
+      }
+      const body = isRecord(reply.body) ? reply.body : {};
+      return {
+        ok: false,
+        status: reply.status >= 400 ? reply.status : 502,
+        code: pickString(body, 'code'),
+        message: pickString(body, 'message') ?? pickString(body, 'error') ?? `cu-broker claim-nonce failed (${reply.status})`,
+      };
     }
-    const body = isRecord(reply.body) ? reply.body : {};
-    return {
-      ok: false,
-      status: reply.status >= 400 ? reply.status : 502,
-      code: pickString(body, 'code'),
-      message: pickString(body, 'message') ?? pickString(body, 'error') ?? `cu-broker claim-nonce failed (${reply.status})`,
-    };
+    return { ok: false, status: 503, code: 'claim_file_error', message: 'cu-broker claim-nonce failed after retries' };
+  }
+
+  async function releaseUnboundAcquire(
+    brokerSessionId: string,
+    leaseOwnerId: string,
+    sessionSecret: string | null,
+    epoch: number | null,
+  ): Promise<void> {
+    try {
+      if (hasCap(SLICE2B_CAPABILITIES.ownerMatch)) {
+        await ownerMatchedReleaseOrCancel({
+          brokerSessionId,
+          leaseOwnerId,
+          sessionSecret,
+          pid: null,
+          pidStartTime: null,
+          epoch,
+          initialTarget: 'active',
+        });
+        return;
+      }
+      if (sessionSecret) {
+        await ports.broker.requestJson('POST', '/v1/lease/release', {
+          sessionId: brokerSessionId,
+          sessionSecret,
+        });
+      }
+    } catch {
+      // Best-effort cleanup of failed/uncertain acquire.
+    }
   }
 
   async function prepareSpawn(
@@ -1255,7 +1767,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     if (options.assumeSlice2 === true) {
       if (stopped || !ports.broker.configured()) return null;
       if (!ports.broker.available()) {
-        throw new CuBrokerUnavailableError('Computer-use broker is unavailable');
+        throw new CuBrokerUnavailableError('Computer-use broker is unavailable', { retryable: true });
       }
     } else if (!(await supportsSlice2())) {
       return null;
@@ -1267,12 +1779,22 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
 
     const leaseOwnerId = `cu-owner-${crypto.randomBytes(16).toString('hex')}`;
     const brokerSessionId = `cu-agent-${crypto.randomUUID()}`;
-    const reply = await requestBrokerOrUnavailable('POST', '/v1/lease/acquire', {
-      holderKind: 'agent',
-      sessionId: brokerSessionId,
-      ownerId: leaseOwnerId,
-      label: BROKER_AGENT_LABEL,
-    });
+    let reply: { status: number; body: unknown };
+    try {
+      reply = await requestBrokerOrUnavailable('POST', '/v1/lease/acquire', {
+        holderKind: 'agent',
+        sessionId: brokerSessionId,
+        ownerId: leaseOwnerId,
+        label: BROKER_AGENT_LABEL,
+      });
+    } catch (error) {
+      if (error instanceof CuBrokerUnavailableError && error.uncertain && hasCap(SLICE2B_CAPABILITIES.ownerMatch)) {
+        // Spec pi-dish item 8: acquire with applied:"unknown" may have created an unbound lease.
+        // Clean it up with guarded owner-match release (never force:true) and still surface uncertain error.
+        await releaseUnboundAcquire(brokerSessionId, leaseOwnerId, null, null);
+      }
+      throw error;
+    }
 
     if (reply.status === 200 && isRecord(reply.body)) {
       const confirmedSessionId = pickString(reply.body, 'sessionId') ?? brokerSessionId;
@@ -1287,21 +1809,15 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       const leaseObj = isRecord(reply.body.lease) ? reply.body.lease : null;
       const leaseId = pickString(reply.body, 'leaseId') ?? (leaseObj ? pickString(leaseObj, 'leaseId') : null);
 
-      let claim: { ok: true; claimFile: string } | { ok: false; status: number; code: string | null; message: string };
+      let claim;
       try {
-        claim = await mintClaimFile(confirmedSessionId, sessionSecret);
+        claim = await mintClaimFile(confirmedSessionId, sessionSecret, { requireRebind: false });
       } catch (claimError) {
-        await ports.broker.requestJson('POST', '/v1/lease/release', {
-          sessionId: confirmedSessionId,
-          sessionSecret,
-        }).catch(() => {});
+        await releaseUnboundAcquire(confirmedSessionId, leaseOwnerId, sessionSecret, epoch >= 1 ? epoch : null);
         throw claimError;
       }
       if (!claim.ok) {
-        await ports.broker.requestJson('POST', '/v1/lease/release', {
-          sessionId: confirmedSessionId,
-          sessionSecret,
-        }).catch(() => {});
+        await releaseUnboundAcquire(confirmedSessionId, leaseOwnerId, sessionSecret, epoch >= 1 ? epoch : null);
         throw httpError(claim.message, claim.status);
       }
 
@@ -1328,7 +1844,9 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         pid: null,
         pidStartTime: null,
         adoptedWithoutSecret: false,
+        reAdopted: false,
         pendingStartupReconcile: false,
+        pendingTransferClaimId: null,
         heartbeatTimer: null,
         heartbeatIntervalMs: resolveHeartbeatMs(hbSec),
         delivery: createDeliveryTracker(generation ?? 'default', 'unbound'),
@@ -1381,18 +1899,129 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     throw httpError(message, reply.status >= 400 ? reply.status : 502);
   }
 
+  function canTransferSession(sessionId: string): boolean {
+    if (stopped || !ports.broker.configured() || !hasCap(SLICE2B_CAPABILITIES.bindTransfer)) return false;
+    const rec = recordForSessionId(sessionId);
+    if (!rec) return false;
+    if (rec.status !== 'holding' && rec.status !== 'preempted') return false;
+    if (!rec.sessionSecret || rec.adoptedWithoutSecret) return false;
+    if (rec.pendingTransferClaimId !== null) return false;
+    if (rec.pid === null || rec.pid <= 1 || !rec.pidStartTime) return false;
+    return true;
+  }
+
+  async function prepareTransfer(options: {
+    sessionId: string;
+    expectedPid?: number | null;
+    expectedPidStartTime?: string | null;
+  }): Promise<CuAgentSpawnHandle | null> {
+    if (stopped || !ports.broker.configured() || !hasCap(SLICE2B_CAPABILITIES.bindTransfer)) return null;
+    if (!ports.broker.available()) {
+      throw new CuBrokerUnavailableError('Computer-use broker is unavailable', { retryable: true });
+    }
+    const rec = recordForSessionId(options.sessionId);
+    if (!rec || !rec.sessionSecret || rec.adoptedWithoutSecret) return null;
+    if (rec.status !== 'holding' && rec.status !== 'preempted') return null;
+    if (rec.pendingTransferClaimId !== null) return null;
+
+    const expectedPid = options.expectedPid !== undefined && options.expectedPid !== null
+      ? options.expectedPid
+      : rec.pid;
+    const expectedPidStartTime = options.expectedPidStartTime !== undefined && options.expectedPidStartTime !== null
+      ? options.expectedPidStartTime
+      : rec.pidStartTime;
+    if (expectedPid === null || expectedPid <= 1 || !expectedPidStartTime) return null;
+
+    const claim = await mintClaimFile(rec.brokerSessionId, rec.sessionSecret, { requireRebind: true });
+    if (!claim.ok) {
+      if (claim.status === 409 && (claim.code === 'lease_not_found' || claim.code === 'not_agent_lease')) {
+        markAccessLost(rec);
+        persistStore();
+        return null;
+      }
+      if (claim.status === 403) {
+        markAccessLost(rec);
+        persistStore();
+        return null;
+      }
+      throw httpError(claim.message, claim.status);
+    }
+    if (!claim.claimId) {
+      throw httpError('cu-broker did not return a staged claimId for bind transfer', 502);
+    }
+    if (stopped || recordsByBrokerId.get(rec.brokerSessionId) !== rec) {
+      return null;
+    }
+
+    const pos: BrokerPosition = { generation: claim.generation, cursor: claim.cursor, epoch: null };
+    const order = comparePosition(pos, { allowNewGeneration: true });
+    if (order !== 'stale') {
+      advanceGlobalPosition(pos, order === 'new_generation');
+      updateRecordPosition(rec, pos);
+    }
+
+    const stagedEpoch = rec.epoch;
+    rec.pendingTransferClaimId = claim.claimId;
+    const handle: CuAgentSpawnHandle = {
+      brokerSessionId: rec.brokerSessionId,
+      leaseOwnerId: rec.leaseOwnerId,
+      env: Object.freeze({
+        CU_BROKER_SESSION_ID: rec.brokerSessionId,
+        CU_BROKER_CLAIM_FILE: claim.claimFile,
+        CU_BROKER_LABEL: BROKER_AGENT_LABEL,
+      }),
+      acquiredEpoch: stagedEpoch,
+      transfer: Object.freeze({
+        claimId: claim.claimId,
+        expectedEpoch: stagedEpoch >= 1 ? stagedEpoch : null,
+        expectedPid,
+        expectedPidStartTime,
+      }),
+    };
+    transferStates.set(handle, { aborted: false });
+    return handle;
+  }
+
+  async function abortStagedTransfer(rec: ManagedLeaseRecord, handle: CuAgentSpawnHandle): Promise<void> {
+    const transfer = handle.transfer;
+    if (!transfer) return;
+    const state = transferStates.get(handle);
+    if (state?.aborted) return;
+    if (state) state.aborted = true;
+    if (!rec.sessionSecret || !ports.broker.available()) return;
+    try {
+      await ports.broker.requestJson('POST', '/v1/lease/bind', {
+        sessionId: rec.brokerSessionId,
+        sessionSecret: rec.sessionSecret,
+        abortStaged: true,
+        claimId: transfer.claimId,
+      });
+    } catch (error) {
+      log(`[cu-lease] abortStaged failed for ${rec.leaseOwnerId}: ${errorMessage(error)}`);
+    }
+  }
+
   async function bindSpawnedProcess(handle: CuAgentSpawnHandle, proc: CuBindProcessInfo | null): Promise<void> {
     const rec = recordsByBrokerId.get(handle.brokerSessionId);
     if (!rec) {
       throw httpError('Computer-use agent lease was lost before process bind', 409);
     }
+    const transfer = handle.transfer ?? null;
     if (!proc || !Number.isInteger(proc.pid) || proc.pid <= 1 || !proc.startTime) {
+      if (transfer) {
+        await abortStagedTransfer(rec, handle);
+        if (rec.pendingTransferClaimId === transfer.claimId) rec.pendingTransferClaimId = null;
+      }
       throw httpError('Could not verify spawned omp process identity for computer-use lease bind', 500);
     }
     if (!rec.sessionSecret) {
+      if (transfer && rec.pendingTransferClaimId === transfer.claimId) rec.pendingTransferClaimId = null;
       throw httpError('Computer-use agent lease credentials are unavailable for bind', 409);
     }
 
+    const prevPid = rec.pid;
+    const prevStart = rec.pidStartTime;
+    const prevDelivery = rec.delivery;
     const previousBirth = processBirthKey(rec.pid, rec.pidStartTime);
     const nextBirth = processBirthKey(proc.pid, proc.startTime);
     rec.pid = proc.pid;
@@ -1404,18 +2033,91 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     ensureLivenessMonitor();
 
     const sentGeneration = rec.generation;
-    const reply = await requestBrokerOrUnavailable('POST', '/v1/lease/bind', {
-      sessionId: rec.brokerSessionId,
-      sessionSecret: rec.sessionSecret,
-      ownerId: rec.leaseOwnerId,
-      label: BROKER_AGENT_LABEL,
-      pid: proc.pid,
-      pidStartTime: formatPidStartTimeForBroker(proc.startTime),
-    });
-    if (reply.status !== 200 || !isRecord(reply.body)) {
-      const body = isRecord(reply.body) ? reply.body : {};
-      const message = pickString(body, 'message') ?? pickString(body, 'error') ?? `cu-broker lease bind failed (${reply.status})`;
-      throw httpError(message, reply.status >= 400 ? reply.status : 502);
+    let attemptEpoch: number | null = transfer ? transfer.expectedEpoch : null;
+    let retriedEpoch = false;
+    let transientRetries = 0;
+    let reply: { status: number; body: unknown } | null = null;
+
+    try {
+      for (let step = 0; step < 5; step++) {
+        const bindPayload: Record<string, unknown> = {
+          sessionId: rec.brokerSessionId,
+          sessionSecret: rec.sessionSecret,
+          ownerId: rec.leaseOwnerId,
+          label: BROKER_AGENT_LABEL,
+          pid: proc.pid,
+          pidStartTime: formatPidStartTimeForBroker(proc.startTime),
+        };
+        if (transfer) {
+          bindPayload.claimId = transfer.claimId;
+          bindPayload.expectedPid = transfer.expectedPid;
+          bindPayload.expectedPidStartTime = formatPidStartTimeForBroker(transfer.expectedPidStartTime);
+          if (attemptEpoch !== null && attemptEpoch >= 1) {
+            bindPayload.expectedEpoch = attemptEpoch;
+          }
+        }
+
+        try {
+          reply = await requestBrokerOrUnavailable('POST', '/v1/lease/bind', bindPayload);
+        } catch (error) {
+          if (
+            error instanceof CuBrokerUnavailableError
+            && (error.brokerCode === 'worker_exit_unconfirmed' || error.brokerCode === 'state_persist_failed')
+            && transientRetries < MAX_TRANSIENT_BROKER_RETRIES
+            && !stopped
+          ) {
+            transientRetries += 1;
+            await boundedRetryDelay(error.retryAfterMs);
+            continue;
+          }
+          throw error;
+        }
+
+        if (reply.status === 200 && isRecord(reply.body)) {
+          break;
+        }
+
+        const body = isRecord(reply.body) ? reply.body : {};
+        const code = pickString(body, 'code');
+        if (reply.status === 409 && transfer && code === 'epoch_mismatch' && !retriedEpoch) {
+          // A human takeover may have displaced our lease between claim-nonce and bind.
+          // If our exact (ownerId, sessionId) is still present in preempted or lease,
+          // retry bind once with the updated epoch so broker answers 200 target:"displaced".
+          retriedEpoch = true;
+          const conflictEpoch = pickFiniteNumber(body, 'epoch');
+          const stillOurs = snapshotObjMatchesOwner(body.preempted, rec.leaseOwnerId, rec.brokerSessionId)
+            || snapshotObjMatchesOwner(body.lease, rec.leaseOwnerId, rec.brokerSessionId);
+          if (stillOurs && conflictEpoch !== null && conflictEpoch >= 1) {
+            attemptEpoch = conflictEpoch;
+            continue;
+          }
+        }
+        if (reply.status === 409 && code === 'transition_pending' && transientRetries < MAX_TRANSIENT_BROKER_RETRIES && !stopped) {
+          transientRetries += 1;
+          await boundedRetryDelay(pickNonNegInt(body, 'retryAfterMs'));
+          continue;
+        }
+        const message = pickString(body, 'message') ?? pickString(body, 'error') ?? `cu-broker lease bind failed (${reply.status})`;
+        throw httpError(message, reply.status >= 400 ? reply.status : 502);
+      }
+
+      if (!reply || reply.status !== 200 || !isRecord(reply.body)) {
+        throw httpError('cu-broker lease bind did not succeed', 502);
+      }
+    } catch (bindError) {
+      if (transfer) {
+        rec.pid = prevPid;
+        rec.pidStartTime = prevStart;
+        rec.delivery = prevDelivery;
+        await abortStagedTransfer(rec, handle);
+        if (rec.pendingTransferClaimId === transfer.claimId) rec.pendingTransferClaimId = null;
+        persistStore();
+      }
+      throw bindError;
+    }
+
+    if (transfer && rec.pendingTransferClaimId === transfer.claimId) {
+      rec.pendingTransferClaimId = null;
     }
 
     // Check record still exists after await.
@@ -1432,6 +2134,10 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     // keep the newer status and pending abort instead of letting the stale bind reply restore holding.
     const order = comparePosition(pos, { allowNewGeneration: true, sourceGeneration: sentGeneration });
     if (order === 'stale' || isRecordObservationStale(rec, pos)) {
+      if (target === 'displaced' || st === 'human') {
+        rec.status = 'preempted';
+        scheduleCommand(rec, 'abort', Math.max(0, rec.epoch), rec.generation ?? knownGeneration ?? 'default');
+      }
       flushPendingCommands(rec);
       persistStore();
       return;
@@ -1474,6 +2180,20 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   async function abortSpawn(handle: CuAgentSpawnHandle): Promise<void> {
     const rec = recordsByBrokerId.get(handle.brokerSessionId);
     if (!rec) return;
+    if (handle.transfer) {
+      await abortStagedTransfer(rec, handle);
+      if (rec.pendingTransferClaimId === handle.transfer.claimId) {
+        rec.pendingTransferClaimId = null;
+      }
+      const boundAlive = rec.pid !== null
+        && rec.pid > 1
+        && rec.pidStartTime !== null
+        && processAlive({ pid: rec.pid, startTime: rec.pidStartTime });
+      if (boundAlive) {
+        // Pre-respawn failure: old pane is still alive and its active/displaced lease remains intact.
+        return;
+      }
+    }
     await releaseRecord(rec);
   }
 
@@ -1486,6 +2206,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   function handleSessionRetired(sessionId: string): void {
     const rec = recordForSessionId(sessionId);
     if (!rec) return;
+    if (rec.pendingTransferClaimId !== null) return;
     // Only release/cancel on bridge retirement if the OS process is actually gone.
     if (rec.pid !== null && rec.pidStartTime && processAlive({ pid: rec.pid, startTime: rec.pidStartTime })) {
       return;
@@ -1507,6 +2228,9 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   function handleBrokerEvent(event: CuBrokerEvent): void {
     if (stopped) return;
     const { eventName, authoritativeHello, payload } = event;
+    if (eventName === 'hello' && Array.isArray(payload.capabilities)) {
+      recordCapabilities(payload);
+    }
     const state = pickString(payload, 'state');
     const epoch = pickFiniteNumber(payload, 'epoch');
     if (state === null || epoch === null) return;
@@ -1726,6 +2450,15 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     return true;
   }
 
+  function isDesktopChecking(sessionId: string): boolean {
+    const rec = recordForSessionId(sessionId);
+    if (!rec || rec.status !== 'checking') return false;
+    if (rec.pid !== null && rec.pidStartTime && !processAlive({ pid: rec.pid, startTime: rec.pidStartTime })) {
+      return false;
+    }
+    return true;
+  }
+
   function stop(): void {
     stopped = true;
     if (livenessTimer) {
@@ -1744,8 +2477,11 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     configured: () => !stopped && ports.broker.configured(),
     available: () => !stopped && ports.broker.available(),
     supportsSlice2,
+    probeCapabilities,
+    canTransferSession,
     reconcile,
     prepareSpawn,
+    prepareTransfer,
     bindSpawnedProcess,
     attachSpawnedSession,
     abortSpawn,
@@ -1755,6 +2491,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     handleBrokerEvent,
     ownerIdForSession,
     isDesktopAccessLost,
+    isDesktopChecking,
     stop,
   };
 }

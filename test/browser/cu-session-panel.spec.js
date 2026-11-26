@@ -701,6 +701,7 @@ fixtures_js_1.test.describe('session Desktop panel version skew', () => {
     let generation = 'gen-1';
     let activeOwner = ownerOne;
     let rowTwoAccessLost = false;
+    let rowTwoChecking = false;
     await page.route(`${fleet.self.base}/api/hosts`, async (route) => {
         const response = await route.fetch();
         const json = (await response.json());
@@ -733,8 +734,9 @@ fixtures_js_1.test.describe('session Desktop panel version skew', () => {
                     isActive: true,
                     host: RELAY_HOST_ID,
                     lastActivity: Date.now() - 1000,
-                    cuOwnerId: rowTwoAccessLost ? undefined : ownerTwoNearMiss,
+                    cuOwnerId: rowTwoAccessLost || rowTwoChecking ? undefined : ownerTwoNearMiss,
                     ...(rowTwoAccessLost ? { cuDesktopAccessLost: true } : {}),
+                    ...(rowTwoChecking ? { cuDesktopChecking: true } : {}),
                 },
             ],
             previous: [],
@@ -851,4 +853,13 @@ fixtures_js_1.test.describe('session Desktop panel version skew', () => {
     await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Desktop access lost — restart session');
     await page.getByRole('button', { name: 'Open session list' }).filter({ visible: true }).click();
     await (0, fixtures_js_1.expect)(rowTwo.locator('.cu-seat-cue')).toHaveText('desktop access lost — restart session');
+    // While startup reconcile is still checking, cuDesktopChecking holds the sidebar badge
+    // (no transient desktop-access-lost flash) and shows "Checking…" in the open panel header.
+    rowTwoAccessLost = false;
+    rowTwoChecking = true;
+    await page.evaluate(() => fixtureApp.features.sidebarLists.refresh());
+    await (0, fixtures_js_1.expect)(rowTwo.locator('.cu-seat-cue')).toHaveCount(0);
+    await rowTwo.click();
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSummary')).toBeHidden();
+    await (0, fixtures_js_1.expect)(page.locator('#cuPanelSeatBadge')).toHaveText('Checking…');
 });

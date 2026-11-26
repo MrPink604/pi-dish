@@ -1,9 +1,22 @@
 // Generated from src/core/cu-agent-leases.ts; edit that source and run npm run build:core.
 import type { CuBrokerClient } from './cu-broker';
-export declare const CU_HAND_BACK_NUDGE = "The desktop has been returned to you after human take-over. Inspect the current screen and browser state before continuing.";
+export declare const CU_HAND_BACK_NUDGE = "Desktop control has been returned to you. You can continue your task.";
 export declare const BROKER_AGENT_LABEL = "omp";
 export declare const REQUIRED_SLICE2_CAPABILITIES: readonly ['bind', 'cancel_preempted', 'ordered_sse', 'claim_handoff'];
-export type ManagedLeaseStatus = 'holding' | 'preempted' | 'access_lost' | 'idle';
+export declare const SLICE2B_CAPABILITIES: {
+    readonly bindTransfer: 'bind_transfer';
+    readonly ownerMatch: 'owner_match';
+    readonly leaseRenew: 'lease_renew';
+    readonly claimReclaim: 'claim_reclaim';
+    readonly deferredClaim: 'deferred_claim';
+};
+export type ManagedLeaseStatus = 'checking' | 'holding' | 'preempted' | 'access_lost' | 'idle';
+export interface CuBrokerCapabilities {
+    readonly slice2: boolean;
+    readonly bindTransfer: boolean;
+    readonly ownerMatch: boolean;
+    readonly leaseRenew: boolean;
+}
 export interface CuSeatBusyDetails {
     readonly state: string | null;
     readonly epoch: number | null;
@@ -18,12 +31,39 @@ export declare class CuSeatBusyError extends Error {
     readonly holder: Record<string, unknown> | null;
     constructor(message: string, details: CuSeatBusyDetails);
 }
-/** Structured 503 error raised when a CU host's configured broker socket is unreachable or times out. */
+export interface CuBrokerUnavailableDetails {
+    readonly code?: string;
+    readonly brokerCode?: string | null;
+    readonly retryable?: boolean;
+    readonly applied?: boolean | 'unknown' | null;
+    readonly uncertain?: boolean;
+    readonly retryAfterMs?: number | null;
+}
+/** Structured 503 error raised when a CU host's configured broker socket is unreachable, shutting down, busy, or uncertain. */
 export declare class CuBrokerUnavailableError extends Error {
     readonly status = 503;
-    readonly code: 'cu_broker_unavailable';
+    readonly code: string;
+    readonly brokerCode: string | null;
+    readonly retryable: boolean;
+    readonly applied: boolean | 'unknown' | null;
+    readonly uncertain: boolean;
+    readonly retryAfterMs: number | null;
+    constructor(message?: string, details?: CuBrokerUnavailableDetails);
+}
+/** Internal pre-respawn signal indicating no active/displaced lease is available to transfer in place. */
+export declare class CuTransferUnavailableError extends Error {
+    readonly status = 409;
+    readonly code: 'cu_transfer_unavailable';
     constructor(message?: string);
 }
+export declare function cuBrokerUnavailableResponseFields(error: CuBrokerUnavailableError): {
+    code: string;
+    retryable: boolean;
+    brokerCode?: string;
+    applied?: boolean | 'unknown';
+    uncertain?: true;
+    retryAfterMs?: number;
+};
 export interface CuBrokerEvent {
     readonly eventName: string;
     readonly eventId?: string | null;
@@ -36,11 +76,18 @@ export interface CuBrokerEvent {
     readonly generationChanged?: boolean;
     readonly payload: Record<string, unknown>;
 }
+export interface CuTransferHandleDetails {
+    readonly claimId: string;
+    readonly expectedEpoch: number | null;
+    readonly expectedPid: number;
+    readonly expectedPidStartTime: string;
+}
 export interface CuAgentSpawnHandle {
     readonly brokerSessionId: string;
     readonly leaseOwnerId: string;
     readonly env: Readonly<Record<string, string>>;
     readonly acquiredEpoch: number;
+    readonly transfer?: CuTransferHandleDetails;
 }
 export interface CuBindProcessInfo {
     readonly pid: number;
@@ -104,10 +151,19 @@ export interface CuAgentLeases {
     available(): boolean;
     /** Probes §9.1 capabilities before mutation. Returns false on non-CU or Slice-1 broker; throws 503 if configured broker is unreachable. */
     supportsSlice2(): Promise<boolean>;
+    /** Probes Slice-2 and Slice-2b capabilities before mutation; throws 503 if configured broker is unreachable. */
+    probeCapabilities(): Promise<CuBrokerCapabilities>;
+    /** True when the session holds an authenticated active/displaced lease and the broker advertises `bind_transfer`. */
+    canTransferSession(sessionId: string): boolean;
     reconcile(): Promise<void>;
     prepareSpawn(options: {
         knownSessionId?: string | null;
         assumeSlice2?: boolean;
+    }): Promise<CuAgentSpawnHandle | null>;
+    prepareTransfer(options: {
+        sessionId: string;
+        expectedPid?: number | null;
+        expectedPidStartTime?: string | null;
     }): Promise<CuAgentSpawnHandle | null>;
     bindSpawnedProcess(handle: CuAgentSpawnHandle, process: CuBindProcessInfo | null): Promise<void>;
     attachSpawnedSession(handle: CuAgentSpawnHandle, info: CuAttachSessionInfo): void;
@@ -118,7 +174,9 @@ export interface CuAgentLeases {
     handleBrokerEvent(event: CuBrokerEvent): void;
     ownerIdForSession(sessionId: string): string | null;
     isDesktopAccessLost(sessionId: string): boolean;
+    isDesktopChecking(sessionId: string): boolean;
     stop(): void;
 }
+export declare function extractCapabilities(body: unknown): Set<string>;
 export declare function hasSlice2Capabilities(body: unknown): boolean;
 export declare function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases;

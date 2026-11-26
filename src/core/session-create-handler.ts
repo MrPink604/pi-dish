@@ -1,6 +1,6 @@
 import { errorMessage, errorStatus, requestBody, type RouteHandler } from './http-boundary';
 import { getHarness } from './harnesses';
-import { CuBrokerUnavailableError, CuSeatBusyError } from './cu-agent-leases';
+import { CuBrokerUnavailableError, CuSeatBusyError, cuBrokerUnavailableResponseFields } from './cu-agent-leases';
 import sessionProvenance = require('./session-provenance');
 import type { HarnessLaunchTarget, SessionLaunch } from './session-launch';
 import type { SessionOperations } from './session-operations';
@@ -101,7 +101,7 @@ export function createSessionCreateHandlers(ports: SessionCreatePorts) {
       if (error instanceof CuBrokerUnavailableError) {
         return res.status(503).json({
           success: false,
-          code: error.code,
+          ...cuBrokerUnavailableResponseFields(error),
           error: error.message,
         });
       }

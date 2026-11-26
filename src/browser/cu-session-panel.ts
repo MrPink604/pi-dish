@@ -33,6 +33,7 @@ export interface CuSessionPanelOptions {
     host?: string | null;
     cuOwnerId?: string | null;
     cuDesktopAccessLost?: boolean;
+    cuDesktopChecking?: boolean;
   } | null;
   supports: (host: CuPanelHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
@@ -154,11 +155,12 @@ export function createCuSessionPanel(options: CuSessionPanelOptions) {
   }
 
   function sessionCueContext(
-    session: { cuOwnerId?: string | null; cuDesktopAccessLost?: boolean } | null | undefined,
+    session: { cuOwnerId?: string | null; cuDesktopAccessLost?: boolean; cuDesktopChecking?: boolean } | null | undefined,
   ): CuSeatSessionContext {
     return {
       cuOwnerId: session?.cuOwnerId ?? null,
       desktopAccessLost: session?.cuDesktopAccessLost === true,
+      desktopChecking: session?.cuDesktopChecking === true,
       sessionScoped: true,
     };
   }

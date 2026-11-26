@@ -17,7 +17,14 @@ import { LifecycleInterruption, OwnershipRefusal, liveSessionSupports, recoveryR
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import { cleanupProcesses } from './session-launch';
 import type { CleanupEvidence, HarnessLaunchTarget, LaunchOutcome, ResumeUncertainty, SessionLaunch } from './session-launch';
-import { CuBrokerUnavailableError, CuSeatBusyError } from './cu-agent-leases';
+import { ensurePrivateRoot, isPrivateSessionFile, privateRootFor } from './private-sessions';
+import {
+  CuBrokerUnavailableError,
+  CuSeatBusyError,
+  CuTransferUnavailableError,
+  cuBrokerUnavailableResponseFields,
+  type CuBrokerCapabilities,
+} from './cu-agent-leases';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryControl, RecoveryRecord } from './session-recovery';
 import * as tmux from './tmux';
@@ -39,6 +46,10 @@ export interface SessionOperationObservations {
   onSessionStopped?(sessionId: string): Promise<void> | void;
   /** Checks whether a Slice-2 capable CU broker manages omp sessions on this host (throws 503 if configured broker is unreachable). */
   cuCheckSlice2?(): Promise<boolean>;
+  /** Probes Slice-2 and Slice-2b capabilities before restart (preferred over `cuCheckSlice2` when provided). */
+  cuCheckCapabilities?(): Promise<CuBrokerCapabilities>;
+  /** True when the session currently holds a transferable authenticated CU lease. */
+  cuCanTransferSession?(sessionId: string): boolean;
 }
 
 export interface CreateSessionOptions {
@@ -81,6 +92,11 @@ export type SessionSpawnOperation =
     state?: string | null;
     epoch?: number | null;
     holder?: Record<string, unknown> | null;
+    retryable?: boolean;
+    brokerCode?: string;
+    applied?: boolean | 'unknown';
+    uncertain?: true;
+    retryAfterMs?: number;
   };
 
 interface CloseIntentState {
@@ -112,6 +128,11 @@ export interface SessionOperationBody {
   success?: true;
   error?: string;
   code?: string;
+  retryable?: boolean;
+  brokerCode?: string;
+  applied?: boolean | 'unknown';
+  uncertain?: true;
+  retryAfterMs?: number;
   state?: string | null;
   epoch?: number | null;
   holder?: Record<string, unknown> | null;
@@ -140,7 +161,7 @@ function sessionOperationResponse(outcome: SessionOperationOutcome): SessionOper
     response.body.epoch = outcome.cause.epoch;
     response.body.holder = outcome.cause.holder;
   } else if (outcome.cause instanceof CuBrokerUnavailableError) {
-    response.body.code = outcome.cause.code;
+    Object.assign(response.body, cuBrokerUnavailableResponseFields(outcome.cause));
   }
   if (outcome.kind === 'replacement-not-ready') response.body.stopped = true;
   if (outcome.reportStopUncertain) {
@@ -290,8 +311,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
             status: 'error',
             createdAt,
             error: error.message,
-            code: error.code,
             httpStatus: error.status,
+            ...cuBrokerUnavailableResponseFields(error),
           };
         } else {
           operation = { status: 'error', createdAt, error: errorMessage(error) };
@@ -792,7 +813,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
       }
       const spawn = restartCapture.placement;
       let registry: BridgeRegistryEntry | null = restartCapture.kind === 'pane-restart' ? restartCapture.registry : null;
-      let sessionFile: string;
+      let sessionFile: string | null = null;
+      let privateSessionDir: string | null = null;
       let cwd: string | undefined;
       let resumeModel: string | undefined;
       let windowName: string | null;
@@ -810,9 +832,28 @@ export function createSessionOperations(observations: SessionOperationObservatio
             ? sourceForIdentity(route.harnessId, route.nativeSessionId, filePath(bridgeRegistry.sessionFile))
             : findSessionSource(sessionId);
         } catch {}
-        try { sessionFile = fs.realpathSync(filePath(sessionSource?.file || bridgeRegistry.sessionFile)); }
-        catch { return noAction(409, 'The active agent has no resumable session file.'); }
-        cwd = observedCwd(observations.readSessionCwd(sourceForIdentity(route.harnessId, route.nativeSessionId, sessionFile)));
+        const rawCandidate = sessionSource?.file || bridgeRegistry.sessionFile;
+        if (typeof rawCandidate !== 'string' || !rawCandidate) {
+          return noAction(409, 'The active agent has no resumable session file.');
+        }
+        try {
+          sessionFile = fs.realpathSync(rawCandidate);
+        } catch (err) {
+          const isEnoent = record(err) && err.code === 'ENOENT';
+          if (isEnoent && descriptor.id === 'omp' && path.isAbsolute(rawCandidate)) {
+            // OMP creates its JSONL lazily on the first prompt; restart a never-prompted
+            // session cleanly as a fresh session instead of refusing with 409.
+            sessionFile = null;
+            if (isPrivateSessionFile(descriptor, rawCandidate)) {
+              privateSessionDir = privateRootFor(descriptor);
+            }
+          } else {
+            return noAction(409, 'The active agent has no resumable session file.');
+          }
+        }
+        cwd = sessionFile
+          ? observedCwd(observations.readSessionCwd(sourceForIdentity(route.harnessId, route.nativeSessionId, sessionFile)))
+          : observedCwd(bridgeRegistry.cwd);
         if (!cwd || !fs.existsSync(cwd)) cwd = process.env.HOME;
         resumeModel = observedText(bridgeRegistry.model) || undefined;
         windowName = observedText(bridgeRegistry.name) || null;
@@ -827,34 +868,43 @@ export function createSessionOperations(observations: SessionOperationObservatio
           throw error;
         }
       }
-      // P1-1 & P1-4: On a Slice-2 CU host, never transfer an active/displaced lease
-      // across respawnPane. Check broker Slice-2 capability before touching the pane,
-      // run the restart guard + stop the old pane + release/cancel its own lease,
-      // and then perform a fresh acquire+claim+bind launch for the replacement pane.
-      let useFreshCuRestart = false;
-      if (restartCapture.kind === 'pane-restart' && descriptor.id === 'omp' && observations.cuCheckSlice2) {
-        try {
-          useFreshCuRestart = await observations.cuCheckSlice2();
-        } catch (error) {
-          return noAction(errorStatus(error, 503), `The agent was not restarted: ${errorMessage(error)}`, error);
+      // Probe CU capabilities ONCE before touching the pane (P1-1 & P1-4).
+      // - Slice 2b (`bind_transfer`) with an authenticated active/displaced lease:
+      //   transfer the lease atomically in place across `tmux respawn-pane -k`.
+      // - Old Slice-2 broker (no `bind_transfer`) or non-transferable session (e.g. `access_lost`):
+      //   stop old pane, release/cancel lease, and run a fresh acquire+claim+bind launch.
+      let cuCaps: CuBrokerCapabilities = { slice2: false, bindTransfer: false, ownerMatch: false, leaseRenew: false };
+      if (restartCapture.kind === 'pane-restart' && descriptor.id === 'omp') {
+        if (observations.cuCheckCapabilities) {
+          try {
+            cuCaps = await observations.cuCheckCapabilities();
+          } catch (error) {
+            return noAction(errorStatus(error, 503), `The agent was not restarted: ${errorMessage(error)}`, error);
+          }
+        } else if (observations.cuCheckSlice2) {
+          try {
+            cuCaps = { slice2: await observations.cuCheckSlice2(), bindTransfer: false, ownerMatch: false, leaseRenew: false };
+          } catch (error) {
+            return noAction(errorStatus(error, 503), `The agent was not restarted: ${errorMessage(error)}`, error);
+          }
         }
       }
       let workerStopped = false;
-      try {
-        if (useFreshCuRestart) {
-          const isHeadless = path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket());
-          const prevLocation = isHeadless ? null : await tmux.paneLocation(spawn.socket, spawn.paneId).catch(() => null);
-          const stopped = await performSessionClose(sessionId, { beforeAction });
-          if (stopped.kind !== 'stopped') return stopped;
-          workerStopped = true;
-          let launchTarget: HarnessLaunchTarget | null = null;
-          if (!isHeadless && prevLocation?.tmuxSession) {
-            const exists = await tmux.hasSession(spawn.socket, prevLocation.tmuxSession).catch(() => false);
-            launchTarget = exists
-              ? { type: 'tmux', socket: spawn.socket, tmuxSession: prevLocation.tmuxSession }
-              : { type: 'tmux', socket: spawn.socket, newTmuxSession: prevLocation.tmuxSession };
-          }
-          const outcome = await launch.launchResumedSession({
+      const runFreshCuRestart = async (): Promise<SessionOperationOutcome> => {
+        const isHeadless = path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket());
+        const prevLocation = isHeadless ? null : await tmux.paneLocation(spawn.socket, spawn.paneId).catch(() => null);
+        const stopped = await performSessionClose(sessionId, { beforeAction });
+        if (stopped.kind !== 'stopped') return stopped;
+        workerStopped = true;
+        let launchTarget: HarnessLaunchTarget | null = null;
+        if (!isHeadless && prevLocation?.tmuxSession) {
+          const exists = await tmux.hasSession(spawn.socket, prevLocation.tmuxSession).catch(() => false);
+          launchTarget = exists
+            ? { type: 'tmux', socket: spawn.socket, tmuxSession: prevLocation.tmuxSession }
+            : { type: 'tmux', socket: spawn.socket, newTmuxSession: prevLocation.tmuxSession };
+        }
+        const outcome = sessionFile !== null
+          ? await launch.launchResumedSession({
             descriptor,
             sessionFile,
             sessionId,
@@ -863,20 +913,86 @@ export function createSessionOperations(observations: SessionOperationObservatio
             target: launchTarget,
             model: resumeModel,
             cuSlice2: true,
+          })
+          : await launch.launchNewSession({
+            descriptor,
+            cwd,
+            name: windowName,
+            target: launchTarget,
+            model: resumeModel,
+            private: privateSessionDir !== null,
+            cuSlice2: true,
           });
-          if (outcome.kind !== 'ready') {
+        if (outcome.kind !== 'ready') {
+          if (sessionFile !== null) {
             if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
             else rememberUncertainPlacement(sessionFile, outcome);
-            throw outcome.error;
           }
-          return {
-            kind: 'stopped',
-            replacement: {
-              id: outcome.id,
-              placement: 'tmux',
-              paneId: tmux.getSpawn(outcome.id)?.paneId,
+          throw outcome.error;
+        }
+        return {
+          kind: 'stopped',
+          replacement: {
+            id: outcome.id,
+            placement: 'tmux',
+            paneId: tmux.getSpawn(outcome.id)?.paneId,
+          },
+        };
+      };
+
+      const buildRespawnArgs = () => {
+        if (sessionFile !== null) {
+          return descriptor.argv.resume({ file: sessionFile, model: resumeModel });
+        }
+        if (privateSessionDir) ensurePrivateRoot(privateSessionDir);
+        return descriptor.argv.new({
+          model: resumeModel,
+          cwd,
+          ...(privateSessionDir ? { sessionDir: privateSessionDir } : {}),
+        });
+      };
+
+      try {
+        const tryBindTransfer = restartCapture.kind === 'pane-restart'
+          && descriptor.id === 'omp'
+          && cuCaps.slice2
+          && cuCaps.bindTransfer
+          && (observations.cuCanTransferSession?.(sessionId) === true);
+
+        if (tryBindTransfer) {
+          const pane = record(spawn.paneProcess) ? spawn.paneProcess : null;
+          const outcome = await launch.spawnHarnessInTmux({
+            descriptor,
+            target: { socket: spawn.socket },
+            args: buildRespawnArgs(),
+            cwd,
+            name: windowName,
+            hidden: path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket()),
+            cuSlice2: true,
+            cuBindTransfer: true,
+            restartPane: {
+              sessionId, paneId: spawn.paneId,
+              paneProcess: pane ? { pid: Number(pane.pid), startTime: String(pane.startTime) } : null,
+              spawn, registry,
+              beforeAction,
             },
-          };
+          });
+          if (outcome.kind === 'ready') {
+            return { kind: 'stopped', replacement: { id: outcome.id, placement: 'tmux', paneId: spawn.paneId } };
+          }
+          if (outcome.error instanceof CuTransferUnavailableError) {
+            // Lease became non-transferable before touching the pane; fall back to fresh CU restart.
+            return await runFreshCuRestart();
+          }
+          if (sessionFile !== null) {
+            if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
+            else rememberUncertainPlacement(sessionFile, outcome);
+          }
+          throw outcome.error;
+        }
+
+        if (cuCaps.slice2) {
+          return await runFreshCuRestart();
         }
         let beforeRespawn: BeforeLifecycleAction | null = beforeAction;
         if (restartCapture.kind === 'prime-restart') {
@@ -886,13 +1002,13 @@ export function createSessionOperations(observations: SessionOperationObservatio
           });
           if (stopped.kind !== 'stopped') return { ...stopped, reportStopUncertain: true };
           workerStopped = true;
-          beforeRespawn = () => ownership.preparePrimeReplacement(restartCapture, sessionFile);
+          beforeRespawn = () => ownership.preparePrimeReplacement(restartCapture, sessionFile!);
         }
         const pane = record(spawn.paneProcess) ? spawn.paneProcess : null;
         const outcome = await launch.spawnHarnessInTmux({
           descriptor,
           target: { socket: spawn.socket },
-          args: descriptor.argv.resume({ file: sessionFile, model: resumeModel }),
+          args: buildRespawnArgs(),
           cwd,
           name: windowName,
           hidden: path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket()),
@@ -905,8 +1021,10 @@ export function createSessionOperations(observations: SessionOperationObservatio
           },
         });
         if (outcome.kind !== 'ready') {
-          if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
-          else rememberUncertainPlacement(sessionFile, outcome);
+          if (sessionFile !== null) {
+            if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
+            else rememberUncertainPlacement(sessionFile, outcome);
+          }
           throw outcome.error;
         }
         return { kind: 'stopped', replacement: { id: outcome.id, placement: 'tmux', paneId: spawn.paneId } };

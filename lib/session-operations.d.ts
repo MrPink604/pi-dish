@@ -3,6 +3,7 @@ import type { ProcessIdentity } from './contracts';
 import type { SessionSource } from './session-source';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import type { HarnessLaunchTarget, SessionLaunch } from './session-launch';
+import { type CuBrokerCapabilities } from './cu-agent-leases';
 import type { RecoveryRecord } from './session-recovery';
 export interface ActiveSessionObservation {
     id: string;
@@ -20,6 +21,10 @@ export interface SessionOperationObservations {
     onSessionStopped?(sessionId: string): Promise<void> | void;
     /** Checks whether a Slice-2 capable CU broker manages omp sessions on this host (throws 503 if configured broker is unreachable). */
     cuCheckSlice2?(): Promise<boolean>;
+    /** Probes Slice-2 and Slice-2b capabilities before restart (preferred over `cuCheckSlice2` when provided). */
+    cuCheckCapabilities?(): Promise<CuBrokerCapabilities>;
+    /** True when the session currently holds a transferable authenticated CU lease. */
+    cuCanTransferSession?(sessionId: string): boolean;
 }
 export interface CreateSessionOptions {
     harness?: unknown;
@@ -62,6 +67,11 @@ export type SessionSpawnOperation = {
     state?: string | null;
     epoch?: number | null;
     holder?: Record<string, unknown> | null;
+    retryable?: boolean;
+    brokerCode?: string;
+    applied?: boolean | 'unknown';
+    uncertain?: true;
+    retryAfterMs?: number;
 };
 interface CloseIntentState {
     preserve: boolean;
@@ -103,6 +113,11 @@ export interface SessionOperationBody {
     success?: true;
     error?: string;
     code?: string;
+    retryable?: boolean;
+    brokerCode?: string;
+    applied?: boolean | 'unknown';
+    uncertain?: true;
+    retryAfterMs?: number;
     state?: string | null;
     epoch?: number | null;
     holder?: Record<string, unknown> | null;

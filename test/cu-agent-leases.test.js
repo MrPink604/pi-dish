@@ -68,7 +68,7 @@ process.env.PI_DISH_CU_LIVENESS_MS = '60';
 process.env.PI_DISH_CU_WATCH_RETRY_MS = '35';
 process.env.PI_DISH_BOTS = 'off';
 process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${TEST_FAKE_OMP_PATH}`;
-const { createCuAgentLeases, CuBrokerUnavailableError, CuSeatBusyError, CU_HAND_BACK_NUDGE, BROKER_AGENT_LABEL, REQUIRED_SLICE2_CAPABILITIES, } = require('../lib/cu-agent-leases');
+const { createCuAgentLeases, CuBrokerUnavailableError, CuSeatBusyError, CU_HAND_BACK_NUDGE, BROKER_AGENT_LABEL, REQUIRED_SLICE2_CAPABILITIES, SLICE2B_CAPABILITIES, } = require('../lib/cu-agent-leases');
 const { createCuBrokerClient } = require('../lib/cu-broker');
 const { createCuHandlers } = require('../lib/cu-handlers');
 const { createSessionHibernation } = require('../lib/session-hibernation');
@@ -92,20 +92,88 @@ async function startFakeCuBroker(socketPath, claimDir) {
     const sseClients = new Set();
     const pendingEventsRes = [];
     const deadBirths = new Set();
+    const slice2bCapabilities = new Set();
+    const activeClaims = new Map();
+    const stagedClaims = new Map();
     const acquireCalls = [];
     const claimNonceCalls = [];
     const bindCalls = [];
+    const abortStagedCalls = [];
+    const renewCalls = [];
     const heartbeatCalls = [];
     const releaseCalls = [];
     const cancelPreemptedCalls = [];
+    const takeoverCalls = [];
+    const validationErrorCalls = [];
     const forcedMutationCalls = [];
     const eventsRequests = [];
     const issuedSecrets = new Set();
     const issuedNonces = new Set();
     const eventRing = [];
+    const takeoverReplays = new Map();
     let secretSeq = 0;
     let nonceSeq = 0;
     let ticketSeq = 0;
+    function asciiJson(value) {
+        return JSON.stringify(value).replace(/[\u0080-\uffff]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    }
+    function sendJson(res, statusCode, payload) {
+        res.writeHead(statusCode, { 'content-type': 'application/json' });
+        res.end(slice2bCapabilities.size > 0 ? asciiJson(payload) : JSON.stringify(payload));
+    }
+    function sendValidationError(res, reqPath, code, message, body) {
+        validationErrorCalls.push({ path: reqPath, code, body });
+        sendJson(res, 400, { ok: false, code, message });
+    }
+    function parseExpectedStates(raw, allowed) {
+        if (raw === undefined)
+            return null;
+        const expand = (val) => {
+            if (!allowed.has(val))
+                return null;
+            if (val === 'active')
+                return ['agent', 'waiting_for_human'];
+            if (val === 'preempted')
+                return ['displaced'];
+            return [val];
+        };
+        if (typeof raw === 'string') {
+            const expanded = expand(raw);
+            return expanded ? new Set(expanded) : 'invalid';
+        }
+        if (Array.isArray(raw) && raw.length > 0 && raw.every(v => typeof v === 'string')) {
+            const out = new Set();
+            for (const item of raw) {
+                const expanded = expand(item);
+                if (!expanded)
+                    return 'invalid';
+                for (const s of expanded)
+                    out.add(s);
+            }
+            return out;
+        }
+        return 'invalid';
+    }
+    function parseExpectedBirth(body) {
+        const hasPid = 'expectedPid' in body;
+        const hasStart = 'expectedPidStartTime' in body;
+        if (!hasPid && !hasStart)
+            return null;
+        if (hasPid !== hasStart)
+            return 'invalid';
+        const rawPid = body.expectedPid;
+        const rawStart = body.expectedPidStartTime;
+        if (typeof rawPid !== 'number' || !Number.isInteger(rawPid) || rawPid <= 1)
+            return 'invalid';
+        let start = null;
+        if (typeof rawStart === 'number' && Number.isSafeInteger(rawStart) && rawStart >= 0)
+            start = rawStart;
+        else if (typeof rawStart === 'string' && /^\d+$/.test(rawStart))
+            start = Number(rawStart);
+        if (start === null)
+            return 'invalid';
+        return { pid: rawPid, start };
+    }
     function publicLease(lease) {
         if (!lease)
             return null;
@@ -120,6 +188,9 @@ async function startFakeCuBroker(socketPath, claimDir) {
             pidStartTime: lease.pidStartTime,
             mcpClaimed: lease.mcpClaimed,
             claimedPid: lease.claimedPid,
+            pendingClaim: lease.sessionId ? activeClaims.has(lease.sessionId) : false,
+            stagedTransfer: lease.sessionId ? stagedClaims.has(lease.sessionId) : false,
+            allowReclaim: false,
             expiresAt: lease.expiresAt,
         };
     }
@@ -135,13 +206,36 @@ async function startFakeCuBroker(socketPath, claimDir) {
             pidStartTime: lease.pidStartTime,
             mcpClaimed: lease.mcpClaimed,
             claimedPid: lease.claimedPid,
+            pendingClaim: lease.sessionId ? activeClaims.has(lease.sessionId) : false,
+            stagedTransfer: lease.sessionId ? stagedClaims.has(lease.sessionId) : false,
+            allowReclaim: false,
         };
     }
-    function isLeaseBirthDead(lease) {
+    function revokeSessionClaims(sid) {
+        if (!sid)
+            return;
+        for (const map of [activeClaims, stagedClaims]) {
+            const claim = map.get(sid);
+            if (claim) {
+                try {
+                    fs.unlinkSync(claim.claimFile);
+                }
+                catch { }
+                map.delete(sid);
+            }
+        }
+    }
+    function isLeaseBirthDead(lease, deferSid) {
         if (!lease || lease.holderKind !== 'agent')
             return false;
         if (lease.pid === null || lease.pidStartTime === null)
             return false;
+        // Slice 2b bind_transfer: defer pid_dead reaping while a staged claim exists or bind is transferring this sessionId.
+        if (slice2bCapabilities.has(SLICE2B_CAPABILITIES.bindTransfer) && lease.sessionId) {
+            if (stagedClaims.has(lease.sessionId) || (deferSid && deferSid === lease.sessionId)) {
+                return false;
+            }
+        }
         if (deadBirths.has(`${lease.pid}:${lease.pidStartTime}`))
             return true;
         if (ctrl.enforceRealPids) {
@@ -150,17 +244,21 @@ async function startFakeCuBroker(socketPath, claimDir) {
         return false;
     }
     /** P3: Matches real cu-broker `_reap_locked()` invoked before status, events, and mutations. */
-    function reapDeadBirths() {
-        if (ctrl.lease && isLeaseBirthDead(ctrl.lease)) {
+    function reapDeadBirths(deferSid) {
+        if (ctrl.lease && isLeaseBirthDead(ctrl.lease, deferSid)) {
             const prev = publicLease(ctrl.lease);
+            revokeSessionClaims(ctrl.lease.sessionId);
+            ctrl.reapedPidDeadCount += 1;
             ctrl.epoch += 1;
             ctrl.state = 'idle';
             ctrl.lease = null;
             ctrl.emitEvent('seat_idle', { ...ctrl.snapshotPayload(), reason: 'pid_dead', previous: prev });
             ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'pid_dead' });
         }
-        if (ctrl.preempted && isLeaseBirthDead(ctrl.preempted)) {
+        if (ctrl.preempted && isLeaseBirthDead(ctrl.preempted, deferSid)) {
             const reaped = publicPreempted(ctrl.preempted);
+            revokeSessionClaims(ctrl.preempted.sessionId);
+            ctrl.reapedPidDeadCount += 1;
             ctrl.preempted = null;
             ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'preempted_reaped', reaped });
         }
@@ -172,7 +270,8 @@ async function startFakeCuBroker(socketPath, claimDir) {
         return {
             ok: true,
             version: 1,
-            capabilities: [...REQUIRED_SLICE2_CAPABILITIES],
+            capabilities: [...REQUIRED_SLICE2_CAPABILITIES, ...slice2bCapabilities],
+            ...(slice2bCapabilities.size > 0 ? { defaults: { defaultAllowReclaim: false }, transition: null } : {}),
         };
     }
     const ctrl = {
@@ -185,8 +284,18 @@ async function startFakeCuBroker(socketPath, claimDir) {
         preempted: null,
         minRetainedCursor: 0,
         slice1Mode: false,
+        slice2bCapabilities,
+        activeClaims,
+        stagedClaims,
         enforceRealPids: false,
         deadBirths,
+        reapedPidDeadCount: 0,
+        nextAcquireError: null,
+        nextClaimNonceError: null,
+        nextBindError: null,
+        nextReleaseError: null,
+        nextRenewError: null,
+        nextTakeoverError: null,
         eventsErrorStatus: null,
         holdEventsResponses: false,
         pendingEventsRes,
@@ -194,23 +303,39 @@ async function startFakeCuBroker(socketPath, claimDir) {
         acquireCalls,
         claimNonceCalls,
         bindCalls,
+        abortStagedCalls,
+        renewCalls,
         heartbeatCalls,
         releaseCalls,
         cancelPreemptedCalls,
+        takeoverCalls,
+        validationErrorCalls,
         forcedMutationCalls,
         eventsRequests,
         issuedSecrets,
         issuedNonces,
         sseClients,
         publicLease,
+        enableSlice2b(caps = Object.values(SLICE2B_CAPABILITIES)) {
+            slice2bCapabilities.clear();
+            for (const cap of caps)
+                slice2bCapabilities.add(cap);
+        },
+        disableSlice2b() {
+            slice2bCapabilities.clear();
+        },
         simulateMcpClaim(claimedPid, target = 'active') {
             const lease = target === 'preempted' ? ctrl.preempted : ctrl.lease;
             if (!lease)
                 throw new Error(`No ${target} lease to claim`);
+            if (lease.sessionId)
+                activeClaims.delete(lease.sessionId);
             lease.mcpClaimed = true;
             lease.claimedPid = claimedPid;
         },
         resetIdleForTest() {
+            revokeSessionClaims(ctrl.lease?.sessionId ?? null);
+            revokeSessionClaims(ctrl.preempted?.sessionId ?? null);
             ctrl.epoch += 1;
             ctrl.state = 'idle';
             ctrl.lease = null;
@@ -455,9 +580,36 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 const sid = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : `agent-${++secretSeq}`;
                 const ownerId = typeof body.ownerId === 'string' && body.ownerId ? body.ownerId : null;
                 const label = typeof body.label === 'string' && body.label ? body.label : 'omp';
+                if (ctrl.nextAcquireError) {
+                    const injected = ctrl.nextAcquireError;
+                    ctrl.nextAcquireError = null;
+                    if (injected.commitBeforeError && ctrl.state === 'idle') {
+                        const secret = `${SECRET_PREFIX}${++secretSeq}-${crypto.randomBytes(6).toString('hex')}`;
+                        issuedSecrets.add(secret);
+                        ctrl.epoch += 1;
+                        ctrl.state = 'agent';
+                        ctrl.preempted = null;
+                        ctrl.lease = {
+                            holderKind: 'agent',
+                            leaseId: `agent-${ctrl.epoch}`,
+                            sessionId: sid,
+                            ownerId,
+                            holderId: ownerId ?? sid,
+                            label,
+                            pid: null,
+                            pidStartTime: null,
+                            mcpClaimed: false,
+                            claimedPid: null,
+                            expiresAt: new Date(Date.now() + 90_000).toISOString(),
+                            tokenHash: hashSecret(secret),
+                            rawSecret: secret,
+                        };
+                    }
+                    sendJson(res, injected.status, injected.body);
+                    return;
+                }
                 if (ctrl.state !== 'idle' && ctrl.lease) {
-                    res.writeHead(409, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({
+                    sendJson(res, 409, {
                         ok: false,
                         code: 'seat_busy',
                         generation: ctrl.generation,
@@ -466,7 +618,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                         epoch: ctrl.epoch,
                         lease: publicLease(ctrl.lease),
                         message: ctrl.state === 'human' ? 'Seat is held by a human.' : 'Seat is held by another agent.',
-                    }));
+                    });
                     return;
                 }
                 const secret = `${SECRET_PREFIX}${++secretSeq}-${crypto.randomBytes(6).toString('hex')}`;
@@ -490,8 +642,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     rawSecret: secret,
                 };
                 ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'acquired' });
-                res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({
+                sendJson(res, 200, {
                     ok: true,
                     ...ctrl.snapshotPayload(),
                     sessionId: sid,
@@ -499,63 +650,204 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     sessionSecret: secret,
                     token: secret,
                     heartbeatIntervalSec: 20,
-                }));
+                });
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/claim-nonce') {
                 reapDeadBirths();
                 claimNonceCalls.push(body);
+                if (ctrl.nextClaimNonceError) {
+                    const injected = ctrl.nextClaimNonceError;
+                    ctrl.nextClaimNonceError = null;
+                    sendJson(res, injected.status, injected.body);
+                    return;
+                }
+                if ('requireRebind' in body && typeof body.requireRebind !== 'boolean') {
+                    sendValidationError(res, url.pathname, 'invalid_claim', 'requireRebind must be a boolean', body);
+                    return;
+                }
                 const sid = typeof body.sessionId === 'string' ? body.sessionId : '';
                 const secret = typeof body.sessionSecret === 'string' ? body.sessionSecret : '';
                 const target = (ctrl.lease?.sessionId === sid ? ctrl.lease : null)
                     ?? (ctrl.preempted?.sessionId === sid ? ctrl.preempted : null);
                 if (!target || target.holderKind !== 'agent') {
-                    res.writeHead(409, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'lease_not_found', message: 'No matching agent lease.' }));
+                    sendJson(res, 409, { ok: false, code: 'lease_not_found', message: 'No matching agent lease.' });
                     return;
                 }
                 if (hashSecret(secret) !== target.tokenHash) {
-                    res.writeHead(403, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'forbidden', message: 'Invalid session secret.' }));
+                    sendJson(res, 403, { ok: false, code: 'forbidden', message: 'Invalid session secret.' });
                     return;
                 }
-                const claimNonce = `${NONCE_PREFIX}${++nonceSeq}-${crypto.randomBytes(6).toString('hex')}`;
+                const requireRebind = body.requireRebind === true;
+                const staged = requireRebind && slice2bCapabilities.has(SLICE2B_CAPABILITIES.bindTransfer);
+                const claimId = `claim-${++nonceSeq}`;
+                const claimNonce = `${NONCE_PREFIX}${nonceSeq}-${crypto.randomBytes(6).toString('hex')}`;
                 issuedNonces.add(claimNonce);
-                const claimFile = path.join(claimDir, `claim-${nonceSeq}.json`);
+                const claimFile = path.join(claimDir, `${claimId}.json`);
                 fs.writeFileSync(claimFile, JSON.stringify({
+                    claimId,
                     sessionId: sid,
                     claimNonce,
-                    requireRebind: body.requireRebind === true,
+                    requireRebind,
                 }), { mode: 0o600 });
-                res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({
-                    ok: true,
+                const claimObj = {
+                    claimId,
                     claimFile,
                     claimNonce,
+                    sessionId: sid,
+                    expectedPid: staged ? null : target.pid,
+                    expectedPidStartTime: staged ? null : target.pidStartTime,
+                    requireRebind,
+                    staged,
+                };
+                if (staged) {
+                    const oldStaged = stagedClaims.get(sid);
+                    if (oldStaged) {
+                        try {
+                            fs.unlinkSync(oldStaged.claimFile);
+                        }
+                        catch { }
+                    }
+                    stagedClaims.set(sid, claimObj);
+                    ctrl.emitEvent('lease_changed', {
+                        ...ctrl.snapshotPayload(),
+                        reason: 'claim_staged',
+                        target: ctrl.preempted?.sessionId === sid ? 'displaced' : 'active',
+                    });
+                }
+                else {
+                    const oldActive = activeClaims.get(sid);
+                    if (oldActive) {
+                        try {
+                            fs.unlinkSync(oldActive.claimFile);
+                        }
+                        catch { }
+                    }
+                    activeClaims.set(sid, claimObj);
+                    if (slice2bCapabilities.size > 0) {
+                        ctrl.emitEvent('lease_changed', {
+                            ...ctrl.snapshotPayload(),
+                            reason: 'claim_issued',
+                            target: ctrl.preempted?.sessionId === sid ? 'displaced' : 'active',
+                        });
+                    }
+                }
+                sendJson(res, 200, {
+                    ok: true,
+                    generation: ctrl.generation,
+                    cursor: ctrl.cursor,
+                    claimId,
+                    claimFile,
+                    claimNonce,
+                    sessionId: sid,
+                    bound: !staged && target.pid !== null,
+                    staged,
+                    allowReclaim: false,
                     bindTimeoutSec: typeof body.bindTimeoutSec === 'number' ? body.bindTimeoutSec : 30,
-                    requireRebind: body.requireRebind === true,
-                }));
+                    requireRebind,
+                });
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/bind') {
-                // P3: Real cu-broker runs `_reap_locked()` before lookup so dead births return 409 lease_not_found.
-                reapDeadBirths();
-                bindCalls.push(body);
                 const sid = typeof body.sessionId === 'string' ? body.sessionId : '';
                 const secret = typeof body.sessionSecret === 'string' ? body.sessionSecret : '';
+                if ('abortStaged' in body && typeof body.abortStaged !== 'boolean') {
+                    sendValidationError(res, url.pathname, 'invalid_bind', 'abortStaged must be a boolean', body);
+                    return;
+                }
+                if ('claimId' in body && (typeof body.claimId !== 'string' || !body.claimId.trim())) {
+                    sendValidationError(res, url.pathname, 'invalid_claim_id', 'claimId must be a non-empty string', body);
+                    return;
+                }
+                if ('expectedEpoch' in body && (typeof body.expectedEpoch !== 'number' || !Number.isInteger(body.expectedEpoch) || body.expectedEpoch < 1)) {
+                    sendValidationError(res, url.pathname, 'invalid_epoch', 'expectedEpoch must be a positive integer', body);
+                    return;
+                }
+                const expectedBirth = parseExpectedBirth(body);
+                if (expectedBirth === 'invalid') {
+                    sendValidationError(res, url.pathname, 'invalid_pid', 'expectedPid/expectedPidStartTime invalid', body);
+                    return;
+                }
+                if (body.abortStaged === true) {
+                    reapDeadBirths();
+                    abortStagedCalls.push(body);
+                    const isActive = ctrl.lease?.sessionId === sid && ctrl.lease.holderKind === 'agent';
+                    const isDisplaced = ctrl.preempted?.sessionId === sid && ctrl.preempted.holderKind === 'agent';
+                    const target = isActive ? ctrl.lease : isDisplaced ? ctrl.preempted : null;
+                    if (!target) {
+                        sendJson(res, 409, { ok: false, code: 'lease_not_found', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    if (hashSecret(secret) !== target.tokenHash) {
+                        sendJson(res, 403, { ok: false, code: 'forbidden', message: 'Invalid session secret.' });
+                        return;
+                    }
+                    const staged = stagedClaims.get(sid) ?? null;
+                    const reqClaimId = typeof body.claimId === 'string' ? body.claimId : null;
+                    if (reqClaimId && (!staged || staged.claimId !== reqClaimId)) {
+                        sendJson(res, 409, { ok: false, code: 'claim_mismatch', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    if (staged) {
+                        try {
+                            fs.unlinkSync(staged.claimFile);
+                        }
+                        catch { }
+                        stagedClaims.delete(sid);
+                        ctrl.emitEvent('lease_changed', {
+                            ...ctrl.snapshotPayload(),
+                            reason: 'claim_staged_aborted',
+                            target: isDisplaced ? 'displaced' : 'active',
+                        });
+                    }
+                    sendJson(res, 200, {
+                        ok: true,
+                        aborted: Boolean(staged),
+                        abortedClaimId: staged?.claimId ?? null,
+                        ...ctrl.snapshotPayload(),
+                    });
+                    return;
+                }
+                // Slice 2b bind_transfer defers pid_dead reap for sid while in rebind window!
+                reapDeadBirths(slice2bCapabilities.has(SLICE2B_CAPABILITIES.bindTransfer) ? sid : null);
+                bindCalls.push(body);
+                if (ctrl.nextBindError) {
+                    const injected = ctrl.nextBindError;
+                    ctrl.nextBindError = null;
+                    sendJson(res, injected.status, { ...ctrl.snapshotPayload(), ...injected.body });
+                    return;
+                }
                 const isActive = ctrl.lease?.sessionId === sid && ctrl.lease.holderKind === 'agent';
                 const isDisplaced = ctrl.preempted?.sessionId === sid && ctrl.preempted.holderKind === 'agent';
                 const target = isActive ? ctrl.lease : isDisplaced ? ctrl.preempted : null;
                 if (!target) {
-                    res.writeHead(409, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'lease_not_found', message: 'No matching agent lease.' }));
+                    sendJson(res, 409, { ok: false, code: 'lease_not_found', message: 'No matching agent lease.', ...ctrl.snapshotPayload() });
                     return;
                 }
                 if (hashSecret(secret) !== target.tokenHash) {
-                    res.writeHead(403, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'forbidden', message: 'Invalid session secret.' }));
+                    sendJson(res, 403, { ok: false, code: 'forbidden', message: 'Invalid session secret.' });
                     return;
                 }
+                if (typeof body.expectedEpoch === 'number' && body.expectedEpoch !== ctrl.epoch) {
+                    sendJson(res, 409, { ok: false, code: 'epoch_mismatch', message: `Expected epoch ${body.expectedEpoch}, current ${ctrl.epoch}`, ...ctrl.snapshotPayload() });
+                    return;
+                }
+                if (expectedBirth && (target.pid !== expectedBirth.pid || target.pidStartTime !== expectedBirth.start)) {
+                    sendJson(res, 409, { ok: false, code: 'pid_mismatch', message: 'Bound birth does not match expectedPid/expectedPidStartTime', ...ctrl.snapshotPayload() });
+                    return;
+                }
+                const staged = stagedClaims.get(sid) ?? null;
+                const activeClaim = activeClaims.get(sid) ?? null;
+                const reqClaimId = typeof body.claimId === 'string' ? body.claimId : null;
+                if (reqClaimId) {
+                    const expectedClaim = staged ?? activeClaim;
+                    if (!expectedClaim || expectedClaim.claimId !== reqClaimId) {
+                        sendJson(res, 409, { ok: false, code: 'claim_mismatch', message: 'claimId does not match pending claim', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                }
+                const prevPid = target.pid;
+                const prevStart = target.pidStartTime;
                 if (typeof body.ownerId === 'string' && body.ownerId)
                     target.ownerId = body.ownerId;
                 if (typeof body.label === 'string' && body.label)
@@ -566,59 +858,264 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     target.pidStartTime = body.pidStartTime;
                 else if (typeof body.pidStartTime === 'string' && /^\d+$/.test(body.pidStartTime))
                     target.pidStartTime = Number(body.pidStartTime);
-                ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'bound', target: isDisplaced ? 'displaced' : 'active' });
-                res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({
+                const birthChanged = prevPid !== null && (prevPid !== target.pid || prevStart !== target.pidStartTime);
+                let committedClaimId = null;
+                if (birthChanged || staged) {
+                    target.mcpClaimed = false;
+                    target.claimedPid = null;
+                }
+                if (staged) {
+                    if (activeClaim) {
+                        try {
+                            fs.unlinkSync(activeClaim.claimFile);
+                        }
+                        catch { }
+                    }
+                    stagedClaims.delete(sid);
+                    const promoted = {
+                        ...staged,
+                        staged: false,
+                        requireRebind: false,
+                        expectedPid: target.pid,
+                        expectedPidStartTime: target.pidStartTime,
+                    };
+                    activeClaims.set(sid, promoted);
+                    committedClaimId = promoted.claimId;
+                }
+                else if (activeClaim) {
+                    activeClaim.expectedPid = target.pid;
+                    activeClaim.expectedPidStartTime = target.pidStartTime;
+                    committedClaimId = activeClaim.claimId;
+                }
+                ctrl.emitEvent('lease_changed', {
+                    ...ctrl.snapshotPayload(),
+                    reason: 'bound',
+                    target: isDisplaced ? 'displaced' : 'active',
+                    transferred: Boolean(staged || birthChanged),
+                });
+                sendJson(res, 200, {
                     ok: true,
                     ...ctrl.snapshotPayload(),
                     target: isDisplaced ? 'displaced' : 'active',
-                }));
+                    transferred: Boolean(staged || birthChanged),
+                    ...(committedClaimId ? { committedClaimId } : {}),
+                });
+                return;
+            }
+            if (req.method === 'POST' && url.pathname === '/v1/lease/renew') {
+                if (!slice2bCapabilities.has(SLICE2B_CAPABILITIES.leaseRenew)) {
+                    sendJson(res, 404, { ok: false, error: 'not found' });
+                    return;
+                }
+                reapDeadBirths();
+                renewCalls.push(body);
+                if (ctrl.nextRenewError) {
+                    const injected = ctrl.nextRenewError;
+                    ctrl.nextRenewError = null;
+                    sendJson(res, injected.status, { ...ctrl.snapshotPayload(), ...injected.body });
+                    return;
+                }
+                if ('expectedEpoch' in body && (typeof body.expectedEpoch !== 'number' || !Number.isInteger(body.expectedEpoch) || body.expectedEpoch < 1)) {
+                    sendValidationError(res, url.pathname, 'invalid_epoch', 'expectedEpoch must be a positive integer', body);
+                    return;
+                }
+                const sid = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : '';
+                const ownerId = typeof body.ownerId === 'string' && body.ownerId.trim() ? body.ownerId : null;
+                const reqPid = typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 1 ? body.pid : null;
+                const reqStart = typeof body.pidStartTime === 'number' ? body.pidStartTime
+                    : (typeof body.pidStartTime === 'string' && /^\d+$/.test(body.pidStartTime) ? Number(body.pidStartTime) : null);
+                if (!sid || !ownerId || reqPid === null || reqStart === null) {
+                    sendValidationError(res, url.pathname, 'invalid_renew', 'sessionId, ownerId, pid, pidStartTime required', body);
+                    return;
+                }
+                const isActive = ctrl.lease?.sessionId === sid && ctrl.lease.holderKind === 'agent';
+                const isDisplaced = ctrl.preempted?.sessionId === sid && ctrl.preempted.holderKind === 'agent';
+                const target = isActive ? ctrl.lease : isDisplaced ? ctrl.preempted : null;
+                if (!target) {
+                    sendJson(res, 409, { ok: false, code: 'lease_not_found', ...ctrl.snapshotPayload() });
+                    return;
+                }
+                if (target.ownerId !== ownerId) {
+                    sendJson(res, 403, { ok: false, code: 'owner_mismatch', message: 'ownerId does not match lease owner.' });
+                    return;
+                }
+                if (target.pid !== reqPid || target.pidStartTime !== reqStart) {
+                    sendJson(res, 403, { ok: false, code: 'birth_mismatch', message: 'pid/pidStartTime does not match lease birth.' });
+                    return;
+                }
+                if (typeof body.expectedEpoch === 'number' && body.expectedEpoch !== ctrl.epoch) {
+                    sendJson(res, 409, { ok: false, code: 'epoch_mismatch', ...ctrl.snapshotPayload() });
+                    return;
+                }
+                const existingClaim = activeClaims.get(sid) ?? null;
+                const claimForBirth = existingClaim !== null && ((existingClaim.expectedPid === reqPid && existingClaim.expectedPidStartTime === reqStart)
+                    || (existingClaim.expectedPid === null && !existingClaim.requireRebind));
+                const issueClaim = body.issueClaim === undefined ? 'auto' : body.issueClaim;
+                let claimInfo;
+                if (claimForBirth && existingClaim) {
+                    claimInfo = { status: 'refreshed', claimId: existingClaim.claimId, claimFile: existingClaim.claimFile, bound: true, staged: false, allowReclaim: false };
+                }
+                else if (existingClaim) {
+                    claimInfo = { status: 'outstanding', claimId: existingClaim.claimId, claimFile: existingClaim.claimFile, bound: true, staged: false, allowReclaim: false };
+                }
+                else if (target.mcpClaimed && target.claimedPid) {
+                    claimInfo = { status: 'already_claimed', claimedPeer: { pid: target.claimedPid }, allowReclaim: false };
+                }
+                else if (issueClaim === false) {
+                    claimInfo = { status: 'none', allowReclaim: false };
+                }
+                else {
+                    const claimId = `claim-${++nonceSeq}`;
+                    const claimNonce = `${NONCE_PREFIX}${nonceSeq}-${crypto.randomBytes(6).toString('hex')}`;
+                    issuedNonces.add(claimNonce);
+                    const claimFile = path.join(claimDir, `${claimId}.json`);
+                    fs.writeFileSync(claimFile, JSON.stringify({ claimId, sessionId: sid, claimNonce, requireRebind: false }), { mode: 0o600 });
+                    activeClaims.set(sid, { claimId, claimFile, claimNonce, sessionId: sid, expectedPid: reqPid, expectedPidStartTime: reqStart, requireRebind: false, staged: false });
+                    claimInfo = { status: 'issued', claimId, claimFile, claimNonce, bound: true, staged: false, allowReclaim: false };
+                }
+                const newSecret = `${SECRET_PREFIX}${++secretSeq}-${crypto.randomBytes(6).toString('hex')}`;
+                issuedSecrets.add(newSecret);
+                target.rawSecret = newSecret;
+                target.tokenHash = hashSecret(newSecret);
+                if (isActive)
+                    target.expiresAt = new Date(Date.now() + 90_000).toISOString();
+                const targetName = isDisplaced ? 'displaced' : 'active';
+                ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'renewed', target: targetName });
+                sendJson(res, 200, {
+                    ok: true,
+                    ...ctrl.snapshotPayload(),
+                    target: targetName,
+                    sessionId: sid,
+                    leaseId: target.leaseId,
+                    sessionSecret: newSecret,
+                    token: newSecret,
+                    heartbeatIntervalSec: 20,
+                    claim: claimInfo,
+                });
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/cancel-preempted') {
                 reapDeadBirths();
                 cancelPreemptedCalls.push(body);
-                const sid = typeof body.sessionId === 'string' ? body.sessionId : '';
-                const secret = typeof body.sessionSecret === 'string' ? body.sessionSecret : '';
-                const force = body.force === true;
-                if (ctrl.preempted) {
-                    if (!force && (ctrl.preempted.sessionId !== sid || hashSecret(secret) !== ctrl.preempted.tokenHash)) {
-                        res.writeHead(403, { 'content-type': 'application/json' });
-                        res.end(JSON.stringify({ ok: false, code: 'forbidden', message: 'Invalid session secret.' }));
+                const ownerMatchEnabled = slice2bCapabilities.has(SLICE2B_CAPABILITIES.ownerMatch);
+                if (ownerMatchEnabled) {
+                    if ('force' in body && typeof body.force !== 'boolean') {
+                        sendValidationError(res, url.pathname, 'invalid_force', 'force must be boolean', body);
                         return;
                     }
+                    if ('ownerId' in body && (typeof body.ownerId !== 'string' || !body.ownerId.trim())) {
+                        sendValidationError(res, url.pathname, 'invalid_owner_id', 'ownerId invalid', body);
+                        return;
+                    }
+                    if ('sessionId' in body && (typeof body.sessionId !== 'string' || !body.sessionId.trim())) {
+                        sendValidationError(res, url.pathname, 'invalid_session_id', 'sessionId invalid', body);
+                        return;
+                    }
+                    if ('expectedEpoch' in body && (typeof body.expectedEpoch !== 'number' || !Number.isInteger(body.expectedEpoch) || body.expectedEpoch < 1)) {
+                        sendValidationError(res, url.pathname, 'invalid_epoch', 'expectedEpoch invalid', body);
+                        return;
+                    }
+                }
+                const sid = typeof body.sessionId === 'string' ? body.sessionId : '';
+                const secret = typeof body.sessionSecret === 'string' ? body.sessionSecret : '';
+                const ownerId = typeof body.ownerId === 'string' && body.ownerId.trim() ? body.ownerId : null;
+                const force = body.force === true;
+                const expectedStates = ownerMatchEnabled ? parseExpectedStates(body.expectedState, new Set(['preempted', 'displaced', 'human'])) : null;
+                if (expectedStates === 'invalid') {
+                    sendValidationError(res, url.pathname, 'invalid_expected_state', 'expectedState invalid', body);
+                    return;
+                }
+                const expectedBirth = ownerMatchEnabled ? parseExpectedBirth(body) : null;
+                if (expectedBirth === 'invalid') {
+                    sendValidationError(res, url.pathname, 'invalid_pid', 'expectedPid invalid', body);
+                    return;
+                }
+                const hasToken = secret.length > 0;
+                const hasOwnerMatch = ownerMatchEnabled && ownerId !== null && !hasToken;
+                if (hasOwnerMatch && (!sid || (expectedStates === null && body.expectedEpoch === undefined && expectedBirth === null))) {
+                    sendValidationError(res, url.pathname, 'invalid_match', 'owner-matched cancel-preempted requires ownerId, sessionId, and guard', body);
+                    return;
+                }
+                if (ctrl.preempted) {
+                    if (hasToken && !force) {
+                        if (ctrl.preempted.sessionId !== sid || hashSecret(secret) !== ctrl.preempted.tokenHash) {
+                            sendJson(res, 403, { ok: false, code: 'forbidden', message: 'Invalid session secret.' });
+                            return;
+                        }
+                    }
+                    else if (!force && !hasOwnerMatch) {
+                        sendJson(res, 400, { ok: false, code: 'missing_credentials', message: 'sessionId and sessionSecret required.' });
+                        return;
+                    }
+                    if (ownerMatchEnabled) {
+                        if (typeof body.expectedEpoch === 'number' && body.expectedEpoch !== ctrl.epoch) {
+                            sendJson(res, 409, { ok: false, code: 'epoch_mismatch', ...ctrl.snapshotPayload() });
+                            return;
+                        }
+                        if (expectedStates && (ctrl.state !== 'human' || (!expectedStates.has('displaced') && !expectedStates.has('human')))) {
+                            sendJson(res, 409, { ok: false, code: 'state_mismatch', ...ctrl.snapshotPayload() });
+                            return;
+                        }
+                        if (sid && ctrl.preempted.sessionId !== sid) {
+                            sendJson(res, 409, { ok: false, code: 'lease_mismatch', ...ctrl.snapshotPayload() });
+                            return;
+                        }
+                        if (ownerId !== null && ctrl.preempted.ownerId !== ownerId) {
+                            sendJson(res, 409, { ok: false, code: 'owner_mismatch', ...ctrl.snapshotPayload() });
+                            return;
+                        }
+                        if (expectedBirth && (ctrl.preempted.pid !== expectedBirth.pid || ctrl.preempted.pidStartTime !== expectedBirth.start)) {
+                            sendJson(res, 409, { ok: false, code: 'pid_mismatch', ...ctrl.snapshotPayload() });
+                            return;
+                        }
+                    }
                     const cancelled = publicPreempted(ctrl.preempted);
+                    revokeSessionClaims(ctrl.preempted.sessionId);
                     ctrl.preempted = null;
                     ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'preempted_cancelled', cancelled });
-                    res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({
+                    sendJson(res, 200, {
                         ok: true,
                         cancelled: true,
                         alreadyAbsent: false,
                         cancelledReservation: cancelled,
+                        ...(hasOwnerMatch ? { matchedBy: 'owner' } : {}),
                         ...ctrl.snapshotPayload(),
-                    }));
+                    });
+                    return;
+                }
+                const activeAgent = (ctrl.state === 'agent' || ctrl.state === 'waiting_for_human') && ctrl.lease !== null;
+                if (hasOwnerMatch) {
+                    if (activeAgent && ctrl.lease.ownerId === ownerId && ctrl.lease.sessionId === sid) {
+                        sendJson(res, 409, { ok: false, code: 'lease_active', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    sendJson(res, 409, { ok: false, code: 'no_preempted_lease', ...ctrl.snapshotPayload() });
+                    return;
+                }
+                if (ownerMatchEnabled && force) {
+                    sendJson(res, 409, { ok: false, code: 'no_preempted_lease', ...ctrl.snapshotPayload() });
                     return;
                 }
                 // §9.4: preempted is null -> 409 lease_active only if !force and credentials match active agent lease.
-                if (!force && ctrl.state === 'agent' && ctrl.lease && ctrl.lease.sessionId === sid && hashSecret(secret) === ctrl.lease.tokenHash) {
-                    res.writeHead(409, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'lease_active', ...ctrl.snapshotPayload() }));
+                if (!force && activeAgent && ctrl.lease.sessionId === sid && hashSecret(secret) === ctrl.lease.tokenHash) {
+                    sendJson(res, 409, { ok: false, code: 'lease_active', ...ctrl.snapshotPayload() });
                     return;
                 }
                 if (!force && (!sid || !secret)) {
-                    res.writeHead(400, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'missing_credentials', message: 'Missing credentials.' }));
+                    sendJson(res, 400, { ok: false, code: 'missing_credentials', message: 'Missing credentials.' });
                     return;
                 }
-                res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({
+                if (ownerMatchEnabled && (ownerId !== null || expectedStates !== null || expectedBirth !== null || body.expectedEpoch !== undefined)) {
+                    sendJson(res, 409, { ok: false, code: 'no_preempted_lease', ...ctrl.snapshotPayload() });
+                    return;
+                }
+                sendJson(res, 200, {
                     ok: true,
                     cancelled: false,
                     alreadyAbsent: true,
                     cancelledReservation: null,
                     ...ctrl.snapshotPayload(),
-                }));
+                });
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/heartbeat') {
@@ -630,27 +1127,45 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     ? body.sessionSecret
                     : typeof body.leaseToken === 'string' ? body.leaseToken : '';
                 if (ctrl.state === 'human' && ctrl.preempted && sid === ctrl.preempted.sessionId) {
-                    res.writeHead(409, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'lease_preempted', generation: ctrl.generation, cursor: ctrl.cursor, state: 'human', epoch: ctrl.epoch }));
+                    sendJson(res, 409, { ok: false, code: 'lease_preempted', generation: ctrl.generation, cursor: ctrl.cursor, state: 'human', epoch: ctrl.epoch });
                     return;
                 }
                 if (ctrl.lease
                     && (ctrl.lease.leaseId === lid || ctrl.lease.sessionId === sid)
                     && hashSecret(secret) === ctrl.lease.tokenHash) {
                     ctrl.lease.expiresAt = new Date(Date.now() + 90_000).toISOString();
-                    res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: true, generation: ctrl.generation, cursor: ctrl.cursor, state: ctrl.state, epoch: ctrl.epoch, lease: publicLease(ctrl.lease) }));
+                    sendJson(res, 200, { ok: true, generation: ctrl.generation, cursor: ctrl.cursor, state: ctrl.state, epoch: ctrl.epoch, lease: publicLease(ctrl.lease) });
                     return;
                 }
-                res.writeHead(409, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({ ok: false, code: 'lease_lost', generation: ctrl.generation, cursor: ctrl.cursor, state: ctrl.state, epoch: ctrl.epoch }));
+                sendJson(res, 409, { ok: false, code: 'lease_lost', generation: ctrl.generation, cursor: ctrl.cursor, state: ctrl.state, epoch: ctrl.epoch });
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/takeover') {
                 reapDeadBirths();
+                takeoverCalls.push(body);
+                if (ctrl.nextTakeoverError) {
+                    const injected = ctrl.nextTakeoverError;
+                    ctrl.nextTakeoverError = null;
+                    sendJson(res, injected.status, injected.body);
+                    return;
+                }
+                const requestId = typeof body.requestId === 'string' && body.requestId.trim() ? body.requestId : null;
+                const fp = JSON.stringify({ label: body.label ?? 'pi-dish', ttlSec: body.ttlSec ?? 600, holderId: body.holderId ?? null });
+                if (requestId && takeoverReplays.has(requestId)) {
+                    const prevReplay = takeoverReplays.get(requestId);
+                    if (prevReplay.fingerprint !== fp) {
+                        sendJson(res, 409, { ok: false, code: 'request_id_conflict', message: 'requestId already used with different body', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    if (ctrl.state !== 'human' || ctrl.lease?.leaseId !== prevReplay.leaseId) {
+                        sendJson(res, 409, { ok: false, code: 'request_superseded', message: 'Takeover human lease has ended', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    sendJson(res, 200, { ...prevReplay.response, replayed: true });
+                    return;
+                }
                 if (ctrl.state === 'human') {
-                    res.writeHead(409, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'seat_busy', generation: ctrl.generation, cursor: ctrl.cursor, state: 'human', epoch: ctrl.epoch, lease: publicLease(ctrl.lease) }));
+                    sendJson(res, 409, { ok: false, code: 'seat_busy', generation: ctrl.generation, cursor: ctrl.cursor, state: 'human', epoch: ctrl.epoch, lease: publicLease(ctrl.lease) });
                     return;
                 }
                 const displaced = ctrl.state === 'agent' && ctrl.lease ? ctrl.lease : null;
@@ -683,8 +1198,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     });
                 }
                 ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'takeover' });
-                res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({
+                const resp = {
                     ok: true,
                     ...ctrl.snapshotPayload(),
                     leaseId,
@@ -692,28 +1206,129 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     token: leaseToken,
                     heartbeatIntervalSec: 60,
                     viewer: { mode: 'interactive', ticket: `t-${++ticketSeq}`, path: `/viewer/#ticket=t-${ticketSeq}` },
-                }));
+                };
+                if (requestId) {
+                    takeoverReplays.set(requestId, { fingerprint: fp, leaseId, response: resp });
+                }
+                sendJson(res, 200, resp);
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/lease/release') {
                 reapDeadBirths();
                 releaseCalls.push(body);
-                const ident = (typeof body.leaseId === 'string' ? body.leaseId : null)
-                    || (typeof body.sessionId === 'string' ? body.sessionId : null);
+                if (ctrl.nextReleaseError) {
+                    const injected = ctrl.nextReleaseError;
+                    ctrl.nextReleaseError = null;
+                    if (injected.reapToIdleFirst && ctrl.lease) {
+                        revokeSessionClaims(ctrl.lease.sessionId);
+                        ctrl.epoch += 1;
+                        ctrl.state = 'idle';
+                        ctrl.lease = null;
+                    }
+                    sendJson(res, injected.status, { ...ctrl.snapshotPayload(), ...injected.body });
+                    return;
+                }
+                const ownerMatchEnabled = slice2bCapabilities.has(SLICE2B_CAPABILITIES.ownerMatch);
+                if (ownerMatchEnabled) {
+                    if ('force' in body && typeof body.force !== 'boolean') {
+                        sendValidationError(res, url.pathname, 'invalid_force', 'force must be boolean', body);
+                        return;
+                    }
+                    if ('handBack' in body && typeof body.handBack !== 'boolean') {
+                        sendValidationError(res, url.pathname, 'invalid_hand_back', 'handBack must be boolean', body);
+                        return;
+                    }
+                    if ('ownerId' in body && (typeof body.ownerId !== 'string' || !body.ownerId.trim())) {
+                        sendValidationError(res, url.pathname, 'invalid_owner_id', 'ownerId invalid', body);
+                        return;
+                    }
+                    if ('sessionId' in body && (typeof body.sessionId !== 'string' || !body.sessionId.trim())) {
+                        sendValidationError(res, url.pathname, 'invalid_session_id', 'sessionId invalid', body);
+                        return;
+                    }
+                    if ('expectedEpoch' in body && (typeof body.expectedEpoch !== 'number' || !Number.isInteger(body.expectedEpoch) || body.expectedEpoch < 1)) {
+                        sendValidationError(res, url.pathname, 'invalid_epoch', 'expectedEpoch invalid', body);
+                        return;
+                    }
+                }
+                const reqSid = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : null;
+                const reqLid = typeof body.leaseId === 'string' && body.leaseId ? body.leaseId : null;
+                const ident = reqLid || reqSid;
                 const token = (typeof body.leaseToken === 'string' ? body.leaseToken : null)
                     || (typeof body.sessionSecret === 'string' ? body.sessionSecret : null)
                     || (typeof body.token === 'string' ? body.token : '');
+                const ownerId = typeof body.ownerId === 'string' && body.ownerId.trim() ? body.ownerId : null;
                 const force = body.force === true;
                 const handBack = body.handBack === true;
-                if (ctrl.state === 'idle' || !ctrl.lease) {
-                    res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: true, ...ctrl.snapshotPayload(), alreadyIdle: true, handedBackTo: null }));
+                const hasToken = token.length > 0;
+                const hasOwnerMatch = ownerMatchEnabled && ownerId !== null && !hasToken;
+                const allowedStates = ownerId !== null ? new Set(['agent', 'waiting_for_human', 'active']) : new Set(['agent', 'waiting_for_human', 'active', 'human']);
+                const expectedStates = ownerMatchEnabled ? parseExpectedStates(body.expectedState, allowedStates) : null;
+                if (expectedStates === 'invalid') {
+                    sendValidationError(res, url.pathname, 'invalid_expected_state', 'expectedState invalid', body);
                     return;
                 }
-                if (!force && ((ident !== ctrl.lease.leaseId && ident !== ctrl.lease.sessionId) || hashSecret(token) !== ctrl.lease.tokenHash)) {
-                    res.writeHead(403, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, code: 'forbidden', message: 'Invalid lease credentials.' }));
+                const expectedBirth = ownerMatchEnabled ? parseExpectedBirth(body) : null;
+                if (expectedBirth === 'invalid') {
+                    sendValidationError(res, url.pathname, 'invalid_pid', 'expectedPid invalid', body);
                     return;
+                }
+                if (hasOwnerMatch && (!ident || (expectedStates === null && body.expectedEpoch === undefined && expectedBirth === null))) {
+                    sendValidationError(res, url.pathname, 'invalid_match', 'owner-matched release requires ownerId, sessionId, and guard', body);
+                    return;
+                }
+                if (ctrl.state === 'idle' || !ctrl.lease) {
+                    if (ownerMatchEnabled && (hasOwnerMatch || ownerId !== null || expectedStates !== null || expectedBirth !== null || body.expectedEpoch !== undefined)) {
+                        sendJson(res, 409, { ok: false, code: 'lease_not_found', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    sendJson(res, 200, { ok: true, ...ctrl.snapshotPayload(), alreadyIdle: true, handedBackTo: null });
+                    return;
+                }
+                if (hasOwnerMatch) {
+                    // Owner-matched authentication via control.sock (no token required).
+                }
+                else if (!force) {
+                    const preemptedSecretOk = ownerMatchEnabled
+                        && ownerId !== null
+                        && ctrl.state === 'human'
+                        && ctrl.preempted !== null
+                        && ctrl.preempted.sessionId === reqSid
+                        && hashSecret(token) === ctrl.preempted.tokenHash;
+                    if (!preemptedSecretOk && ((ident !== ctrl.lease.leaseId && ident !== ctrl.lease.sessionId) || hashSecret(token) !== ctrl.lease.tokenHash)) {
+                        sendJson(res, 403, { ok: false, code: 'forbidden', message: 'Invalid lease credentials.' });
+                        return;
+                    }
+                }
+                if (ownerMatchEnabled) {
+                    if (ownerId !== null && (ctrl.state === 'human' || ctrl.lease.holderKind !== 'agent')) {
+                        if (ctrl.preempted && ctrl.preempted.ownerId === ownerId && (!reqSid || ctrl.preempted.sessionId === reqSid)) {
+                            sendJson(res, 409, { ok: false, code: 'lease_preempted', message: 'Agent lease was preempted by a human.', ...ctrl.snapshotPayload() });
+                            return;
+                        }
+                        sendJson(res, 409, { ok: false, code: 'state_mismatch', message: 'Seat is held by human.', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    if (typeof body.expectedEpoch === 'number' && body.expectedEpoch !== ctrl.epoch) {
+                        sendJson(res, 409, { ok: false, code: 'epoch_mismatch', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    if (expectedStates && !expectedStates.has(ctrl.state)) {
+                        sendJson(res, 409, { ok: false, code: 'state_mismatch', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    if (ident && ident !== ctrl.lease.leaseId && ident !== ctrl.lease.sessionId) {
+                        sendJson(res, 409, { ok: false, code: 'lease_mismatch', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    if (ownerId !== null && ctrl.lease.ownerId !== ownerId) {
+                        sendJson(res, 409, { ok: false, code: 'owner_mismatch', ...ctrl.snapshotPayload() });
+                        return;
+                    }
+                    if (expectedBirth && (ctrl.lease.pid !== expectedBirth.pid || ctrl.lease.pidStartTime !== expectedBirth.start)) {
+                        sendJson(res, 409, { ok: false, code: 'pid_mismatch', ...ctrl.snapshotPayload() });
+                        return;
+                    }
                 }
                 const prev = publicLease(ctrl.lease);
                 const wasHuman = ctrl.lease.holderKind === 'human';
@@ -726,19 +1341,26 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     const newPub = publicLease(restored);
                     ctrl.emitEvent('hand_back', { ...ctrl.snapshotPayload(), handedBackTo: newPub });
                     ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'hand_back' });
-                    res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: true, ...ctrl.snapshotPayload(), handedBackTo: newPub }));
+                    sendJson(res, 200, { ok: true, ...ctrl.snapshotPayload(), handedBackTo: newPub });
                     return;
                 }
+                revokeSessionClaims(ctrl.lease.sessionId);
                 ctrl.epoch += 1;
                 ctrl.state = 'idle';
                 ctrl.lease = null;
-                if (wasHuman)
+                if (wasHuman) {
+                    revokeSessionClaims(ctrl.preempted?.sessionId ?? null);
                     ctrl.preempted = null;
+                }
                 ctrl.emitEvent('seat_idle', { ...ctrl.snapshotPayload(), reason: 'released', previous: prev });
                 ctrl.emitEvent('lease_changed', { ...ctrl.snapshotPayload(), reason: 'released' });
-                res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({ ok: true, ...ctrl.snapshotPayload(), released: prev, handedBackTo: null }));
+                sendJson(res, 200, {
+                    ok: true,
+                    ...ctrl.snapshotPayload(),
+                    released: prev,
+                    handedBackTo: null,
+                    ...(hasOwnerMatch ? { matchedBy: 'owner' } : {}),
+                });
                 return;
             }
             res.writeHead(404, { 'content-type': 'application/json' });
@@ -2725,4 +3347,806 @@ setInterval(() => {}, 1000);
         }
     }
     assert.equal(cuAuditReply.text.includes('tokenHash'), false, 'tokenHash stripped from /api/cu/audit');
+});
+test('unit: Slice 2b capability gating — old Slice-2 broker (no 2b capabilities) keeps fail-closed behavior unchanged', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-old-s2-'));
+    const sockPath = path.join(tmpDir, 'broker.sock');
+    const claimDir = path.join(tmpDir, 'claims');
+    const storePath = path.join(tmpDir, 'cu-agent-leases.json');
+    const broker = await startFakeCuBroker(sockPath, claimDir);
+    // Explicitly ensure zero Slice-2b capabilities are advertised (old Slice-2 broker).
+    broker.disableSlice2b();
+    t.after(async () => {
+        await broker.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    const client = createCuBrokerClient({ socketPath: () => sockPath });
+    const first = createCuAgentLeases({
+        broker: client,
+        storeFile: () => storePath,
+        processAlive: () => true,
+        heartbeatIntervalMs: 0,
+        livenessCheckMs: 0,
+        abortSession: async () => true,
+        resumeSession: async () => true,
+    });
+    const caps = await first.probeCapabilities();
+    assert.deepEqual(caps, { slice2: true, bindTransfer: false, ownerMatch: false, leaseRenew: false });
+    const handle = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: '~sk1_omp_old_s2' }));
+    await first.bindSpawnedProcess(handle, { pid: 61001, startTime: '610010' });
+    first.attachSpawnedSession(handle, { sessionId: '~sk1_omp_old_s2', pid: 61001, pidStartTime: '610010' });
+    // Without bind_transfer, transfer is refused and prepareTransfer returns null without touching broker.
+    assert.equal(first.canTransferSession('~sk1_omp_old_s2'), false);
+    const claimsBefore = broker.claimNonceCalls.length;
+    assert.equal(await first.prepareTransfer({ sessionId: '~sk1_omp_old_s2' }), null);
+    assert.equal(broker.claimNonceCalls.length, claimsBefore);
+    first.stop();
+    // Across restart against an old Slice-2 broker (no lease_renew, no owner_match):
+    // - live unredeemed lease -> ZERO /v1/lease/renew calls, marks access_lost (old Slice-2 behavior).
+    const restartedUnredeemed = createCuAgentLeases({
+        broker: client,
+        storeFile: () => storePath,
+        processAlive: p => p.pid === 61001 && p.startTime === '610010',
+        findSessionIdByProcess: p => (p.pid === 61001 && p.startTime === '610010' ? '~sk1_omp_old_s2' : null),
+        heartbeatIntervalMs: 25,
+        livenessCheckMs: 0,
+        abortSession: async () => true,
+        resumeSession: async () => true,
+    });
+    await restartedUnredeemed.reconcile();
+    assert.equal(broker.renewCalls.length, 0, 'old broker must never receive /v1/lease/renew');
+    assert.equal(restartedUnredeemed.isDesktopAccessLost('~sk1_omp_old_s2'), true);
+    restartedUnredeemed.stop();
+    // - live claimed peer -> re-adopted secretless with ZERO heartbeats and ZERO secretless release on close.
+    broker.simulateMcpClaim(61099);
+    const hbBefore = broker.heartbeatCalls.length;
+    const relBefore = broker.releaseCalls.length;
+    const restartedClaimed = createCuAgentLeases({
+        broker: client,
+        storeFile: () => storePath,
+        processAlive: p => p.pid === 61001 && p.startTime === '610010',
+        pidAlive: p => p === 61099,
+        findSessionIdByProcess: p => (p.pid === 61001 && p.startTime === '610010' ? '~sk1_omp_old_s2' : null),
+        heartbeatIntervalMs: 25,
+        livenessCheckMs: 0,
+        abortSession: async () => true,
+        resumeSession: async () => true,
+    });
+    await restartedClaimed.reconcile();
+    assert.equal(broker.renewCalls.length, 0);
+    assert.equal(restartedClaimed.ownerIdForSession('~sk1_omp_old_s2'), handle.leaseOwnerId);
+    await new Promise(resolve => setTimeout(resolve, 65));
+    assert.equal(broker.heartbeatCalls.length, hbBefore, 'old broker secretless re-adoption sends zero heartbeats');
+    await restartedClaimed.releaseSession('~sk1_omp_old_s2');
+    assert.equal(broker.releaseCalls.length, relBefore, 'old broker without owner_match sends zero secretless releases');
+    assert.equal(broker.forcedMutationCalls.length, 0);
+    restartedClaimed.stop();
+});
+test('unit: Slice 2b Scope 1 — bind_transfer respawn (active & displaced, zero pid_dead reap), abortStaged on failed respawn & failed bind, takeover-during-transfer displaced 200, and never-prompted OMP restart (no 409)', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-s2b-transfer-'));
+    const sockPath = path.join(tmpDir, 'broker.sock');
+    const claimDir = path.join(tmpDir, 'claims');
+    const storePath = path.join(tmpDir, 'cu-agent-leases.json');
+    const broker = await startFakeCuBroker(sockPath, claimDir);
+    broker.enableSlice2b();
+    t.after(async () => {
+        await broker.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    const client = createCuBrokerClient({ socketPath: () => sockPath });
+    // 1. Unit-level bind_transfer lifecycle: active transfer, abortStaged on failed respawn, abortStaged on failed bind, and takeover-during-transfer -> displaced 200.
+    {
+        const alivePids = new Set(['62001:620010', '62002:620020', '62003:620030', '62004:620040']);
+        const aborts = [];
+        const mgr = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: p => alivePids.has(`${p.pid}:${p.startTime}`),
+            heartbeatIntervalMs: 0,
+            livenessCheckMs: 30,
+            abortSession: async (target) => { aborts.push(target); return true; },
+            resumeSession: async () => true,
+        });
+        t.after(() => mgr.stop());
+        const caps = await mgr.probeCapabilities();
+        assert.deepEqual(caps, { slice2: true, bindTransfer: true, ownerMatch: true, leaseRenew: true });
+        const sid = '~sk1_omp_transfer_unit';
+        const h1 = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sid }));
+        await mgr.bindSpawnedProcess(h1, { pid: 62001, startTime: '620010' });
+        mgr.attachSpawnedSession(h1, { sessionId: sid, pid: 62001, pidStartTime: '620010' });
+        const epochBefore = broker.epoch;
+        assert.equal(mgr.canTransferSession(sid), true);
+        // 1a. Pre-respawn failure -> abortSpawn sends abortStaged:true and leaves old active lease & claim intact!
+        const failedRespawnHandle = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sid }));
+        assert.ok(failedRespawnHandle.transfer?.claimId, 'staged claimId returned');
+        const lastStageCall = broker.claimNonceCalls[broker.claimNonceCalls.length - 1];
+        assert.equal(lastStageCall.requireRebind, true);
+        assert.equal(broker.stagedClaims.has(h1.brokerSessionId), true);
+        assert.equal(broker.activeClaims.has(h1.brokerSessionId), true, 'old active claim kept untouched during staging');
+        await mgr.abortSpawn(failedRespawnHandle);
+        assert.equal(broker.abortStagedCalls.length, 1, 'abortSpawn sent abortStaged:true');
+        assert.equal(broker.abortStagedCalls[0].claimId, failedRespawnHandle.transfer.claimId);
+        assert.equal(broker.stagedClaims.has(h1.brokerSessionId), false, 'staged claim cleared');
+        assert.equal(broker.activeClaims.has(h1.brokerSessionId), true, 'old active claim still intact after abortStaged');
+        assert.equal(mgr.ownerIdForSession(sid), h1.leaseOwnerId, 'old lease remains active');
+        // 1b. Failed bind -> bindSpawnedProcess sends abortStaged:true and restores record birth!
+        const failedBindHandle = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sid }));
+        broker.nextBindError = { status: 409, body: { ok: false, code: 'claim_mismatch', message: 'Injected bind failure' } };
+        const abortsStagedBefore = broker.abortStagedCalls.length;
+        await assert.rejects(() => mgr.bindSpawnedProcess(failedBindHandle, { pid: 62002, startTime: '620020' }), /Injected bind failure/);
+        assert.equal(broker.abortStagedCalls.length, abortsStagedBefore + 1, 'failed bind immediately called abortStaged:true');
+        assert.equal(broker.abortStagedCalls[broker.abortStagedCalls.length - 1].claimId, failedBindHandle.transfer.claimId);
+        assert.equal(mgr.ownerIdForSession(sid), h1.leaseOwnerId, 'record preserved when old birth still alive');
+        // 1c. Successful active bind_transfer even after old PID dies and bridge retires during respawn (zero pid_dead reap, same epoch!).
+        const transferHandle = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sid }));
+        alivePids.delete('62001:620010');
+        broker.deadBirths.add('62001:620010');
+        // Simulate old bridge disconnect + liveness monitor tick while transfer is pending!
+        mgr.handleSessionRetired(sid);
+        await new Promise(resolve => setTimeout(resolve, 60));
+        assert.equal(broker.releaseCalls.length, 0, 'pending transfer prevents handleSessionRetired & liveness monitor from releasing lease');
+        assert.equal(broker.reapedPidDeadCount, 0, 'rebind window defers pid_dead reaping');
+        await mgr.bindSpawnedProcess(transferHandle, { pid: 62002, startTime: '620020' });
+        mgr.attachSpawnedSession(transferHandle, { sessionId: sid, pid: 62002, pidStartTime: '620020' });
+        assert.equal(broker.epoch, epochBefore, 'bind_transfer never increments epoch');
+        assert.equal(broker.reapedPidDeadCount, 0, 'zero pid_dead reaps across bind_transfer');
+        assert.equal(broker.lease?.pid, 62002);
+        assert.equal(broker.lease?.pidStartTime, 620020);
+        const commitBind = broker.bindCalls[broker.bindCalls.length - 1];
+        assert.equal(commitBind.claimId, transferHandle.transfer.claimId);
+        assert.equal(commitBind.expectedEpoch, epochBefore);
+        assert.equal(commitBind.expectedPid, 62001);
+        assert.equal(commitBind.expectedPidStartTime, 620010);
+        // 1d. Takeover happens BETWEEN prepareTransfer and bindSpawnedProcess -> epoch_mismatch retry -> displaced 200 -> preempted + abort!
+        const takeoverTransferHandle = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sid }));
+        await client.requestJson('POST', '/v1/lease/takeover', { label: 'pi-dish', ttlSec: 600 });
+        assert.equal(broker.state, 'human');
+        assert.equal(broker.preempted?.sessionId, h1.brokerSessionId);
+        alivePids.delete('62002:620020');
+        broker.deadBirths.add('62002:620020');
+        await mgr.bindSpawnedProcess(takeoverTransferHandle, { pid: 62003, startTime: '620030' });
+        mgr.attachSpawnedSession(takeoverTransferHandle, { sessionId: sid, pid: 62003, pidStartTime: '620030' });
+        await waitFor(() => aborts.some(a => a.pid === 62003), 'displaced bind_transfer schedules abort on new birth');
+        assert.equal(broker.state, 'human', 'human lease undisturbed');
+        assert.equal(broker.preempted?.pid, 62003, 'displaced reservation updated to new birth');
+        // 1e. Direct bind_transfer on an already-displaced reservation answers 200 displaced immediately!
+        const displacedTransferHandle = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sid }));
+        alivePids.delete('62003:620030');
+        broker.deadBirths.add('62003:620030');
+        await mgr.bindSpawnedProcess(displacedTransferHandle, { pid: 62004, startTime: '620040' });
+        mgr.attachSpawnedSession(displacedTransferHandle, { sessionId: sid, pid: 62004, pidStartTime: '620040' });
+        await waitFor(() => aborts.some(a => a.pid === 62004), 'already-displaced bind_transfer answers 200 displaced and schedules abort');
+        assert.equal(broker.preempted?.pid, 62004);
+        assert.equal(broker.validationErrorCalls.length, 0, 'zero 400 validation errors');
+        assert.equal(broker.forcedMutationCalls.length, 0, 'zero force:true calls');
+        broker.resetIdleForTest();
+    }
+    // 2. Real tmux pane + SessionOperations restartSession:
+    //    - Never-prompted OMP session (missing .jsonl on disk -> ENOENT) restarts cleanly via bind_transfer (NO 409, same paneId, same epoch, zero pid_dead reap!).
+    //    - access_lost session restart falls back to fresh acquire+claim+bind and restores desktop access!
+    {
+        const tmuxDir = tmux.tmuxTmpdir();
+        fs.mkdirSync(tmuxDir, { recursive: true, mode: 0o700 });
+        const tmuxSock = path.join(tmuxDir, `s2b-transfer-${process.pid}-${Date.now()}`);
+        const ompEnvDir = path.join(tmpDir, 'omp-env');
+        const ompCmdDir = path.join(tmpDir, 'omp-cmd');
+        const fakeOmp = path.join(tmpDir, 'fake-omp-s2b.js');
+        writeFakeOmpScript(fakeOmp, require.resolve('../lib/process-identity'), {
+            envDir: ompEnvDir,
+            cmdDir: ompCmdDir,
+            holdRegisterFlag: path.join(tmpDir, 'no-hold'),
+        });
+        const prevOmpCmd = process.env.PI_DISH_OMP_COMMAND;
+        process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${fakeOmp}`;
+        t.after(() => {
+            if (prevOmpCmd === undefined)
+                delete process.env.PI_DISH_OMP_COMMAND;
+            else
+                process.env.PI_DISH_OMP_COMMAND = prevOmpCmd;
+            try {
+                (0, node_child_process_1.execFileSync)('tmux', ['-S', tmuxSock, 'kill-server'], { stdio: 'ignore', timeout: 10_000 });
+            }
+            catch { }
+        });
+        broker.enforceRealPids = true;
+        const leases = createCuAgentLeases({
+            broker: client,
+            storeFile: () => path.join(tmpDir, 'ops-leases.json'),
+            heartbeatIntervalMs: 0,
+            livenessCheckMs: 50,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        t.after(() => leases.stop());
+        const sessionLaunch = createSessionLaunch({
+            runHarnessModelCommand: async () => [],
+            cuLeases: leases,
+        });
+        const { getHarness } = require('../lib/harnesses');
+        const { getRegisteredSessionByNativeId, invalidateRegistryCache } = require('../lib/bridge-session');
+        const ompDescriptor = (0, test_types_js_1.present)(getHarness('omp'));
+        const initialLaunch = await sessionLaunch.launchNewSession({
+            descriptor: ompDescriptor,
+            cwd: tmpDir,
+            target: { type: 'tmux', socket: tmuxSock, newTmuxSession: 'cu-never-prompted' },
+        });
+        assert.equal(initialLaunch.kind, 'ready', initialLaunch.kind === 'ready' ? '' : `initialLaunch failed: ${String(initialLaunch.error)}`);
+        const initialRouteId = initialLaunch.id;
+        const initialSpawn = (0, test_types_js_1.present)(tmux.getSpawn(initialRouteId));
+        const initialPaneId = initialSpawn.paneId;
+        const initialOwnerId = (0, test_types_js_1.present)(leases.ownerIdForSession(initialRouteId));
+        const initialEpoch = broker.epoch;
+        invalidateRegistryCache();
+        const initialNative = (0, test_types_js_1.present)(resolveSessionRoute(initialRouteId)).nativeSessionId;
+        const initialReg = (0, test_types_js_1.present)(getRegisteredSessionByNativeId('omp', initialNative));
+        // Delete the .jsonl file on disk to model a never-prompted real OMP session whose JSONL was not yet created!
+        if (typeof initialReg.sessionFile === 'string' && fs.existsSync(initialReg.sessionFile)) {
+            fs.unlinkSync(initialReg.sessionFile);
+        }
+        assert.equal(fs.existsSync(String(initialReg.sessionFile)), false, 'precondition: never-prompted session has no JSONL file on disk');
+        const ops = createSessionOperations({
+            ownership: {
+                sessionSources: { resolve: () => null },
+                liveSourceObservations: () => [],
+                getRegisteredSession: () => initialReg,
+                getRPCSession: () => null,
+                getLiveSession: async () => null,
+                liveSubsessionCandidates: () => [],
+                capturePaneRestart: async () => ({
+                    kind: 'pane-restart',
+                    sessionId: initialRouteId,
+                    placement: initialSpawn,
+                    registry: initialReg,
+                }),
+                preparePaneRestart: async () => ({ registry: initialReg }),
+                revalidatePaneRestart: (_cap, proved) => proved.registry,
+                captureOwnedPaneClose: async () => ({
+                    sessionId: initialRouteId,
+                    placement: initialSpawn,
+                    registry: initialReg,
+                    agentProcess: (0, test_types_js_1.present)(initialSpawn.paneProcess),
+                }),
+                revalidateOwnedPaneClose: () => { },
+            },
+            launch: sessionLaunch,
+            getActiveSessions: () => [],
+            readSessionCwd: () => tmpDir,
+            recordLaunchProvenance: () => { },
+            onSessionStopped: id => leases.releaseSession(id),
+            cuCheckCapabilities: () => leases.probeCapabilities(),
+            cuCanTransferSession: id => leases.canTransferSession(id),
+        });
+        const reapedBefore = broker.reapedPidDeadCount;
+        const acquireBefore = broker.acquireCalls.length;
+        const restarted = await ops.restartSession(initialRouteId);
+        assert.equal(restarted.kind, 'stopped', `never-prompted OMP restart must succeed (got ${JSON.stringify(restarted)})`);
+        const replacement = (0, test_types_js_1.present)(restarted.replacement);
+        assert.equal(replacement.paneId, initialPaneId, 'bind_transfer restarted in place in the same tmux pane');
+        assert.equal(broker.epoch, initialEpoch, 'bind_transfer kept epoch unchanged');
+        assert.equal(broker.acquireCalls.length, acquireBefore, 'bind_transfer did not do a fresh acquire');
+        assert.equal(broker.reapedPidDeadCount, reapedBefore, 'restart transferred cleanly with zero pid_dead reap');
+        assert.equal(leases.ownerIdForSession(replacement.id), initialOwnerId, 'new never-prompted session route inherited the same CU ownerId');
+        // Now simulate access_lost on that session (e.g. broker lost lease) -> restart must fall back to fresh acquire and restore access!
+        const nextSpawn = (0, test_types_js_1.present)(tmux.getSpawn(replacement.id));
+        invalidateRegistryCache();
+        const nextNative = (0, test_types_js_1.present)(resolveSessionRoute(replacement.id)).nativeSessionId;
+        const nextReg = (0, test_types_js_1.present)(getRegisteredSessionByNativeId('omp', nextNative));
+        broker.resetIdleForTest();
+        leases.handleBrokerEvent({
+            eventName: 'seat_idle',
+            authoritativeHello: false,
+            generation: broker.generation,
+            cursor: broker.cursor + 1,
+            payload: { ...broker.snapshotPayload(), cursor: broker.cursor + 1, reason: 'ttl_expired' },
+        });
+        assert.equal(leases.isDesktopAccessLost(replacement.id), true, 'precondition: session is access_lost');
+        assert.equal(leases.canTransferSession(replacement.id), false, 'access_lost session is not transferable');
+        const opsAccessLost = createSessionOperations({
+            ownership: {
+                sessionSources: { resolve: () => ({ harnessId: 'omp', nativeSessionId: nextNative, file: String(nextReg.sessionFile) }) },
+                liveSourceObservations: () => [],
+                getRegisteredSession: () => nextReg,
+                getRPCSession: () => null,
+                getLiveSession: async () => null,
+                liveSubsessionCandidates: () => [],
+                capturePaneRestart: async () => ({
+                    kind: 'pane-restart',
+                    sessionId: replacement.id,
+                    placement: nextSpawn,
+                    registry: nextReg,
+                }),
+                preparePaneRestart: async () => ({ registry: nextReg }),
+                revalidatePaneRestart: (_cap, proved) => proved.registry,
+                captureOwnedPaneClose: async () => ({
+                    sessionId: replacement.id,
+                    placement: nextSpawn,
+                    registry: nextReg,
+                    agentProcess: (0, test_types_js_1.present)(nextSpawn.paneProcess),
+                }),
+                revalidateOwnedPaneClose: () => { },
+            },
+            launch: sessionLaunch,
+            getActiveSessions: () => [],
+            readSessionCwd: () => tmpDir,
+            recordLaunchProvenance: () => { },
+            onSessionStopped: id => leases.releaseSession(id),
+            cuCheckCapabilities: () => leases.probeCapabilities(),
+            cuCanTransferSession: id => leases.canTransferSession(id),
+        });
+        const restored = await opsAccessLost.restartSession(replacement.id);
+        assert.equal(restored.kind, 'stopped', `access_lost fallback restart must succeed (got ${JSON.stringify(restored)})`);
+        assert.equal(leases.isDesktopAccessLost((0, test_types_js_1.present)(restored.replacement).id), false);
+        assert.ok(leases.ownerIdForSession((0, test_types_js_1.present)(restored.replacement).id), 'access_lost fallback restored fresh desktop lease');
+        assert.equal(broker.validationErrorCalls.length, 0);
+        assert.equal(broker.forcedMutationCalls.length, 0);
+    }
+});
+test('unit: Slice 2b Scope 2 — owner_match secretless release/cancel, owner mismatch refusal (human & other agent untouched, zero force:true), dead-orphan cleanup, and 409 transition_pending after idle reap', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-s2b-owner-'));
+    const sockPath = path.join(tmpDir, 'broker.sock');
+    const claimDir = path.join(tmpDir, 'claims');
+    const storePath = path.join(tmpDir, 'cu-agent-leases.json');
+    const broker = await startFakeCuBroker(sockPath, claimDir);
+    // Enable owner_match ONLY (without lease_renew) so re-adopted records stay secretless and exercise pure owner_match!
+    broker.enableSlice2b([SLICE2B_CAPABILITIES.ownerMatch]);
+    t.after(async () => {
+        await broker.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    const client = createCuBrokerClient({ socketPath: () => sockPath });
+    // Case 1: Secretless re-adopted active lease close uses owner_match release (no secret, no force:true) -> seat becomes idle!
+    {
+        const first = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: '~sk1_omp_om1' }));
+        await first.bindSpawnedProcess(h, { pid: 63001, startTime: '630010' });
+        broker.simulateMcpClaim(63091);
+        first.stop();
+        const restarted = createCuAgentLeases({
+            broker: client, storeFile: () => storePath,
+            processAlive: p => p.pid === 63001 && p.startTime === '630010',
+            pidAlive: p => p === 63091,
+            findSessionIdByProcess: p => (p.pid === 63001 && p.startTime === '630010' ? '~sk1_omp_om1' : null),
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        await restarted.reconcile();
+        const relBefore = broker.releaseCalls.length;
+        await restarted.releaseSession('~sk1_omp_om1');
+        assert.equal(broker.releaseCalls.length, relBefore + 1);
+        const relCall = broker.releaseCalls[broker.releaseCalls.length - 1];
+        assert.equal(relCall.ownerId, h.leaseOwnerId);
+        assert.equal(relCall.sessionId, h.brokerSessionId);
+        assert.equal(relCall.expectedState, 'active');
+        assert.equal(relCall.sessionSecret, undefined, 'secretless owner_match omits sessionSecret');
+        assert.equal(relCall.force, undefined, 'never sends force');
+        assert.equal(broker.state, 'idle', 'secretless owner_match released owned active lease');
+        restarted.stop();
+    }
+    // Case 2: Active lease preempted by human right before close -> owner_match release gets 409 lease_preempted -> cancels displaced reservation, human untouched!
+    {
+        const mgr = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        await mgr.probeCapabilities();
+        const h = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: '~sk1_omp_om2' }));
+        await mgr.bindSpawnedProcess(h, { pid: 63002, startTime: '630020' });
+        mgr.attachSpawnedSession(h, { sessionId: '~sk1_omp_om2', pid: 63002, pidStartTime: '630020' });
+        // Human takes over in broker, but mgr has NOT yet processed SSE preempted (still thinks status === 'holding').
+        await client.requestJson('POST', '/v1/lease/takeover', { label: 'pi-dish', ttlSec: 600 });
+        assert.equal(broker.state, 'human');
+        assert.equal(broker.preempted?.ownerId, h.leaseOwnerId);
+        const cancelBefore = broker.cancelPreemptedCalls.length;
+        await mgr.releaseSession('~sk1_omp_om2');
+        assert.equal(broker.cancelPreemptedCalls.length, cancelBefore + 1, '409 lease_preempted followed up with cancel-preempted');
+        assert.equal(broker.cancelPreemptedCalls[broker.cancelPreemptedCalls.length - 1].ownerId, h.leaseOwnerId);
+        assert.equal(broker.cancelPreemptedCalls[broker.cancelPreemptedCalls.length - 1].expectedState, 'displaced');
+        assert.equal(broker.state, 'human', 'human lease untouched');
+        assert.equal(broker.preempted, null, 'displaced reservation cancelled');
+        mgr.stop();
+        broker.resetIdleForTest();
+    }
+    // Case 3: Owner mismatch -> broker holds a DIFFERENT owner's agent lease (and also human lease) -> release refuses without force:true, other holder untouched!
+    {
+        const first = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: '~sk1_omp_om3' }));
+        await first.bindSpawnedProcess(h, { pid: 63003, startTime: '630030' });
+        broker.simulateMcpClaim(63093);
+        first.stop();
+        const restarted = createCuAgentLeases({
+            broker: client, storeFile: () => storePath,
+            processAlive: p => p.pid === 63003 && p.startTime === '630030',
+            pidAlive: p => p === 63093,
+            findSessionIdByProcess: p => (p.pid === 63003 && p.startTime === '630030' ? '~sk1_omp_om3' : null),
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        await restarted.reconcile();
+        // Replace broker's active lease with a DIFFERENT owner's agent lease!
+        broker.resetIdleForTest();
+        await client.requestJson('POST', '/v1/lease/acquire', {
+            holderKind: 'agent',
+            sessionId: 'cu-agent-foreign',
+            ownerId: 'cu-owner-foreign-someone-else',
+            label: 'omp',
+        });
+        const foreignLeaseId = broker.lease?.leaseId;
+        await restarted.releaseSession('~sk1_omp_om3');
+        assert.equal(broker.state, 'agent', 'foreign agent lease MUST NOT be evicted on owner mismatch');
+        assert.equal(broker.lease?.leaseId, foreignLeaseId);
+        assert.equal(broker.lease?.ownerId, 'cu-owner-foreign-someone-else');
+        restarted.stop();
+        broker.resetIdleForTest();
+    }
+    // Case 4: Dead orphan cleanup on startup reconcile with owner_match releases our dead lease cleanly (zero force:true).
+    {
+        const first = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: '~sk1_omp_om4' }));
+        await first.bindSpawnedProcess(h, { pid: 63004, startTime: '630040' });
+        first.stop();
+        const restarted = createCuAgentLeases({
+            broker: client, storeFile: () => storePath,
+            processAlive: () => false, // omp died while pi-dish was down
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        await restarted.reconcile();
+        assert.equal(broker.state, 'idle', 'owner_match dead-orphan cleanup released dead agent lease');
+        restarted.stop();
+    }
+    // Case 5: Known broker leftover — release returns 409 transition_pending AFTER reaping seat to idle -> tolerated cleanly!
+    {
+        const mgr = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        await mgr.probeCapabilities();
+        const h = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: '~sk1_omp_om5' }));
+        await mgr.bindSpawnedProcess(h, { pid: 63005, startTime: '630050' });
+        mgr.attachSpawnedSession(h, { sessionId: '~sk1_omp_om5', pid: 63005, pidStartTime: '630050' });
+        broker.nextReleaseError = {
+            status: 409,
+            reapToIdleFirst: true,
+            body: { ok: false, code: 'transition_pending', retryAfterMs: 150, message: 'Transition pending after reap to idle' },
+        };
+        const relBefore = broker.releaseCalls.length;
+        await mgr.releaseSession('~sk1_omp_om5');
+        assert.equal(broker.releaseCalls.length, relBefore + 1, 'stopped immediately when 409 transition_pending showed state:idle');
+        assert.equal(broker.state, 'idle');
+        mgr.stop();
+    }
+    assert.equal(broker.validationErrorCalls.length, 0, 'zero 400 validation errors across owner_match tests');
+    assert.equal(broker.forcedMutationCalls.length, 0, 'ZERO force:true calls across owner_match tests');
+});
+test('unit: Slice 2b Scope 3 — lease_renew re-adoption (active & displaced, periodic heartbeats & full abort/nudge routing), failed renew aborts & marks access_lost, and checking state before reconcile', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-s2b-renew-'));
+    const sockPath = path.join(tmpDir, 'broker.sock');
+    const claimDir = path.join(tmpDir, 'claims');
+    const storePath = path.join(tmpDir, 'cu-agent-leases.json');
+    const broker = await startFakeCuBroker(sockPath, claimDir);
+    broker.enableSlice2b();
+    t.after(async () => {
+        await broker.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    const client = createCuBrokerClient({ socketPath: () => sockPath });
+    // Case 1: Active unredeemed lease across pi-dish restart:
+    // - BEFORE reconcile(): isDesktopAccessLost === false, isDesktopChecking === true (no transient access_lost!).
+    // - reconcile() calls POST /v1/lease/renew (issueClaim:false) -> restores sessionSecret, restarts periodic heartbeats,
+    //   restores full abort/nudge routing, and enables bind_transfer!
+    {
+        const sid = '~sk1_omp_renew_active';
+        const first = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: sid }));
+        await first.bindSpawnedProcess(h, { pid: 64001, startTime: '640010' });
+        // Note: NOT mcpClaimed — only active unredeemed claim exists (claim.status === 'refreshed').
+        first.stop();
+        const aborts = [];
+        const nudges = [];
+        const restarted = createCuAgentLeases({
+            broker: client, storeFile: () => storePath,
+            processAlive: p => p.pid === 64001 && p.startTime === '640010',
+            findSessionIdByProcess: p => (p.pid === 64001 && p.startTime === '640010' ? sid : null),
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async (target) => { aborts.push(target); return true; },
+            resumeSession: async (target, text) => { nudges.push({ target, text }); return true; },
+        });
+        t.after(() => restarted.stop());
+        // Pre-reconcile check: NO transient access_lost, checking state is true!
+        assert.equal(restarted.isDesktopAccessLost(sid), false, 'before reconcile: never flashes access_lost');
+        assert.equal(restarted.isDesktopChecking(sid), true, 'before reconcile: reports checking state');
+        assert.equal(restarted.ownerIdForSession(sid), null, 'before reconcile: does not claim ownership prematurely');
+        const renewBefore = broker.renewCalls.length;
+        const hbBefore = broker.heartbeatCalls.length;
+        await restarted.reconcile();
+        assert.equal(broker.renewCalls.length, renewBefore + 1, 'reconcile called /v1/lease/renew');
+        assert.equal(broker.renewCalls[broker.renewCalls.length - 1].issueClaim, false);
+        assert.equal(restarted.isDesktopChecking(sid), false, 'checking clears after reconcile');
+        assert.equal(restarted.isDesktopAccessLost(sid), false);
+        assert.equal(restarted.ownerIdForSession(sid), h.leaseOwnerId);
+        assert.equal(restarted.canTransferSession(sid), true, 'renewed session restored sessionSecret for bind_transfer');
+        // Periodic heartbeats resume using the rotated sessionSecret!
+        await waitFor(() => broker.heartbeatCalls.length > hbBefore, 'periodic heartbeat sent after lease_renew');
+        // Full abort + hand-back nudge routing works on renewed session!
+        const to = await client.requestJson('POST', '/v1/lease/takeover', { label: 'pi-dish', ttlSec: 600 });
+        restarted.handleBrokerEvent({
+            eventName: 'preempted',
+            authoritativeHello: false,
+            generation: broker.generation,
+            cursor: broker.cursor,
+            payload: { ...broker.snapshotPayload(), displaced: broker.publicLease(broker.preempted) },
+        });
+        await waitFor(() => aborts.length === 1, 'renewed session receives abort on takeover');
+        const toBody = (0, test_types_js_1.record)(to.body);
+        await client.requestJson('POST', '/v1/lease/release', {
+            leaseId: String(toBody.leaseId), leaseToken: String(toBody.leaseToken), handBack: true,
+        });
+        restarted.handleBrokerEvent({
+            eventName: 'hand_back',
+            authoritativeHello: false,
+            generation: broker.generation,
+            cursor: broker.cursor,
+            payload: { ...broker.snapshotPayload(), handedBackTo: broker.publicLease(broker.lease) },
+        });
+        await waitFor(() => nudges.length === 1, 'renewed session receives hand-back nudge');
+        assert.equal(nudges[0].text, CU_HAND_BACK_NUDGE);
+        restarted.stop();
+        broker.resetIdleForTest();
+    }
+    // Case 2: Failed renew (broker rejects renew with 403 birth_mismatch) -> MUST mark access_lost AND schedule abort (never silently continue)!
+    {
+        const sid = '~sk1_omp_renew_fail_err';
+        const first = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: sid }));
+        await first.bindSpawnedProcess(h, { pid: 64002, startTime: '640020' });
+        first.stop();
+        broker.nextRenewError = { status: 403, body: { ok: false, code: 'birth_mismatch', message: 'Birth mismatch on renew' } };
+        const aborts = [];
+        const hbBefore = broker.heartbeatCalls.length;
+        const restarted = createCuAgentLeases({
+            broker: client, storeFile: () => storePath,
+            processAlive: p => p.pid === 64002 && p.startTime === '640020',
+            findSessionIdByProcess: p => (p.pid === 64002 && p.startTime === '640020' ? sid : null),
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async (target) => { aborts.push(target); return true; },
+            resumeSession: async () => true,
+        });
+        await restarted.reconcile();
+        assert.equal(restarted.isDesktopChecking(sid), false);
+        assert.equal(restarted.isDesktopAccessLost(sid), true, 'failed renew marks desktop access lost');
+        assert.equal(restarted.ownerIdForSession(sid), null);
+        await waitFor(() => aborts.length === 1, 'failed renew schedules abort');
+        await new Promise(resolve => setTimeout(resolve, 65));
+        assert.equal(broker.heartbeatCalls.length, hbBefore, 'failed renew starts zero heartbeats');
+        restarted.stop();
+        broker.resetIdleForTest();
+    }
+    // Case 3: Renew returns 200 with claim.status === 'none' (no active claim and no live claimed peer, e.g. broker restarted) -> MUST mark access_lost + abort!
+    {
+        const sid = '~sk1_omp_renew_none';
+        const first = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: sid }));
+        await first.bindSpawnedProcess(h, { pid: 64003, startTime: '640030' });
+        // Wipe in-memory active claim to model a broker restart while claim was unredeemed.
+        broker.activeClaims.delete(h.brokerSessionId);
+        first.stop();
+        const aborts = [];
+        const restarted = createCuAgentLeases({
+            broker: client, storeFile: () => storePath,
+            processAlive: p => p.pid === 64003 && p.startTime === '640030',
+            findSessionIdByProcess: p => (p.pid === 64003 && p.startTime === '640030' ? sid : null),
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async (target) => { aborts.push(target); return true; },
+            resumeSession: async () => true,
+        });
+        await restarted.reconcile();
+        assert.equal(restarted.isDesktopAccessLost(sid), true, 'renew with claim.status=none marks access_lost');
+        await waitFor(() => aborts.length === 1, 'renew with unusable claim schedules abort');
+        restarted.stop();
+        broker.resetIdleForTest();
+    }
+    // Case 4: Displaced lease re-adopted via lease_renew -> marks preempted, schedules abort, restores sessionSecret,
+    // and resumes periodic heartbeats + hand-back nudge once human hands back!
+    {
+        const sid = '~sk1_omp_renew_displaced';
+        const first = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: sid }));
+        await first.bindSpawnedProcess(h, { pid: 64004, startTime: '640040' });
+        const to = await client.requestJson('POST', '/v1/lease/takeover', { label: 'pi-dish', ttlSec: 600 });
+        const toBody = (0, test_types_js_1.record)(to.body);
+        assert.equal(broker.state, 'human');
+        assert.equal(broker.preempted?.ownerId, h.leaseOwnerId);
+        first.stop();
+        const aborts = [];
+        const nudges = [];
+        const hbBefore = broker.heartbeatCalls.length;
+        const restarted = createCuAgentLeases({
+            broker: client, storeFile: () => storePath,
+            processAlive: p => p.pid === 64004 && p.startTime === '640040',
+            findSessionIdByProcess: p => (p.pid === 64004 && p.startTime === '640040' ? sid : null),
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async (target) => { aborts.push(target); return true; },
+            resumeSession: async (target, text) => { nudges.push({ target, text }); return true; },
+        });
+        t.after(() => restarted.stop());
+        await restarted.reconcile();
+        assert.equal(restarted.isDesktopChecking(sid), false);
+        assert.equal(restarted.isDesktopAccessLost(sid), false);
+        assert.equal(restarted.ownerIdForSession(sid), h.leaseOwnerId);
+        assert.equal(restarted.canTransferSession(sid), true);
+        await waitFor(() => aborts.length === 1, 'renewed displaced lease schedules abort');
+        await client.requestJson('POST', '/v1/lease/release', {
+            leaseId: String(toBody.leaseId), leaseToken: String(toBody.leaseToken), handBack: true,
+        });
+        restarted.handleBrokerEvent({
+            eventName: 'hand_back',
+            authoritativeHello: false,
+            generation: broker.generation,
+            cursor: broker.cursor,
+            payload: { ...broker.snapshotPayload(), handedBackTo: broker.publicLease(broker.lease) },
+        });
+        await waitFor(() => nudges.length === 1, 'renewed displaced lease receives hand-back nudge');
+        await waitFor(() => broker.heartbeatCalls.length > hbBefore, 'periodic heartbeats run after displaced lease hand-back');
+        restarted.stop();
+        broker.resetIdleForTest();
+    }
+    assert.equal(broker.validationErrorCalls.length, 0);
+    assert.equal(broker.forcedMutationCalls.length, 0);
+});
+test('unit: Slice 2b Scope 4 & 5 — applied:"unknown" uncertain mapping + unbound acquire cleanup, broker_shutting_down typed/retryable, displaced 200 on bind, requestId takeover replay, ASCII JSON, and hand-back nudge text', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-s2b-errors-'));
+    const sockPath = path.join(tmpDir, 'broker.sock');
+    const claimDir = path.join(tmpDir, 'claims');
+    const storePath = path.join(tmpDir, 'cu-agent-leases.json');
+    const broker = await startFakeCuBroker(sockPath, claimDir);
+    broker.enableSlice2b();
+    t.after(async () => {
+        await broker.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    const client = createCuBrokerClient({ socketPath: () => sockPath });
+    // Scope 5: Hand-back nudge text says control is back and agent can continue its task — does NOT invite browser/screen exploration!
+    assert.match(CU_HAND_BACK_NUDGE, /control/i);
+    assert.match(CU_HAND_BACK_NUDGE, /continue/i);
+    assert.equal(/browser|inspect|screen|explor/i.test(CU_HAND_BACK_NUDGE), false, `CU_HAND_BACK_NUDGE must not invite browser/screen exploration: ${CU_HAND_BACK_NUDGE}`);
+    const mgr = createCuAgentLeases({
+        broker: client,
+        storeFile: () => storePath,
+        processAlive: () => true,
+        heartbeatIntervalMs: 0,
+        livenessCheckMs: 0,
+        abortSession: async () => true,
+        resumeSession: async () => true,
+    });
+    t.after(() => mgr.stop());
+    await mgr.probeCapabilities();
+    // Scope 4a: acquire returning 503 broker_busy with applied:"unknown" is mapped as uncertain (NEVER applied:false!)
+    // AND performs guarded owner-matched cleanup of any committed unbound lease (zero force:true)!
+    broker.nextAcquireError = {
+        status: 503,
+        commitBeforeError: true,
+        body: { ok: false, code: 'broker_busy', applied: 'unknown', retryAfterMs: 250, message: 'Commit grace elapsed; outcome unknown' },
+    };
+    await assert.rejects(() => mgr.prepareSpawn({ knownSessionId: '~sk1_omp_uncertain', assumeSlice2: true }), (err) => {
+        assert.ok(err instanceof CuBrokerUnavailableError);
+        assert.equal(err.status, 503);
+        assert.equal(err.code, 'cu_broker_uncertain');
+        assert.equal(err.brokerCode, 'broker_busy');
+        assert.equal(err.applied, 'unknown');
+        assert.equal(err.uncertain, true);
+        assert.equal(err.retryable, true);
+        assert.equal(err.retryAfterMs, 250);
+        return true;
+    });
+    assert.equal(broker.state, 'idle', 'guarded owner-matched cleanup released the committed-but-unanswered unbound acquire');
+    assert.equal(broker.forcedMutationCalls.length, 0, 'zero force:true during uncertain acquire cleanup');
+    // Scope 4b: 503 broker_shutting_down is typed and retryable (not uncertain).
+    broker.nextAcquireError = {
+        status: 503,
+        body: { ok: false, code: 'broker_shutting_down', message: 'cu-broker is shutting down.' },
+    };
+    await assert.rejects(() => mgr.prepareSpawn({ knownSessionId: '~sk1_omp_shutdown', assumeSlice2: true }), (err) => {
+        assert.ok(err instanceof CuBrokerUnavailableError);
+        assert.equal(err.status, 503);
+        assert.equal(err.code, 'broker_shutting_down');
+        assert.equal(err.brokerCode, 'broker_shutting_down');
+        assert.equal(err.retryable, true);
+        assert.equal(err.uncertain, false);
+        return true;
+    });
+    // Scope 4c: Fresh bind on a lease displaced between acquire and bind answers 200 target:"displaced" -> enters displaced (preempted) state and schedules abort!
+    {
+        const aborts = [];
+        const dispMgr = createCuAgentLeases({
+            broker: client,
+            storeFile: () => path.join(tmpDir, 'disp-leases.json'),
+            processAlive: () => true,
+            heartbeatIntervalMs: 0,
+            livenessCheckMs: 0,
+            abortSession: async (target) => { aborts.push(target); return true; },
+            resumeSession: async () => true,
+        });
+        t.after(() => dispMgr.stop());
+        const sid = '~sk1_omp_bind_displaced';
+        const h = (0, test_types_js_1.present)(await dispMgr.prepareSpawn({ knownSessionId: sid }));
+        // Human takes over before bind arrives!
+        await client.requestJson('POST', '/v1/lease/takeover', { label: 'pi-dish', ttlSec: 600 });
+        assert.equal(broker.state, 'human');
+        await dispMgr.bindSpawnedProcess(h, { pid: 65001, startTime: '650010' });
+        dispMgr.attachSpawnedSession(h, { sessionId: sid, pid: 65001, pidStartTime: '650010' });
+        await waitFor(() => aborts.length === 1 && aborts[0].pid === 65001, 'displaced 200 on bind transitions to displaced state and schedules abort');
+        assert.equal(dispMgr.ownerIdForSession(sid), h.leaseOwnerId);
+        broker.resetIdleForTest();
+    }
+    // Scope 4d: cu-handlers normalizes applied:"unknown" + broker_shutting_down, forwards requestId on takeover replay, and decodes ASCII-escaped JSON!
+    {
+        const handlers = createCuHandlers({ broker: client, upgradeAuthorized: () => true });
+        t.after(() => handlers.stop());
+        const invokeHandler = async (handler, body) => {
+            let statusCode = 200;
+            let payload = null;
+            const req = { method: 'POST', body, headers: {}, query: {} };
+            const res = {
+                headersSent: false,
+                status(code) { statusCode = code; return res; },
+                json(val) { payload = val; res.headersSent = true; return res; },
+                setHeader() { },
+            };
+            await handler(req, res, () => { });
+            return { status: statusCode, json: (0, test_types_js_1.record)(payload) };
+        };
+        // Wait for watch sync via status/watcher.
+        await waitFor(() => broker.eventsRequests.length >= 1, 'cu-handlers watcher synced');
+        await new Promise(resolve => setTimeout(resolve, 40));
+        // applied:"unknown" on takeover -> uncertain:true, applied:"unknown", retryable:true (never applied:false).
+        broker.nextTakeoverError = {
+            status: 503,
+            body: { ok: false, code: 'broker_busy', applied: 'unknown', message: 'Applying takeover; outcome unknown' },
+        };
+        const unk = await invokeHandler(handlers.takeover, { label: 'pi-dish', requestId: 'req-0123456789abcdef' });
+        assert.equal(unk.status, 503);
+        assert.equal(unk.json.applied, 'unknown');
+        assert.equal(unk.json.uncertain, true);
+        assert.equal(unk.json.retryable, true);
+        // broker_shutting_down on takeover -> code:'broker_shutting_down', retryable:true.
+        broker.nextTakeoverError = {
+            status: 503,
+            body: { ok: false, code: 'broker_shutting_down', message: 'cu-broker is shutting down.' },
+        };
+        const sd = await invokeHandler(handlers.takeover, { label: 'pi-dish', requestId: 'req-0123456789abcdef' });
+        assert.equal(sd.status, 503);
+        assert.equal(sd.json.code, 'broker_shutting_down');
+        assert.equal(sd.json.retryable, true);
+        // Same-requestId takeover replay + non-ASCII label (ASCII-escaped by broker JSON) decoded cleanly!
+        const rid = 'req-replay-0123456789abcdef';
+        const firstTake = await invokeHandler(handlers.takeover, { label: 'café-viewer', requestId: rid });
+        assert.equal(firstTake.status, 200);
+        assert.equal((0, test_types_js_1.record)(firstTake.json.lease).label, 'café-viewer', 'ASCII-escaped JSON decoded cleanly');
+        const replayTake = await invokeHandler(handlers.takeover, { label: 'café-viewer', requestId: rid });
+        assert.equal(replayTake.status, 200);
+        assert.equal(replayTake.json.replayed, true, 'same requestId replayed takeover outcome');
+        assert.equal(replayTake.json.leaseToken, firstTake.json.leaseToken);
+    }
 });

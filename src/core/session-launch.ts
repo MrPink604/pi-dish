@@ -18,7 +18,7 @@ import type { ModelRef } from './helper-types';
 import { dishDir } from './dish-store';
 import { record } from './helper-values';
 import { errorMessage, errorStatus } from './http-boundary';
-import { CuBrokerUnavailableError, CuSeatBusyError, type CuAgentLeases, type CuAgentSpawnHandle } from './cu-agent-leases';
+import { CuBrokerUnavailableError, CuSeatBusyError, CuTransferUnavailableError, type CuAgentLeases, type CuAgentSpawnHandle } from './cu-agent-leases';
 import * as tmux from './tmux';
 
 export interface HarnessLaunchTarget {
@@ -51,6 +51,8 @@ export interface NewSessionLaunchOptions {
   target?: HarnessLaunchTarget | null;
   /** Harness private root, outside fleet backups. */
   private?: boolean;
+  /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
+  cuSlice2?: boolean;
 }
 
 export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
@@ -91,6 +93,8 @@ export interface SpawnHarnessOptions {
   expectedTmuxServer?: ProcessIdentity | null;
   /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
   cuSlice2?: boolean;
+  /** When true alongside `restartPane`, transfers the session's active/displaced CU lease in place via `bind_transfer`. */
+  cuBindTransfer?: boolean;
 }
 
 export interface CleanupEvidence extends tmux.PaneTarget {
@@ -123,7 +127,7 @@ export type LaunchOutcome =
 
 export interface SessionLaunchObservations {
   runHarnessModelCommand(descriptor: HarnessDescriptor, options: { cwd?: unknown }): Promise<unknown>;
-  cuLeases?: Pick<CuAgentLeases, 'configured' | 'prepareSpawn' | 'bindSpawnedProcess' | 'attachSpawnedSession' | 'abortSpawn'>;
+  cuLeases?: Pick<CuAgentLeases, 'configured' | 'prepareSpawn' | 'bindSpawnedProcess' | 'attachSpawnedSession' | 'abortSpawn'> & Partial<Pick<CuAgentLeases, 'prepareTransfer'>>;
 }
 
 export interface SessionLaunch {
@@ -265,7 +269,8 @@ function forbidden(error: unknown): LaunchOutcome {
 function unclassifiedTmuxFailure(descriptor: HarnessDescriptor, error: unknown, expectedTmuxServer?: ProcessIdentity | null): LaunchOutcome {
   if (error instanceof BridgeSocketConfigError || error instanceof LifecycleInterruption
       || error instanceof tmux.TmuxServerLostError || error instanceof CuSeatBusyError
-      || error instanceof CuBrokerUnavailableError || expectedTmuxServer) return forbidden(error);
+      || error instanceof CuBrokerUnavailableError || error instanceof CuTransferUnavailableError
+      || expectedTmuxServer) return forbidden(error);
   // Only an unclassified launch exception permits the headless RPC fallback.
   return { kind: descriptor.rpcFallback ? 'fallback-permitted' : 'fallback-forbidden', error, status: errorStatus(error, 500) };
 }
@@ -512,7 +517,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return withPrimeLaunch(() => runTmuxLaunch(options, { daemon, snapshot: new Set() }));
   }
 
-  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, knownSessionId = null, restartPane = null, expectedTmuxServer = null, cuSlice2 }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
+  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, knownSessionId = null, restartPane = null, expectedTmuxServer = null, cuSlice2, cuBindTransfer = false }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
     if (!tmux.isTmuxAvailable()) throw new LaunchError('tmux is not available on this host', 400);
     const socket = target.socket;
     if (!tmux.isSocketAllowed(socket)) throw new LaunchError('Invalid tmux socket', 400);
@@ -559,13 +564,46 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     }
     let cuLeaseHandle: CuAgentSpawnHandle | null = null;
     let cuLeaseAttached = false;
+    let respawnBeforeAction: BeforeLifecycleAction | null | undefined = restartPane?.beforeAction;
+    let respawnTmuxSession: string | null | undefined = target.tmuxSession;
     // P1-1: Never probe/mint CU leases on a legacy `restartPane` path (guard has
     // not run yet), and honor any pre-probed `cuSlice2` decision without re-probing.
-    if (descriptor.id === 'omp' && observations.cuLeases?.configured() && cuSlice2 !== false && !restartPane) {
-      cuLeaseHandle = await observations.cuLeases.prepareSpawn({
-        knownSessionId: knownSessionId ?? null,
-        ...(cuSlice2 !== undefined ? { assumeSlice2: cuSlice2 } : {}),
-      });
+    if (descriptor.id === 'omp' && observations.cuLeases?.configured() && cuSlice2 !== false) {
+      if (restartPane && cuBindTransfer && observations.cuLeases.prepareTransfer) {
+        // P1-1: Run pane-process identity check and beforeAction guard BEFORE staging
+        // a bind_transfer claim, then pass the sync finalCheck into tmux.respawnPane.
+        if (restartPane.paneProcess) {
+          const currentPaneProcess = await tmux.paneProcessIdentity(socket, restartPane.paneId);
+          if (!sameProcessIdentity(currentPaneProcess, restartPane.paneProcess)) {
+            throw new LaunchError('The tmux pane process changed before restart', 409);
+          }
+        }
+        const finalCheck = restartPane.beforeAction ? await restartPane.beforeAction() : null;
+        finalCheck?.();
+        respawnBeforeAction = finalCheck ? () => finalCheck : null;
+        if (!respawnTmuxSession) {
+          respawnTmuxSession = (await tmux.paneLocation(socket, restartPane.paneId).catch(() => null))?.tmuxSession ?? null;
+        }
+        const expectedPid = restartPane.paneProcess && Number.isInteger(Number(restartPane.paneProcess.pid))
+          ? Number(restartPane.paneProcess.pid)
+          : null;
+        const expectedPidStartTime = restartPane.paneProcess?.startTime !== undefined && restartPane.paneProcess?.startTime !== null
+          ? String(restartPane.paneProcess.startTime)
+          : null;
+        cuLeaseHandle = await observations.cuLeases.prepareTransfer({
+          sessionId: restartPane.sessionId,
+          expectedPid,
+          expectedPidStartTime,
+        });
+        if (!cuLeaseHandle) {
+          throw new CuTransferUnavailableError();
+        }
+      } else if (!restartPane) {
+        cuLeaseHandle = await observations.cuLeases.prepareSpawn({
+          knownSessionId: knownSessionId ?? null,
+          ...(cuSlice2 !== undefined ? { assumeSlice2: cuSlice2 } : {}),
+        });
+      }
     }
     try {
       if (cuLeaseHandle) {
@@ -580,7 +618,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
         //    CU_BROKER_SESSION_ID (needed by Fleet's future reclaim).
         // `env` execs the target in place, preserving the pane's exact (pid, pidStartTime).
         const sanitizedCommand = stripReservedCuBrokerEnv(env, command);
-        const unsetKeys = await collectInheritedCuBrokerEnvKeys(socket, target.tmuxSession);
+        const unsetKeys = await collectInheritedCuBrokerEnvKeys(socket, respawnTmuxSession);
         const unsetArgs = unsetKeys.flatMap(key => ['-u', key]);
         const allowlistPairs = [
           `CU_BROKER_SESSION_ID=${cuLeaseHandle.env.CU_BROKER_SESSION_ID}`,
@@ -597,7 +635,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
           await tmux.respawnPane({
             socket, paneId, cwd: launchCwd, command, env,
             expectedProcess: restartPane.paneProcess,
-            beforeAction: restartPane.beforeAction,
+            beforeAction: respawnBeforeAction,
           });
           if (descriptor.closeMode === 'owned-agent') restartedPaneProcess = await tmux.paneProcessIdentity(socket, paneId);
           if (restartPane.registry) pruneRegisteredSession(restartPane.registry);
@@ -953,7 +991,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     }
   }
 
-  async function launchNewSession({ descriptor, name, model, thinking, cwd, target, private: privateSession = false }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
+  async function launchNewSession({ descriptor, name, model, thinking, cwd, target, private: privateSession = false, cuSlice2 }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
       // Downstream calls own malformed-cwd failures; these assertions don't validate cwd.
       if (cwd && (cwd as string).startsWith('~')) cwd = path.join(process.env.HOME!, (cwd as string).slice(1).replace(/^\//, ''));
@@ -968,7 +1006,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       const args = descriptor.argv.new({
         model: model ?? undefined, thinking: thinking ?? undefined, cwd, ...(sessionDir ? { sessionDir } : {}),
       });
-      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name }, 'spawn', async () => {
+      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name, cuSlice2 }, 'spawn', async () => {
         const rpc = await createRPCSession({
           model: model ?? undefined, thinking: thinking ?? undefined, cwd: cwd ?? undefined,
           ...(sessionDir ? { sessionDir } : {}),

@@ -24,6 +24,8 @@ export interface SessionBrowsePorts {
   cuOwnerId?(sessionId: string): string | null;
   /** True when an active CU-host session lost desktop access and needs restart to regain it. */
   cuDesktopAccessLost?(sessionId: string): boolean;
+  /** True while startup reconciliation is still checking this session's CU lease. */
+  cuDesktopChecking?(sessionId: string): boolean;
 }
 
 const SEARCH_RESULT_CAP = 100;
@@ -85,15 +87,17 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     await runtime.refreshPrimeRoster();
     const catalog = runtime.buildSessionCatalog({ activeOnly: req.query.active === '1', includePrivate: ports.privateUnlocked(req) });
-    const active = ports.cuOwnerId || ports.cuDesktopAccessLost
+    const active = ports.cuOwnerId || ports.cuDesktopAccessLost || ports.cuDesktopChecking
       ? catalog.active.map(session => {
         const cuOwnerId = ports.cuOwnerId?.(session.id) ?? null;
         const cuDesktopAccessLost = ports.cuDesktopAccessLost?.(session.id) === true;
-        if (!cuOwnerId && !cuDesktopAccessLost) return session;
+        const cuDesktopChecking = ports.cuDesktopChecking?.(session.id) === true;
+        if (!cuOwnerId && !cuDesktopAccessLost && !cuDesktopChecking) return session;
         return {
           ...session,
           ...(cuOwnerId ? { cuOwnerId } : {}),
           ...(cuDesktopAccessLost ? { cuDesktopAccessLost: true } : {}),
+          ...(cuDesktopChecking ? { cuDesktopChecking: true } : {}),
         };
       })
       : catalog.active;

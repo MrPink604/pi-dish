@@ -616,4 +616,22 @@ test('sidebar renders per-session opaque ownerId cues with full-string matching 
     }), memo);
     assert.notEqual(idleRendered, rendered, 'changing to idle invalidates memo');
     assert.match(idleRendered.html, /data-id="s-cu-3"[\s\S]*?data-tone="waiting"[^>]*>desktop access lost — restart session<\/span>/, 'desktop-access-lost cue stays visible even when host seat is idle');
+    // Checking state before startup reconcile holds the sidebar cue (no transient access_lost or other-session flash)
+    // and renders "Checking…" in cuSeatPresentation.
+    const checkingActive = [
+        ...active,
+        { id: 's-cu-4', host: CU, name: 'CU Checking', cwd: '/work', isActive: true, lastActivity: 1100, cuDesktopChecking: true },
+    ];
+    const checkingRendered = renderSidebar(options({
+        active: checkingActive, tab: 'active', multiHost: true, hosts, selfHostId: SELF,
+        cuSeat: (hostId, ctx) => hostId === CU ? cuSessionListCue(agentStatus, null, ctx) : null,
+    }), memo);
+    assert.notEqual(checkingRendered, idleRendered, 'adding checking row invalidates memo');
+    const checkingRow = checkingRendered.rows.find(r => r.key.includes('s-cu-4'));
+    assert.ok(checkingRow, 'checking row rendered');
+    assert.equal(checkingRow.html.includes('cu-seat-cue'), false, 'cuDesktopChecking holds sidebar badge until reconcile finishes');
+    const { cuSeatPresentation } = context.PiDishBrowser;
+    const checkingPres = cuSeatPresentation(agentStatus, null, Date.now(), { desktopChecking: true, sessionScoped: true });
+    assert.equal(checkingPres.badge, 'Checking…');
+    assert.equal(checkingPres.tone, 'idle');
 });

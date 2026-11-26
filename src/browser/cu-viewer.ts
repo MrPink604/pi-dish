@@ -15,6 +15,7 @@ import {
 } from './cu-viewer-data';
 import { hostDisplayLabel } from './helper-identity';
 import { escapeHtml } from '../core/helper-format';
+import { record } from '../core/helper-values';
 import { createCuSessionPanel } from './cu-session-panel';
 
 export interface CuViewerHost extends HostEndpoint {
@@ -35,6 +36,7 @@ export interface CuViewerOptions {
     host?: string | null;
     cuOwnerId?: string | null;
     cuDesktopAccessLost?: boolean;
+    cuDesktopChecking?: boolean;
   } | null;
   supports: (host: CuViewerHost | null | undefined) => boolean;
   dot: (hostId: string | null) => string;
@@ -614,6 +616,14 @@ export function createCuViewer(options: CuViewerOptions) {
       if (!owns(ownerGen, ownerHostKey)) return;
       if (response.status === 409) {
         const busy = decodeCuBusyError(data);
+        if (busy.code === 'transition_pending') {
+          notice = {
+            kind: 'busy',
+            text: busy.message || 'Seat transition in progress — try again shortly',
+          };
+          renderHeaderAndControls();
+          return;
+        }
         notice = {
           kind: 'busy',
           text: formatBusyMessage(busy, now()),
@@ -632,7 +642,17 @@ export function createCuViewer(options: CuViewerOptions) {
         return;
       }
       if (!response.ok) {
-        notice = { kind: 'error', text: responseError(response, data, `Take over failed (${response.status})`) };
+        const dataRec = record(data) ? data : null;
+        const isUncertain = dataRec !== null && (dataRec.applied === 'unknown' || dataRec.uncertain === true);
+        const isShuttingDown = dataRec !== null && dataRec.code === 'broker_shutting_down';
+        notice = {
+          kind: 'error',
+          text: isUncertain
+            ? 'Take over outcome is uncertain — refresh desktop state before retrying'
+            : isShuttingDown
+              ? 'Computer-use broker is restarting — try again shortly'
+              : responseError(response, data, `Take over failed (${response.status})`),
+        };
         renderHeaderAndControls();
         return;
       }
@@ -702,11 +722,48 @@ export function createCuViewer(options: CuViewerOptions) {
       const data = await readJson(response);
       if (!owns(ownerGen, ownerHostKey)) return;
       if (response.status === 409 || response.status === 403) {
-        handleLocalLeaseLost(ownerGen, ownerHostKey, endpoint, decodeCuBusyError(data, 'Lease already released'));
+        const busy = decodeCuBusyError(data, 'Lease already released');
+        if (response.status === 409 && busy.code === 'transition_pending') {
+          if (busy.state === 'idle') {
+            // Broker leftover tolerance: release can answer 409 transition_pending
+            // after reaping the seat to idle while stopping workers exit.
+            localLeases.delete(ownerHostKey);
+            clearHeartbeat();
+            mode = 'view-only';
+            if (busy.epoch !== null && busy.epoch >= latestEpoch) {
+              latestEpoch = busy.epoch;
+              status = {
+                state: 'idle',
+                epoch: busy.epoch,
+                lease: null,
+                preempted: null,
+                health: status?.health ?? null,
+              };
+            }
+            notice = null;
+            renderHeaderAndControls();
+            void loadViewerTicket(ownerGen, ownerHostKey, endpoint, 'view-only');
+            return;
+          }
+          notice = { kind: 'busy', text: busy.message || 'Seat transition in progress — retry hand back' };
+          renderHeaderAndControls();
+          return;
+        }
+        handleLocalLeaseLost(ownerGen, ownerHostKey, endpoint, busy);
         return;
       }
       if (!response.ok) {
-        notice = { kind: 'error', text: responseError(response, data, `Hand back failed (${response.status})`) };
+        const dataRec = record(data) ? data : null;
+        const isUncertain = dataRec !== null && (dataRec.applied === 'unknown' || dataRec.uncertain === true);
+        const isShuttingDown = dataRec !== null && dataRec.code === 'broker_shutting_down';
+        notice = {
+          kind: 'error',
+          text: isUncertain
+            ? 'Hand back outcome is uncertain — refresh desktop state before retrying'
+            : isShuttingDown
+              ? 'Computer-use broker is restarting — try again shortly'
+              : responseError(response, data, `Hand back failed (${response.status})`),
+        };
         renderHeaderAndControls();
         return;
       }

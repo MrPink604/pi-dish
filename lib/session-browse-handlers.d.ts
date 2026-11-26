@@ -12,6 +12,8 @@ export interface SessionBrowsePorts {
     cuOwnerId?(sessionId: string): string | null;
     /** True when an active CU-host session lost desktop access and needs restart to regain it. */
     cuDesktopAccessLost?(sessionId: string): boolean;
+    /** True while startup reconciliation is still checking this session's CU lease. */
+    cuDesktopChecking?(sessionId: string): boolean;
 }
 /** Opt-in `/api/sessions` bounds for agent callers; the browser sends neither, so its payload is unchanged. */
 export interface CatalogBounds {

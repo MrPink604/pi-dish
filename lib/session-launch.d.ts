@@ -31,6 +31,8 @@ export interface NewSessionLaunchOptions {
     target?: HarnessLaunchTarget | null;
     /** Harness private root, outside fleet backups. */
     private?: boolean;
+    /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
+    cuSlice2?: boolean;
 }
 export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
     descriptor: HarnessDescriptor;
@@ -67,6 +69,8 @@ export interface SpawnHarnessOptions {
     expectedTmuxServer?: ProcessIdentity | null;
     /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
     cuSlice2?: boolean;
+    /** When true alongside `restartPane`, transfers the session's active/displaced CU lease in place via `bind_transfer`. */
+    cuBindTransfer?: boolean;
 }
 export interface CleanupEvidence extends tmux.PaneTarget {
     knownProcesses: ProcessIdentity[];
@@ -109,7 +113,7 @@ export interface SessionLaunchObservations {
     runHarnessModelCommand(descriptor: HarnessDescriptor, options: {
         cwd?: unknown;
     }): Promise<unknown>;
-    cuLeases?: Pick<CuAgentLeases, 'configured' | 'prepareSpawn' | 'bindSpawnedProcess' | 'attachSpawnedSession' | 'abortSpawn'>;
+    cuLeases?: Pick<CuAgentLeases, 'configured' | 'prepareSpawn' | 'bindSpawnedProcess' | 'attachSpawnedSession' | 'abortSpawn'> & Partial<Pick<CuAgentLeases, 'prepareTransfer'>>;
 }
 export interface SessionLaunch {
     validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotValidationInput): Promise<void>;

@@ -122,6 +122,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
       const rowCue = options.cuSeat?.(session.host || options.selfHostId || null, {
         cuOwnerId: session.cuOwnerId ?? null,
         desktopAccessLost: session.cuDesktopAccessLost === true,
+        desktopChecking: session.cuDesktopChecking === true,
         sessionScoped: true,
       }) ?? null;
       parts.push(
@@ -132,7 +133,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
         sessionSupports(session, 'close') ? 1 : 0, session.closeMode,
         session.contextPercent, session.contextTokens, session.cwd, session.routine, session.routineId,
         session.private ? 1 : 0,
-        session.cuOwnerId ?? '', session.cuDesktopAccessLost ? 1 : 0,
+        session.cuOwnerId ?? '', session.cuDesktopAccessLost ? 1 : 0, session.cuDesktopChecking ? 1 : 0,
         rowCue ? `${rowCue.state}\0${rowCue.tone}\0${rowCue.owner ?? ''}\0${rowCue.label}\0${rowCue.title}` : '',
         session.parentId, session.parentSource, session.familyParentId, session.searchScore,
         session.searchSnippet, session.lastActivity, relativeTimeFingerprint(session.lastActivity, now),
@@ -263,6 +264,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const cuSeat = options.cuSeat?.(session.host || options.selfHostId || null, {
     cuOwnerId: session.cuOwnerId ?? null,
     desktopAccessLost: session.cuDesktopAccessLost === true,
+    desktopChecking: session.cuDesktopChecking === true,
     sessionScoped: true,
   }) ?? null;
   const cuSeatOwnerAttr = cuSeat?.owner ? ` data-owner="${escapeHtml(cuSeat.owner)}"` : '';

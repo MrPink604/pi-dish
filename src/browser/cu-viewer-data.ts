@@ -89,6 +89,7 @@ export interface CuLocalHumanLease {
 export interface CuSeatSessionContext {
   readonly cuOwnerId?: string | null;
   readonly desktopAccessLost?: boolean;
+  readonly desktopChecking?: boolean;
   readonly sessionScoped?: boolean;
 }
 
@@ -325,6 +326,14 @@ export function cuSeatPresentation(
       ownControl: false,
     };
   }
+  if (context?.desktopChecking) {
+    return {
+      tone: 'idle',
+      badge: 'Checking…',
+      detail: 'Checking desktop access',
+      ownControl: false,
+    };
+  }
   if (!status) {
     return { tone: 'idle', badge: 'Connecting…', detail: 'Checking seat status', ownControl: false };
   }
@@ -420,6 +429,9 @@ export function cuSessionListCue(
       label: 'desktop access lost — restart session',
       title: 'Desktop access lost — restart session to restore desktop access',
     };
+  }
+  if (context?.desktopChecking) {
+    return null;
   }
   if (!status || status.state === 'idle') return null;
   if (status.state === 'human') {
