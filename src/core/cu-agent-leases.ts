@@ -331,6 +331,7 @@ interface ManagedLeaseRecord {
   reAdopted: boolean;
   pendingStartupReconcile: boolean;
   pendingTransferClaimId: string | null;
+  pendingReleaseCleanup?: boolean;
   heartbeatTimer: NodeJS.Timeout | null;
   heartbeatIntervalMs: number;
   delivery: DeliveryTracker;
@@ -492,16 +493,28 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   interface TransferState {
     aborted: boolean;
     committed: boolean;
+    ambiguous: boolean;
+    readonly initialStatus: ManagedLeaseStatus;
     readonly originalPid: number;
     readonly originalPidStartTime: string;
+    attemptedReplacementPid: number | null;
+    attemptedReplacementPidStartTime: string | null;
     replacementPid: number | null;
     replacementPidStartTime: string | null;
+  }
+
+  interface SpawnBindState {
+    ambiguous: boolean;
+    readonly initialStatus: ManagedLeaseStatus;
+    attemptedPid: number | null;
+    attemptedPidStartTime: string | null;
   }
 
   const recordsByBrokerId = new Map<string, ManagedLeaseRecord>();
   const recordsByOwnerId = new Map<string, ManagedLeaseRecord>();
   const brokerIdBySessionId = new Map<string, string>();
   const transferStates = new WeakMap<CuAgentSpawnHandle, TransferState>();
+  const spawnBindStates = new WeakMap<CuAgentSpawnHandle, SpawnBindState>();
 
   let stopped = false;
   let reconciled = false;
@@ -538,9 +551,24 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     return pidAlive(claimedPid);
   }
 
+  function snapshotMatchesBoundBirth(rec: ManagedLeaseRecord, obj: Record<string, unknown> | null): boolean {
+    if (!obj || rec.pid === null || rec.pid <= 1 || !rec.pidStartTime) return false;
+    if ('pid' in obj) {
+      const snapPid = pickFiniteNumber(obj, 'pid');
+      if (snapPid === null || snapPid !== rec.pid) return false;
+    }
+    if ('pidStartTime' in obj) {
+      const snapStart = pickPidStartTime(obj, 'pidStartTime');
+      if (snapStart === null || snapStart !== rec.pidStartTime) return false;
+    }
+    return true;
+  }
+
   /**
    * True when the broker reports that a bound lease (outside any staged transfer)
-   * lost its claimed MCP peer and has no usable claim or reclaim path left.
+   * has neither a live claimed MCP peer matching the bound birth nor an issued,
+   * unexpired, unredeemed pending claim. `allowReclaim` is never treated as usable
+   * because pi-dish does not opt into `claim_reclaim`.
    */
   function hasLostUsableClaimOrPeer(
     rec: ManagedLeaseRecord,
@@ -552,20 +580,16 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     if (rec.pid === null || rec.pid <= 1 || !rec.pidStartTime) return false;
     if (reason === 'acquired') return false;
 
+    const birthMatches = snapshotMatchesBoundBirth(rec, obj);
+    const peerLive = birthMatches && hasLiveClaimedPeer(obj);
+    const hasPendingClaim = birthMatches && obj !== null && obj.pendingClaim === true;
+
     if (reason === 'claimed_peer_reaped' || reason === 'claim_expired') {
-      if (obj && (hasLiveClaimedPeer(obj) || obj.pendingClaim === true || obj.allowReclaim === true)) {
-        return false;
-      }
-      return true;
+      return !peerLive && !hasPendingClaim;
     }
 
     if (obj && typeof obj.pendingClaim === 'boolean') {
-      const peerLive = hasLiveClaimedPeer(obj);
-      const hasPending = obj.pendingClaim === true;
-      const reclaimEnabled = obj.allowReclaim === true;
-      if (!peerLive && !hasPending && !reclaimEnabled) {
-        return true;
-      }
+      return !peerLive && !hasPendingClaim;
     }
     return false;
   }
@@ -599,6 +623,19 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       pidStartTime,
       epoch: effectiveEpoch,
       initialTarget,
+    }).then(outcome => {
+      if (outcome === 'pid_mismatch' && pid !== null) {
+        return ownerMatchedReleaseOrCancel({
+          brokerSessionId,
+          leaseOwnerId,
+          sessionSecret: null,
+          pid: null,
+          pidStartTime: null,
+          epoch: effectiveEpoch,
+          initialTarget,
+        }).then(() => undefined);
+      }
+      return undefined;
     }).catch(error => {
       log(`[cu-lease] owner-matched access_lost release failed for ${leaseOwnerId}: ${errorMessage(error)}`);
     });
@@ -1146,8 +1183,22 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       }
 
       if (reply.status === 200 && isRecord(reply.body)) {
+        if (order === 'new_generation') {
+          resetAllWatermarksForNewGeneration(gen);
+        }
         advanceGlobalPosition(pos, order === 'new_generation');
         updateRecordPosition(rec, pos);
+        const hbLease = isRecord(body.lease) ? body.lease : null;
+        if (
+          !rec.pendingStartupReconcile
+          && rec.status !== 'access_lost'
+          && hbLease
+          && refMatchesRecord(extractRef(hbLease), rec)
+          && hasLostUsableClaimOrPeer(rec, hbLease, null)
+        ) {
+          void markAccessLostAndRelease(rec, 'active', ep ?? rec.epoch);
+          persistStore();
+        }
         return;
       }
 
@@ -1217,6 +1268,8 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     return pickString(obj, 'ownerId') === ownerId && pickString(obj, 'sessionId') === brokerSessionId;
   }
 
+  type OwnerMatchReleaseResult = 'released' | 'not_ours' | 'pid_mismatch' | 'failed';
+
   async function ownerMatchedReleaseOrCancel(params: {
     brokerSessionId: string;
     leaseOwnerId: string;
@@ -1225,8 +1278,8 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     pidStartTime: string | null;
     epoch: number | null;
     initialTarget: 'active' | 'displaced';
-  }): Promise<void> {
-    if (!ports.broker.available()) return;
+  }): Promise<OwnerMatchReleaseResult> {
+    if (!ports.broker.available()) return 'failed';
     let target: 'active' | 'displaced' = params.initialTarget;
     let attemptEpoch: number | null = params.epoch !== null && params.epoch >= 1 ? params.epoch : null;
     let switchedTarget = false;
@@ -1234,7 +1287,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     let transientRetries = 0;
 
     for (let step = 0; step < 6; step++) {
-      if (stopped) return;
+      if (stopped) return 'failed';
       const endpoint = target === 'displaced' ? '/v1/lease/cancel-preempted' : '/v1/lease/release';
       const payload: Record<string, unknown> = {
         ownerId: params.leaseOwnerId,
@@ -1252,8 +1305,13 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         payload.expectedEpoch = attemptEpoch;
       }
 
-      const reply = await ports.broker.requestJson('POST', endpoint, payload);
-      if (reply.status === 200) return;
+      let reply: { status: number; body: unknown };
+      try {
+        reply = await ports.broker.requestJson('POST', endpoint, payload);
+      } catch {
+        return 'failed';
+      }
+      if (reply.status === 200) return 'released';
 
       const body = isRecord(reply.body) ? reply.body : {};
       const code = pickString(body, 'code');
@@ -1266,13 +1324,21 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           && snapshotObjMatchesOwner(body.lease, params.leaseOwnerId, params.brokerSessionId);
         const displacedMatchesUs = snapshotObjMatchesOwner(body.preempted, params.leaseOwnerId, params.brokerSessionId);
 
-        if (target === 'active' && (code === 'lease_preempted' || (code === 'state_mismatch' && displacedMatchesUs)) && !switchedTarget) {
+        if (
+          target === 'active'
+          && (code === 'lease_preempted' || ((code === 'state_mismatch' || code === 'lease_not_found') && displacedMatchesUs))
+          && !switchedTarget
+        ) {
           switchedTarget = true;
           target = 'displaced';
           attemptEpoch = conflictEpoch !== null && conflictEpoch >= 1 ? conflictEpoch : null;
           continue;
         }
-        if (target === 'displaced' && (code === 'lease_active' || (code === 'state_mismatch' && activeMatchesUs)) && !switchedTarget) {
+        if (
+          target === 'displaced'
+          && (code === 'lease_active' || ((code === 'state_mismatch' || code === 'no_preempted_lease') && activeMatchesUs))
+          && !switchedTarget
+        ) {
           switchedTarget = true;
           target = 'active';
           attemptEpoch = conflictEpoch !== null && conflictEpoch >= 1 ? conflictEpoch : null;
@@ -1290,24 +1356,30 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
             attemptEpoch = conflictEpoch;
             continue;
           }
-          return;
+          return 'not_ours';
         }
         if (target === 'active' && code === 'transition_pending') {
           // Broker leftover tolerance: release can answer 409 transition_pending after
           // reaping the seat to idle while stopping workers are still exiting.
           if (conflictState === 'idle' || (conflictState !== null && !activeMatchesUs && !displacedMatchesUs)) {
-            return;
+            return 'released';
           }
           if (transientRetries < MAX_TRANSIENT_BROKER_RETRIES) {
             transientRetries += 1;
             await boundedRetryDelay(pickNonNegInt(body, 'retryAfterMs'));
             continue;
           }
-          return;
+          return 'failed';
         }
-        // owner_mismatch, state_mismatch, lease_mismatch, pid_mismatch, lease_not_found,
+        if (code === 'pid_mismatch') {
+          return 'pid_mismatch';
+        }
+        // owner_mismatch, state_mismatch, lease_mismatch, lease_not_found,
         // no_preempted_lease: never force-release a lease we cannot prove we own.
-        return;
+        if (!activeMatchesUs && !displacedMatchesUs) {
+          return 'not_ours';
+        }
+        return 'failed';
       }
 
       if (reply.status === 503) {
@@ -1319,15 +1391,117 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           await boundedRetryDelay(pickNonNegInt(body, 'retryAfterMs'));
           continue;
         }
-        return;
+        return 'failed';
       }
 
       // 403 / 400 / other: stop cleanly, never escalate to force:true.
+      return 'failed';
+    }
+    return 'failed';
+  }
+
+  /**
+   * Stops heartbeats and marks `rec` as `access_lost` while keeping the record tracked
+   * until an `owner_match` release/cancel is confirmed or the broker proves the seat is
+   * not ours. Tries each candidate birth in order (replacement -> original -> no-pid).
+   * Never sends `force: true`.
+   */
+  async function releaseOwnedLeaseWithBirthFallbacks(
+    rec: ManagedLeaseRecord,
+    candidates: ReadonlyArray<{ pid: number; startTime: string } | null>,
+    initialTarget: 'active' | 'displaced',
+  ): Promise<void> {
+    const { brokerSessionId, leaseOwnerId, epoch, sessionSecret } = rec;
+    const effectiveEpoch = epoch >= 1 ? epoch : null;
+    markAccessLost(rec);
+    rec.pendingReleaseCleanup = true;
+    persistStore();
+
+    if (!ports.broker.available()) {
+      return;
+    }
+
+    const useOwnerMatch = hasCap(SLICE2B_CAPABILITIES.ownerMatch);
+    if (!useOwnerMatch) {
+      if (!sessionSecret) return;
+      try {
+        const endpoint = initialTarget === 'displaced' ? '/v1/lease/cancel-preempted' : '/v1/lease/release';
+        const reply = await ports.broker.requestJson('POST', endpoint, {
+          sessionId: brokerSessionId,
+          sessionSecret,
+        });
+        if (reply.status === 200) {
+          if (recordsByBrokerId.get(brokerSessionId) === rec) {
+            removeRecord(rec, { persist: true });
+          }
+          return;
+        }
+        if (initialTarget === 'active' && reply.status === 403) {
+          const cancelReply = await ports.broker.requestJson('POST', '/v1/lease/cancel-preempted', {
+            sessionId: brokerSessionId,
+            sessionSecret,
+          });
+          if (cancelReply.status === 200 && recordsByBrokerId.get(brokerSessionId) === rec) {
+            removeRecord(rec, { persist: true });
+          }
+        }
+      } catch (error) {
+        log(`[cu-lease] fallback release failed for ${leaseOwnerId}: ${errorMessage(error)}`);
+      }
+      return;
+    }
+
+    const seen = new Set<string>();
+    const ordered: Array<{ pid: number; startTime: string } | null> = [];
+    for (const cand of candidates) {
+      if (cand && cand.pid > 1 && cand.startTime) {
+        const key = `${cand.pid}:${cand.startTime}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          ordered.push(cand);
+        }
+      } else if (cand === null && !seen.has('none')) {
+        seen.add('none');
+        ordered.push(null);
+      }
+    }
+    if (!seen.has('none')) {
+      ordered.push(null);
+    }
+
+    for (const cand of ordered) {
+      if (stopped) return;
+      const outcome = await ownerMatchedReleaseOrCancel({
+        brokerSessionId,
+        leaseOwnerId,
+        sessionSecret: null,
+        pid: cand?.pid ?? null,
+        pidStartTime: cand?.startTime ?? null,
+        epoch: effectiveEpoch,
+        initialTarget,
+      });
+      if (outcome === 'released' || outcome === 'not_ours') {
+        if (recordsByBrokerId.get(brokerSessionId) === rec) {
+          removeRecord(rec, { persist: true });
+        }
+        return;
+      }
+      if (outcome === 'pid_mismatch') {
+        continue;
+      }
+      // Unconfirmed failure: keep record tracked and marked access_lost.
       return;
     }
   }
 
   async function releaseRecord(rec: ManagedLeaseRecord): Promise<void> {
+    if (rec.pendingReleaseCleanup) {
+      const birth = rec.pid !== null && rec.pid > 1 && rec.pidStartTime
+        ? { pid: rec.pid, startTime: rec.pidStartTime }
+        : null;
+      await releaseOwnedLeaseWithBirthFallbacks(rec, [birth, null], 'active');
+      return;
+    }
     const {
       brokerSessionId,
       leaseOwnerId,
@@ -1445,6 +1619,54 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
   }
 
   /**
+   * Runs the ordered peer-loss check (`hasLostUsableClaimOrPeer`) on a successful
+   * `/v1/status` reply for all already-reconciled bound records.
+   */
+  async function inspectStatusSnapshotForPeerLoss(body: Record<string, unknown>): Promise<void> {
+    if (stopped) return;
+    const state = pickString(body, 'state');
+    const epoch = pickFiniteNumber(body, 'epoch');
+    if (state === null || epoch === null) return;
+    const generation = pickString(body, 'generation');
+    const cursor = pickNonNegInt(body, 'cursor');
+    const pos: BrokerPosition = { generation, cursor, epoch };
+    const order = comparePosition(pos, { allowNewGeneration: true });
+    if (order === 'stale') return;
+    if (order === 'new_generation') {
+      resetAllWatermarksForNewGeneration(generation);
+    }
+    advanceGlobalPosition(pos, order === 'new_generation');
+
+    const activeLease = (state === 'agent' || state === 'waiting_for_human') && isRecord(body.lease)
+      && pickString(body.lease, 'holderKind') !== 'human'
+      ? body.lease
+      : null;
+    const activeRef = extractRef(activeLease);
+    const preempted = isRecord(body.preempted) ? body.preempted : null;
+    const preemptedRef = extractRef(preempted);
+
+    const pendingReleases: Promise<void>[] = [];
+    let storeDirty = false;
+    for (const rec of [...recordsByBrokerId.values()]) {
+      if (rec.pendingStartupReconcile || rec.status === 'access_lost' || rec.status === 'idle') continue;
+      if (isRecordObservationStale(rec, pos)) continue;
+      if (activeLease && refMatchesRecord(activeRef, rec) && hasLostUsableClaimOrPeer(rec, activeLease, null)) {
+        updateRecordPosition(rec, pos);
+        pendingReleases.push(markAccessLostAndRelease(rec, 'active', epoch));
+        storeDirty = true;
+      } else if (preempted && refMatchesRecord(preemptedRef, rec) && hasLostUsableClaimOrPeer(rec, preempted, null)) {
+        updateRecordPosition(rec, pos);
+        pendingReleases.push(markAccessLostAndRelease(rec, 'displaced', epoch));
+        storeDirty = true;
+      }
+    }
+    if (storeDirty) persistStore();
+    if (pendingReleases.length) {
+      await Promise.all(pendingReleases);
+    }
+  }
+
+  /**
    * P1-4 + Slice 2b: Feature-detect Slice 2 & Slice 2b via `capabilities` BEFORE any mutation.
    * - Unconfigured host -> all false (non-CU host).
    * - Configured but missing/unreachable/timing-out socket -> throws CuBrokerUnavailableError (503 fail-closed).
@@ -1463,6 +1685,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       throw new CuBrokerUnavailableError(`Computer-use broker status check failed (${reply.status})`);
     }
     recordCapabilities(reply.body);
+    await inspectStatusSnapshotForPeerLoss(reply.body);
     return {
       slice2: hasSlice2Capabilities(reply.body),
       bindTransfer: hasCap(SLICE2B_CAPABILITIES.bindTransfer),
@@ -1525,12 +1748,10 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           : (isRecord(body.lease) ? body.lease : matchedObj);
         const claimObj = isRecord(body.claim) ? body.claim : null;
         const claimStatus = claimObj ? pickString(claimObj, 'status') : null;
-        const claimedPeerAlive = claimStatus === 'already_claimed'
-          ? (renewObj && 'mcpClaimed' in renewObj ? hasLiveClaimedPeer(renewObj) : true)
-          : hasLiveClaimedPeer(renewObj);
-        const claimUsable = claimStatus === 'refreshed'
+        const birthMatches = snapshotMatchesBoundBirth(rec, renewObj);
+        const claimedPeerAlive = birthMatches && hasLiveClaimedPeer(renewObj);
+        const claimUsable = (claimStatus === 'refreshed' && birthMatches)
           || (claimStatus === 'already_claimed' && claimedPeerAlive)
-          || claimStatus === 'reclaimable'
           || ((claimStatus === 'outstanding' || claimStatus === null) && claimedPeerAlive);
         if (!claimUsable) {
           return {
@@ -1630,6 +1851,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         resetAllWatermarksForNewGeneration(brokerGeneration);
       }
       advanceGlobalPosition(pos, order === 'new_generation');
+      await inspectStatusSnapshotForPeerLoss(reply.body);
 
       const activeLease = isRecord(reply.body.lease) ? reply.body.lease : null;
       const activeLeaseRef = extractRef(activeLease);
@@ -2097,8 +2319,12 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     transferStates.set(handle, {
       aborted: false,
       committed: false,
+      ambiguous: false,
+      initialStatus: rec.status,
       originalPid: expectedPid,
       originalPidStartTime: expectedPidStartTime,
+      attemptedReplacementPid: null,
+      attemptedReplacementPidStartTime: null,
       replacementPid: null,
       replacementPidStartTime: null,
     });
@@ -2145,6 +2371,18 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     const prevPid = rec.pid;
     const prevStart = rec.pidStartTime;
     const prevDelivery = rec.delivery;
+    const transferState = transfer ? transferStates.get(handle) ?? null : null;
+    if (transferState) {
+      transferState.attemptedReplacementPid = proc.pid;
+      transferState.attemptedReplacementPidStartTime = proc.startTime;
+    } else if (!transfer) {
+      spawnBindStates.set(handle, {
+        ambiguous: false,
+        initialStatus: rec.status,
+        attemptedPid: proc.pid,
+        attemptedPidStartTime: proc.startTime,
+      });
+    }
     const previousBirth = processBirthKey(rec.pid, rec.pidStartTime);
     const nextBirth = processBirthKey(proc.pid, proc.startTime);
     rec.pid = proc.pid;
@@ -2159,6 +2397,8 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     let attemptEpoch: number | null = transfer ? transfer.expectedEpoch : null;
     let retriedEpoch = false;
     let transientRetries = 0;
+    let sawAmbiguousAttempt = false;
+    let definiteNotCommitted = false;
     let reply: { status: number; body: unknown } | null = null;
 
     try {
@@ -2183,6 +2423,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         try {
           reply = await requestBrokerOrUnavailable('POST', '/v1/lease/bind', bindPayload);
         } catch (error) {
+          sawAmbiguousAttempt = true;
           if (
             error instanceof CuBrokerUnavailableError
             && (error.brokerCode === 'worker_exit_unconfirmed' || error.brokerCode === 'state_persist_failed')
@@ -2220,15 +2461,38 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           await boundedRetryDelay(pickNonNegInt(body, 'retryAfterMs'));
           continue;
         }
+        if (reply.status >= 400 && reply.status < 500 && !sawAmbiguousAttempt) {
+          definiteNotCommitted = true;
+        } else {
+          sawAmbiguousAttempt = true;
+        }
         const message = pickString(body, 'message') ?? pickString(body, 'error') ?? `cu-broker lease bind failed (${reply.status})`;
         throw httpError(message, reply.status >= 400 ? reply.status : 502);
       }
 
       if (!reply || reply.status !== 200 || !isRecord(reply.body)) {
+        sawAmbiguousAttempt = true;
         throw httpError('cu-broker lease bind did not succeed', 502);
       }
     } catch (bindError) {
-      if (transfer) {
+      if (!definiteNotCommitted) {
+        // Any ambiguous bind result (transport error, 5xx, applied:"unknown", no reply) is
+        // treated as POSSIBLY COMMITTED: stop heartbeats, mark access_lost, keep the record
+        // tracked, and let abortSpawn release via owner_match with birth fallbacks.
+        if (transferState) {
+          transferState.ambiguous = true;
+        } else {
+          const spawnState = spawnBindStates.get(handle);
+          if (spawnState) spawnState.ambiguous = true;
+        }
+        if (transfer && rec.pendingTransferClaimId === transfer.claimId) {
+          rec.pendingTransferClaimId = null;
+        }
+        clearHeartbeat(rec);
+        rec.status = 'access_lost';
+        rec.pendingReleaseCleanup = true;
+        persistStore();
+      } else if (transfer) {
         rec.pid = prevPid;
         rec.pidStartTime = prevStart;
         rec.delivery = prevDelivery;
@@ -2240,11 +2504,10 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     }
 
     if (transfer) {
-      const state = transferStates.get(handle);
-      if (state) {
-        state.committed = true;
-        state.replacementPid = proc.pid;
-        state.replacementPidStartTime = proc.startTime;
+      if (transferState) {
+        transferState.committed = true;
+        transferState.replacementPid = proc.pid;
+        transferState.replacementPidStartTime = proc.startTime;
       }
       if (rec.pendingTransferClaimId === transfer.claimId) {
         rec.pendingTransferClaimId = null;
@@ -2316,32 +2579,52 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       if (rec.pendingTransferClaimId === handle.transfer.claimId) {
         rec.pendingTransferClaimId = null;
       }
-      if (!state?.committed) {
+      const initialTarget: 'active' | 'displaced' = (state?.initialStatus === 'preempted' || rec.status === 'preempted')
+        ? 'displaced'
+        : 'active';
+      const origPid = state?.originalPid ?? handle.transfer.expectedPid;
+      const origStart = state?.originalPidStartTime ?? handle.transfer.expectedPidStartTime;
+      const originalBirth = origPid > 1 && origStart ? { pid: origPid, startTime: origStart } : null;
+
+      if (!state?.committed && !state?.ambiguous) {
         await abortStagedTransfer(rec, handle);
-        // Before bind commits, keep the lease ONLY when the proven original pre-transfer
-        // birth is still alive and still matches the record's bound birth. Never treat an
-        // arbitrary live rec.pid as proof the old pane survived.
-        const origPid = state?.originalPid ?? handle.transfer.expectedPid;
-        const origStart = state?.originalPidStartTime ?? handle.transfer.expectedPidStartTime;
-        const originalProvenAlive = origPid > 1
-          && Boolean(origStart)
-          && rec.pid === origPid
-          && rec.pidStartTime === origStart
-          && processAlive({ pid: origPid, startTime: origStart });
+        // Before bind commits (and with no ambiguous bind outcome), keep the lease ONLY when
+        // the proven original pre-transfer birth is still alive and still matches the record.
+        const originalProvenAlive = originalBirth !== null
+          && rec.pid === originalBirth.pid
+          && rec.pidStartTime === originalBirth.startTime
+          && processAlive(originalBirth);
         if (originalProvenAlive) {
           return;
         }
-        await releaseRecord(rec);
+        await releaseOwnedLeaseWithBirthFallbacks(rec, [originalBirth, null], initialTarget);
         return;
       }
-      // After bind committed to the replacement birth, any registration or launch failure
-      // MUST stop heartbeats and release/cancel the replacement birth — even if tmux cleanup
-      // failed and the replacement process is still alive.
-      if (state.replacementPid !== null && state.replacementPidStartTime !== null) {
-        rec.pid = state.replacementPid;
-        rec.pidStartTime = state.replacementPidStartTime;
-      }
-      await releaseRecord(rec);
+
+      // Bind committed OR outcome was ambiguous (possibly committed): stop heartbeats, keep
+      // the record marked access_lost until release is confirmed or broker shows the seat is
+      // not ours, and release/cancel via owner_match trying replacement -> original -> no-pid.
+      const replPid = state.replacementPid ?? state.attemptedReplacementPid;
+      const replStart = state.replacementPidStartTime ?? state.attemptedReplacementPidStartTime;
+      const replacementBirth = replPid !== null && replPid > 1 && replStart
+        ? { pid: replPid, startTime: replStart }
+        : null;
+      await releaseOwnedLeaseWithBirthFallbacks(rec, [replacementBirth, originalBirth, null], initialTarget);
+      return;
+    }
+
+    const spawnState = spawnBindStates.get(handle);
+    const initialTarget: 'active' | 'displaced' = (spawnState?.initialStatus === 'preempted' || rec.status === 'preempted')
+      ? 'displaced'
+      : 'active';
+    if (spawnState?.ambiguous || hasCap(SLICE2B_CAPABILITIES.ownerMatch)) {
+      const attemptedBirth = spawnState?.attemptedPid !== null && spawnState?.attemptedPid !== undefined && spawnState.attemptedPid > 1 && spawnState.attemptedPidStartTime
+        ? { pid: spawnState.attemptedPid, startTime: spawnState.attemptedPidStartTime }
+        : null;
+      const recBirth = rec.pid !== null && rec.pid > 1 && rec.pidStartTime
+        ? { pid: rec.pid, startTime: rec.pidStartTime }
+        : null;
+      await releaseOwnedLeaseWithBirthFallbacks(rec, [attemptedBirth, recBirth, null], initialTarget);
       return;
     }
     await releaseRecord(rec);

@@ -193,7 +193,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 ? {
                     pendingClaim: lease.sessionId ? activeClaims.has(lease.sessionId) : false,
                     stagedTransfer: lease.sessionId ? stagedClaims.has(lease.sessionId) : false,
-                    allowReclaim: false,
+                    allowReclaim: lease.allowReclaim === true,
                 }
                 : {}),
             expiresAt: lease.expiresAt,
@@ -216,7 +216,7 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 ? {
                     pendingClaim: lease.sessionId ? activeClaims.has(lease.sessionId) : false,
                     stagedTransfer: lease.sessionId ? stagedClaims.has(lease.sessionId) : false,
-                    allowReclaim: false,
+                    allowReclaim: lease.allowReclaim === true,
                 }
                 : {}),
         };
@@ -356,6 +356,32 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 reason: 'claimed_peer_reaped',
                 target: target === 'preempted' ? 'displaced' : 'active',
             });
+        },
+        simulateClaimExpired(target = 'active') {
+            const lease = target === 'preempted' ? ctrl.preempted : ctrl.lease;
+            if (!lease)
+                throw new Error(`No ${target} lease to expire claim from`);
+            if (lease.sessionId) {
+                const claim = activeClaims.get(lease.sessionId);
+                if (claim) {
+                    try {
+                        fs.unlinkSync(claim.claimFile);
+                    }
+                    catch { }
+                }
+                activeClaims.delete(lease.sessionId);
+            }
+            ctrl.emitEvent('lease_changed', {
+                ...ctrl.snapshotPayload(),
+                reason: 'claim_expired',
+                target: target === 'preempted' ? 'displaced' : 'active',
+            });
+        },
+        setAllowReclaim(allow, target = 'active') {
+            const lease = target === 'preempted' ? ctrl.preempted : ctrl.lease;
+            if (!lease)
+                throw new Error(`No ${target} lease to update allowReclaim`);
+            lease.allowReclaim = allow;
         },
         resetIdleForTest() {
             revokeSessionClaims(ctrl.lease?.sessionId ?? null);
@@ -835,11 +861,13 @@ async function startFakeCuBroker(socketPath, claimDir) {
                 // Slice 2b bind_transfer defers pid_dead reap for sid while in rebind window!
                 reapDeadBirths(slice2bCapabilities.has(SLICE2B_CAPABILITIES.bindTransfer) ? sid : null);
                 bindCalls.push(body);
-                if (ctrl.nextBindError) {
-                    const injected = ctrl.nextBindError;
+                const injectedBindError = ctrl.nextBindError;
+                if (injectedBindError) {
                     ctrl.nextBindError = null;
-                    sendJson(res, injected.status, { ...ctrl.snapshotPayload(), ...injected.body });
-                    return;
+                    if (!injectedBindError.commitBeforeError) {
+                        sendJson(res, injectedBindError.status, { ...ctrl.snapshotPayload(), ...injectedBindError.body });
+                        return;
+                    }
                 }
                 const isActive = ctrl.lease?.sessionId === sid && ctrl.lease.holderKind === 'agent';
                 const isDisplaced = ctrl.preempted?.sessionId === sid && ctrl.preempted.holderKind === 'agent';
@@ -910,6 +938,10 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     activeClaim.expectedPid = target.pid;
                     activeClaim.expectedPidStartTime = target.pidStartTime;
                     committedClaimId = activeClaim.claimId;
+                }
+                if (injectedBindError?.commitBeforeError) {
+                    sendJson(res, injectedBindError.status, injectedBindError.body);
+                    return;
                 }
                 ctrl.emitEvent('lease_changed', {
                     ...ctrl.snapshotPayload(),
@@ -983,10 +1015,10 @@ async function startFakeCuBroker(socketPath, claimDir) {
                     claimInfo = { status: 'outstanding', claimId: existingClaim.claimId, claimFile: existingClaim.claimFile, bound: true, staged: false, allowReclaim: false };
                 }
                 else if (target.mcpClaimed && target.claimedPid) {
-                    claimInfo = { status: 'already_claimed', claimedPeer: { pid: target.claimedPid }, allowReclaim: false };
+                    claimInfo = { status: 'already_claimed', claimedPeer: { pid: target.claimedPid }, allowReclaim: target.allowReclaim === true };
                 }
                 else if (issueClaim === false) {
-                    claimInfo = { status: 'none', allowReclaim: false };
+                    claimInfo = { status: target.allowReclaim === true ? 'reclaimable' : 'none', allowReclaim: target.allowReclaim === true };
                 }
                 else {
                     const claimId = `claim-${++nonceSeq}`;
@@ -4691,4 +4723,455 @@ test('unit: F3 — restart while CU lease is checking returns typed retryable 40
     assert.equal(broker.acquireCalls.length, acqBefore);
     assert.equal(broker.claimNonceCalls.length, claimBefore);
     assert.equal(broker.bindCalls.length, bindBefore);
+});
+test('unit: G1 — ambiguous bind (503 applied:"unknown" after commit or pre-commit) stops heartbeats, releases via owner_match (replacement -> original -> no-pid, zero force:true), and keeps access_lost record until confirmed', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-g1-'));
+    const sockPath = path.join(tmpDir, 'broker.sock');
+    const claimDir = path.join(tmpDir, 'claims');
+    const broker = await startFakeCuBroker(sockPath, claimDir);
+    broker.enableSlice2b();
+    t.after(async () => {
+        await broker.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    const client = createCuBrokerClient({ socketPath: () => sockPath });
+    // Case 1 (required): Real tmux + SessionLaunch — bind commits replacement birth then returns
+    // 503 applied:"unknown" -> launch fails -> heartbeats stop and broker ends with no lease for us!
+    {
+        const tmuxDir = tmux.tmuxTmpdir();
+        fs.mkdirSync(tmuxDir, { recursive: true, mode: 0o700 });
+        const tmuxSock = path.join(tmuxDir, `g1-ambig-bind-${process.pid}-${Date.now()}`);
+        const fakeOmp = path.join(tmpDir, 'fake-omp-g1.js');
+        writeFakeOmpScript(fakeOmp, require.resolve('../lib/process-identity'), {
+            envDir: path.join(tmpDir, 'env'),
+            cmdDir: path.join(tmpDir, 'cmd'),
+            holdRegisterFlag: path.join(tmpDir, 'no-hold'),
+        });
+        const prevOmpCmd = process.env.PI_DISH_OMP_COMMAND;
+        process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${fakeOmp}`;
+        t.after(() => {
+            if (prevOmpCmd === undefined)
+                delete process.env.PI_DISH_OMP_COMMAND;
+            else
+                process.env.PI_DISH_OMP_COMMAND = prevOmpCmd;
+            try {
+                (0, node_child_process_1.execFileSync)('tmux', ['-S', tmuxSock, 'kill-server'], { stdio: 'ignore', timeout: 10_000 });
+            }
+            catch { }
+        });
+        broker.enforceRealPids = true;
+        const leases = createCuAgentLeases({
+            broker: client,
+            storeFile: () => path.join(tmpDir, 'g1-real-leases.json'),
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 50,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        t.after(() => leases.stop());
+        const sessionLaunch = createSessionLaunch({
+            runHarnessModelCommand: async () => [],
+            cuLeases: leases,
+        });
+        const { getHarness } = require('../lib/harnesses');
+        const { getRegisteredSessionByNativeId, invalidateRegistryCache } = require('../lib/bridge-session');
+        const ompDescriptor = (0, test_types_js_1.present)(getHarness('omp'));
+        const initialLaunch = await sessionLaunch.launchNewSession({
+            descriptor: ompDescriptor,
+            cwd: tmpDir,
+            target: { type: 'tmux', socket: tmuxSock, newTmuxSession: 'g1-test' },
+        });
+        assert.equal(initialLaunch.kind, 'ready', initialLaunch.kind === 'ready' ? '' : String(initialLaunch.error));
+        const initialRouteId = initialLaunch.id;
+        const initialSpawn = (0, test_types_js_1.present)(tmux.getSpawn(initialRouteId));
+        const initialOwnerId = (0, test_types_js_1.present)(leases.ownerIdForSession(initialRouteId));
+        invalidateRegistryCache();
+        const initialNative = (0, test_types_js_1.present)(resolveSessionRoute(initialRouteId)).nativeSessionId;
+        const initialReg = (0, test_types_js_1.present)(getRegisteredSessionByNativeId('omp', initialNative));
+        const sessionFile = String(initialReg.sessionFile);
+        const initialPaneRec = (0, test_types_js_1.record)(initialSpawn.paneProcess);
+        const initialPaneProc = { pid: Number(initialPaneRec.pid), startTime: String(initialPaneRec.startTime) };
+        const hbBefore = broker.heartbeatCalls.length;
+        await waitFor(() => broker.heartbeatCalls.length > hbBefore, 'initial lease sends heartbeats before transfer');
+        // Broker commits the bind to the replacement birth, then answers 503 applied:"unknown"!
+        broker.nextBindError = {
+            status: 503,
+            commitBeforeError: true,
+            body: { ok: false, code: 'broker_busy', applied: 'unknown', message: 'Bind commit grace elapsed; outcome unknown' },
+        };
+        const relBefore = broker.releaseCalls.length;
+        const outcome = await sessionLaunch.spawnHarnessInTmux({
+            descriptor: ompDescriptor,
+            target: { socket: tmuxSock },
+            args: ompDescriptor.argv.resume({ file: sessionFile }),
+            cwd: tmpDir,
+            name: 'G1 Ambiguous Bind',
+            restartPane: {
+                sessionId: initialRouteId,
+                paneId: initialSpawn.paneId,
+                paneProcess: initialPaneProc,
+                spawn: initialSpawn,
+                registry: initialReg,
+            },
+            cuSlice2: true,
+            cuBindTransfer: true,
+        });
+        assert.notEqual(outcome.kind, 'ready', 'ambiguous 503 applied:"unknown" bind fails launch');
+        assert.equal(broker.state, 'idle', 'broker ends with no lease for us after ambiguous committed bind');
+        assert.equal(broker.lease, null);
+        assert.equal(broker.preempted, null);
+        assert.ok(broker.releaseCalls.length > relBefore, 'owner_match release sent for committed replacement birth');
+        const lastBind = broker.bindCalls[broker.bindCalls.length - 1];
+        const rel = broker.releaseCalls[broker.releaseCalls.length - 1];
+        assert.equal(rel.ownerId, initialOwnerId);
+        assert.equal(rel.expectedPid, lastBind.pid, 'tried attempted replacement birth first');
+        assert.equal(rel.expectedPidStartTime, lastBind.pidStartTime);
+        assert.equal(rel.sessionSecret, undefined, 'pure owner_match release');
+        assert.equal(rel.force, undefined, 'never sends force:true');
+        assert.equal(leases.ownerIdForSession(initialRouteId), null);
+        const hbAfter = broker.heartbeatCalls.length;
+        await new Promise(resolve => setTimeout(resolve, 90));
+        assert.equal(broker.heartbeatCalls.length, hbAfter, 'heartbeats stop completely after ambiguous bind abort');
+        leases.stop();
+        broker.enforceRealPids = false;
+        broker.resetIdleForTest();
+    }
+    // Case 2: Fallback order (replacement -> original -> no-pid) and unconfirmed-release retention (keep access_lost).
+    {
+        const storePath = path.join(tmpDir, 'g1-fallback-leases.json');
+        const alivePids = new Set(['68001:680010', '68002:680020', '68003:680030', '68004:680040', '68005:680050', '68006:680060']);
+        const mgr = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: p => alivePids.has(`${p.pid}:${p.startTime}`),
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        t.after(() => mgr.stop());
+        await mgr.probeCapabilities();
+        // 2a. Bind returns 503 applied:"unknown" WITHOUT committing (broker still holds original birth 68001):
+        //     abortSpawn tries 68002 (409 pid_mismatch) -> falls back to 68001 -> released to idle!
+        const sidA = '~sk1_omp_g1_fallback_orig';
+        const hA = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sidA }));
+        await mgr.bindSpawnedProcess(hA, { pid: 68001, startTime: '680010' });
+        mgr.attachSpawnedSession(hA, { sessionId: sidA, pid: 68001, pidStartTime: '680010' });
+        const tA = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sidA }));
+        broker.nextBindError = {
+            status: 503,
+            commitBeforeError: false,
+            body: { ok: false, code: 'broker_busy', applied: 'unknown', message: 'Outcome unknown (did not commit)' },
+        };
+        await assert.rejects(() => mgr.bindSpawnedProcess(tA, { pid: 68002, startTime: '680020' }));
+        const relBeforeA = broker.releaseCalls.length;
+        await mgr.abortSpawn(tA);
+        assert.equal(broker.state, 'idle', 'fell back from replacement birth to original birth and released');
+        const callsA = broker.releaseCalls.slice(relBeforeA);
+        assert.equal(callsA.length, 2);
+        assert.equal(callsA[0].expectedPid, 68002, '1st attempt used attempted replacement birth');
+        assert.equal(callsA[1].expectedPid, 68001, '2nd attempt fell back to original birth');
+        // 2b. Broker holds a third birth (68099) for our exact (ownerId, sessionId):
+        //     abortSpawn tries replacement (pid_mismatch) -> original (pid_mismatch) -> no expectedPid -> released!
+        const sidB = '~sk1_omp_g1_fallback_nopid';
+        const hB = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sidB }));
+        await mgr.bindSpawnedProcess(hB, { pid: 68003, startTime: '680030' });
+        mgr.attachSpawnedSession(hB, { sessionId: sidB, pid: 68003, pidStartTime: '680030' });
+        const tB = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sidB }));
+        broker.nextBindError = {
+            status: 503,
+            commitBeforeError: false,
+            body: { ok: false, code: 'broker_busy', applied: 'unknown', message: 'Outcome unknown' },
+        };
+        await assert.rejects(() => mgr.bindSpawnedProcess(tB, { pid: 68004, startTime: '680040' }));
+        // Mutate broker birth so both replacement (68004) and original (68003) get 409 pid_mismatch.
+        const leaseB = (0, test_types_js_1.present)(broker.lease);
+        leaseB.pid = 68099;
+        leaseB.pidStartTime = 680990;
+        const relBeforeB = broker.releaseCalls.length;
+        await mgr.abortSpawn(tB);
+        assert.equal(broker.state, 'idle', 'fell back to ownerId+sessionId without expectedPid and released');
+        const callsB = broker.releaseCalls.slice(relBeforeB);
+        assert.equal(callsB.length, 3);
+        assert.equal(callsB[0].expectedPid, 68004);
+        assert.equal(callsB[1].expectedPid, 68003);
+        assert.equal(callsB[2].expectedPid, undefined, '3rd attempt omitted expectedPid while keeping ownerId+sessionId+expectedState');
+        assert.equal(callsB[2].ownerId, hB.leaseOwnerId);
+        assert.equal(callsB[2].sessionId, hB.brokerSessionId);
+        // 2c. Release itself fails unconfirmed (503 broker_shutting_down) -> record MUST be kept marked access_lost
+        //     (not dropped early!), heartbeats stopped, and later releaseSession finishes releasing!
+        const sidC = '~sk1_omp_g1_keep_until_confirmed';
+        const hC = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sidC }));
+        await mgr.bindSpawnedProcess(hC, { pid: 68005, startTime: '680050' });
+        mgr.attachSpawnedSession(hC, { sessionId: sidC, pid: 68005, pidStartTime: '680050' });
+        const tC = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sidC }));
+        broker.nextBindError = {
+            status: 503,
+            commitBeforeError: true,
+            body: { ok: false, code: 'broker_busy', applied: 'unknown', message: 'Ambiguous commit' },
+        };
+        await assert.rejects(() => mgr.bindSpawnedProcess(tC, { pid: 68006, startTime: '680060' }));
+        broker.nextReleaseError = {
+            status: 503,
+            body: { ok: false, code: 'broker_shutting_down', message: 'Broker restarting' },
+        };
+        await mgr.abortSpawn(tC);
+        assert.equal(broker.state, 'agent', 'release was unconfirmed while broker was shutting down');
+        assert.equal(mgr.isDesktopAccessLost(sidC), true, 'unconfirmed release keeps record marked access_lost');
+        assert.equal(mgr.ownerIdForSession(sidC), null);
+        const persisted = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+        assert.equal(persisted.leases.some(r => r.leaseOwnerId === hC.leaseOwnerId), true, 'persisted store retains tracking until release is confirmed');
+        const hbC = broker.heartbeatCalls.length;
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(broker.heartbeatCalls.length, hbC, 'heartbeats stay stopped while release is unconfirmed');
+        // Once broker recovers, releaseSession completes cleanup and drops the record.
+        await mgr.releaseSession(sidC);
+        assert.equal(broker.state, 'idle', 'follow-up release confirmed once broker recovered');
+        assert.equal(mgr.isDesktopAccessLost(sidC), false, 'record removed once release confirmed');
+        assert.equal(broker.validationErrorCalls.length, 0);
+        assert.equal(broker.forcedMutationCalls.length, 0);
+    }
+});
+test('unit: G2 — with SSE down, peer-gone heartbeat reply and peer-gone /v1/status reply mark access_lost, stop heartbeats, and release via owner_match', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-g2-'));
+    const sockPath = path.join(tmpDir, 'broker.sock');
+    const claimDir = path.join(tmpDir, 'claims');
+    const storePath = path.join(tmpDir, 'cu-agent-leases.json');
+    const broker = await startFakeCuBroker(sockPath, claimDir);
+    broker.enableSlice2b();
+    // Keep SSE completely unavailable throughout this test (no /v1/events stream!).
+    broker.eventsErrorStatus = 503;
+    t.after(async () => {
+        await broker.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    const client = createCuBrokerClient({ socketPath: () => sockPath });
+    // Case 1 (required): With SSE down, a peer-gone heartbeat reply -> access_lost, heartbeats stop, owner_match release!
+    {
+        const sid = '~sk1_omp_g2_heartbeat_peer_gone';
+        const mgr = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: p => p.pid === 69001 && p.startTime === '690010',
+            pidAlive: () => false,
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        t.after(() => mgr.stop());
+        await mgr.probeCapabilities();
+        const h = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sid }));
+        await mgr.bindSpawnedProcess(h, { pid: 69001, startTime: '690010' });
+        mgr.attachSpawnedSession(h, { sessionId: sid, pid: 69001, pidStartTime: '690010' });
+        // Confirm normal heartbeats run while pending claim exists.
+        const hbInitial = broker.heartbeatCalls.length;
+        await waitFor(() => broker.heartbeatCalls.length > hbInitial, 'heartbeats run while claim is pending');
+        assert.equal(broker.state, 'agent');
+        assert.equal(mgr.isDesktopAccessLost(sid), false);
+        assert.equal(broker.sseClients.size, 0, 'precondition: SSE is down');
+        // Peer dies / claim disappears on broker with NO SSE delivered!
+        broker.activeClaims.delete(h.brokerSessionId);
+        assert.ok(broker.lease);
+        broker.lease.mcpClaimed = false;
+        broker.lease.claimedPid = null;
+        broker.cursor += 1;
+        const relBefore = broker.releaseCalls.length;
+        await waitFor(() => broker.state === 'idle', 'peer-gone heartbeat reply triggers owner_match release with SSE down');
+        assert.equal(mgr.isDesktopAccessLost(sid), true, 'marks access_lost on peer-gone heartbeat reply');
+        assert.equal(mgr.ownerIdForSession(sid), null);
+        assert.equal(broker.releaseCalls.length, relBefore + 1);
+        const rel = broker.releaseCalls[broker.releaseCalls.length - 1];
+        assert.equal(rel.ownerId, h.leaseOwnerId);
+        assert.equal(rel.sessionId, h.brokerSessionId);
+        assert.equal(rel.expectedPid, 69001);
+        assert.equal(rel.expectedPidStartTime, 690010);
+        assert.equal(rel.sessionSecret, undefined);
+        assert.equal(rel.force, undefined);
+        const hbAfter = broker.heartbeatCalls.length;
+        await new Promise(resolve => setTimeout(resolve, 90));
+        assert.equal(broker.heartbeatCalls.length, hbAfter, 'heartbeats stopped immediately after peer-gone heartbeat reply');
+        mgr.stop();
+    }
+    // Case 2: With SSE down, a peer-gone /v1/status reply (probeCapabilities) -> access_lost, heartbeats stop, owner_match release!
+    {
+        const sid = '~sk1_omp_g2_status_peer_gone';
+        const mgr = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: p => p.pid === 69002 && p.startTime === '690020',
+            pidAlive: () => false,
+            heartbeatIntervalMs: 0,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        t.after(() => mgr.stop());
+        await mgr.probeCapabilities();
+        const h = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sid }));
+        await mgr.bindSpawnedProcess(h, { pid: 69002, startTime: '690020' });
+        mgr.attachSpawnedSession(h, { sessionId: sid, pid: 69002, pidStartTime: '690020' });
+        broker.activeClaims.delete(h.brokerSessionId);
+        assert.ok(broker.lease);
+        broker.lease.mcpClaimed = false;
+        broker.lease.claimedPid = null;
+        broker.cursor += 1;
+        const relBefore = broker.releaseCalls.length;
+        await mgr.probeCapabilities();
+        assert.equal(broker.state, 'idle', 'peer-gone /v1/status reply releases seat via owner_match');
+        assert.equal(mgr.isDesktopAccessLost(sid), true);
+        assert.equal(broker.releaseCalls.length, relBefore + 1);
+        assert.equal(broker.releaseCalls[broker.releaseCalls.length - 1].ownerId, h.leaseOwnerId);
+        mgr.stop();
+    }
+    // Case 3: Staged-transfer guard still protects an active transfer during /v1/status!
+    {
+        const sid = '~sk1_omp_g2_status_staged_guard';
+        const mgr = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: p => p.pid === 69003 && p.startTime === '690030',
+            pidAlive: () => false,
+            heartbeatIntervalMs: 0,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        t.after(() => mgr.stop());
+        await mgr.probeCapabilities();
+        const h = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sid }));
+        await mgr.bindSpawnedProcess(h, { pid: 69003, startTime: '690030' });
+        mgr.attachSpawnedSession(h, { sessionId: sid, pid: 69003, pidStartTime: '690030' });
+        const tHandle = (0, test_types_js_1.present)(await mgr.prepareTransfer({ sessionId: sid }));
+        broker.activeClaims.delete(h.brokerSessionId);
+        assert.ok(broker.lease);
+        broker.lease.mcpClaimed = false;
+        broker.cursor += 1;
+        await mgr.probeCapabilities();
+        assert.equal(broker.state, 'agent', 'staged transfer protects lease during /v1/status');
+        assert.equal(mgr.isDesktopAccessLost(sid), false);
+        await mgr.abortSpawn(tHandle);
+        mgr.stop();
+        broker.resetIdleForTest();
+    }
+    assert.equal(broker.validationErrorCalls.length, 0);
+    assert.equal(broker.forcedMutationCalls.length, 0);
+});
+test('unit: G3 — allowReclaim never counts as a usable claim; claim expiring before redemption with allowReclaim:true triggers access_lost and owner_match release', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-g3-'));
+    const sockPath = path.join(tmpDir, 'broker.sock');
+    const claimDir = path.join(tmpDir, 'claims');
+    const storePath = path.join(tmpDir, 'cu-agent-leases.json');
+    const broker = await startFakeCuBroker(sockPath, claimDir);
+    broker.enableSlice2b();
+    t.after(async () => {
+        await broker.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    const client = createCuBrokerClient({ socketPath: () => sockPath });
+    // Case 1 (required): First claim expires before redemption with allowReclaim:true -> access_lost, heartbeats stop, owner_match release!
+    {
+        const sid = '~sk1_omp_g3_expire_allow_reclaim';
+        const mgr = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: p => p.pid === 70001 && p.startTime === '700010',
+            pidAlive: () => false,
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        t.after(() => mgr.stop());
+        await mgr.probeCapabilities();
+        const h = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sid }));
+        await mgr.bindSpawnedProcess(h, { pid: 70001, startTime: '700010' });
+        mgr.attachSpawnedSession(h, { sessionId: sid, pid: 70001, pidStartTime: '700010' });
+        // Broker lease has allowReclaim: true, and MCP never redeemed the first claim!
+        broker.setAllowReclaim(true, 'active');
+        const hbBefore = broker.heartbeatCalls.length;
+        await waitFor(() => broker.heartbeatCalls.length > hbBefore, 'heartbeats run before first claim expires');
+        const relBefore = broker.releaseCalls.length;
+        broker.simulateClaimExpired('active');
+        mgr.handleBrokerEvent({
+            eventName: 'lease_changed',
+            authoritativeHello: false,
+            generation: broker.generation,
+            cursor: broker.cursor,
+            payload: { ...broker.snapshotPayload(), reason: 'claim_expired', target: 'active' },
+        });
+        await waitFor(() => broker.state === 'idle', 'claim_expired with allowReclaim:true releases seat via owner_match');
+        assert.equal(mgr.isDesktopAccessLost(sid), true, 'allowReclaim:true never masks expired claim');
+        assert.equal(mgr.ownerIdForSession(sid), null);
+        assert.equal(broker.releaseCalls.length, relBefore + 1);
+        const rel = broker.releaseCalls[broker.releaseCalls.length - 1];
+        assert.equal(rel.ownerId, h.leaseOwnerId);
+        assert.equal(rel.sessionId, h.brokerSessionId);
+        assert.equal(rel.sessionSecret, undefined);
+        assert.equal(rel.force, undefined);
+        const hbAfter = broker.heartbeatCalls.length;
+        await new Promise(resolve => setTimeout(resolve, 90));
+        assert.equal(broker.heartbeatCalls.length, hbAfter, 'heartbeats stopped after claim_expired release');
+        mgr.stop();
+    }
+    // Case 2: Status snapshot with allowReclaim:true and no pending claim / no live peer -> releases via owner_match!
+    {
+        const sid = '~sk1_omp_g3_status_allow_reclaim';
+        const mgr = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: p => p.pid === 70002 && p.startTime === '700020',
+            pidAlive: () => false,
+            heartbeatIntervalMs: 0,
+            livenessCheckMs: 0,
+            abortSession: async () => true,
+            resumeSession: async () => true,
+        });
+        t.after(() => mgr.stop());
+        await mgr.probeCapabilities();
+        const h = (0, test_types_js_1.present)(await mgr.prepareSpawn({ knownSessionId: sid }));
+        await mgr.bindSpawnedProcess(h, { pid: 70002, startTime: '700020' });
+        mgr.attachSpawnedSession(h, { sessionId: sid, pid: 70002, pidStartTime: '700020' });
+        broker.setAllowReclaim(true, 'active');
+        broker.activeClaims.delete(h.brokerSessionId);
+        broker.cursor += 1;
+        await mgr.probeCapabilities();
+        assert.equal(broker.state, 'idle', 'status snapshot with allowReclaim:true and no claim/peer releases seat');
+        assert.equal(mgr.isDesktopAccessLost(sid), true);
+        mgr.stop();
+    }
+    // Case 3: Startup reconcile when /v1/lease/renew returns claim.status === 'reclaimable' -> fails closed, marks access_lost, releases!
+    {
+        const sid = '~sk1_omp_g3_renew_reclaimable';
+        const first = createCuAgentLeases({
+            broker: client, storeFile: () => storePath, processAlive: () => true,
+            heartbeatIntervalMs: 0, livenessCheckMs: 0, abortSession: async () => true, resumeSession: async () => true,
+        });
+        const h = (0, test_types_js_1.present)(await first.prepareSpawn({ knownSessionId: sid }));
+        await first.bindSpawnedProcess(h, { pid: 70003, startTime: '700030' });
+        broker.setAllowReclaim(true, 'active');
+        broker.activeClaims.delete(h.brokerSessionId);
+        first.stop();
+        const aborts = [];
+        const restarted = createCuAgentLeases({
+            broker: client,
+            storeFile: () => storePath,
+            processAlive: p => p.pid === 70003 && p.startTime === '700030',
+            findSessionIdByProcess: p => (p.pid === 70003 && p.startTime === '700030' ? sid : null),
+            heartbeatIntervalMs: 25,
+            livenessCheckMs: 0,
+            abortSession: async (target) => { aborts.push(target); return true; },
+            resumeSession: async () => true,
+        });
+        const hbBefore = broker.heartbeatCalls.length;
+        await restarted.reconcile();
+        assert.equal(restarted.isDesktopAccessLost(sid), true, 'renew claim.status=reclaimable marks access_lost');
+        assert.equal(broker.state, 'idle', 'renew claim.status=reclaimable releases seat via owner_match');
+        await waitFor(() => aborts.length === 1, 'renew claim.status=reclaimable aborts session');
+        await new Promise(resolve => setTimeout(resolve, 75));
+        assert.equal(broker.heartbeatCalls.length, hbBefore, 'starts zero heartbeats');
+        restarted.stop();
+    }
+    assert.equal(broker.validationErrorCalls.length, 0);
+    assert.equal(broker.forcedMutationCalls.length, 0);
 });
