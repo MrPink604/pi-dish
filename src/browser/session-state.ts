@@ -100,7 +100,15 @@ export function createSessionState(options: SessionStateOptions) {
     sessions = merged;
     if (currentSession) {
       const fresh = findSession(currentSession.id, currentSession.host);
-      if (fresh) currentSession = { ...currentSession, ...fresh };
+      if (fresh) {
+        const mergedCurrent: MutableSessionEntry = { ...currentSession, ...fresh };
+        // CU lease-status fields are omitted by /api/sessions when absent/false;
+        // clear stale CU flags on authoritative list refresh so badges never stick.
+        if (fresh.cuOwnerId === undefined) delete mergedCurrent.cuOwnerId;
+        if (fresh.cuDesktopAccessLost === undefined) delete mergedCurrent.cuDesktopAccessLost;
+        if (fresh.cuDesktopChecking === undefined) delete mergedCurrent.cuDesktopChecking;
+        currentSession = mergedCurrent;
+      }
     }
     options.onListsChanged();
     options.onCurrentChanged();

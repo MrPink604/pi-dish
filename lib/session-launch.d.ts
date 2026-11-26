@@ -31,8 +31,6 @@ export interface NewSessionLaunchOptions {
     target?: HarnessLaunchTarget | null;
     /** Harness private root, outside fleet backups. */
     private?: boolean;
-    /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
-    cuSlice2?: boolean;
 }
 export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
     descriptor: HarnessDescriptor;

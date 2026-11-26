@@ -286,3 +286,50 @@ test('ordered host publications keep borrowed rows independent when reused under
     assert.equal(at(peer.active, 0).name, 'remote acknowledgement');
     assert.equal(found(state, 'same', 'self').name, 'local acknowledgement');
 });
+test('authoritative list refresh clears absent CU status fields while keeping detached metadata and old-server compatibility', () => {
+    const { state } = fixture();
+    state.setSessionLists({
+        active: [{
+                id: 'one',
+                name: 'cu session',
+                model: 'p/m',
+                cuDesktopChecking: true,
+                cuOwnerId: 'cu-owner-1',
+            }],
+    });
+    state.setCurrentSession('one');
+    assert.equal(current(state).cuDesktopChecking, true);
+    assert.equal(current(state).cuOwnerId, 'cu-owner-1');
+    assert.equal(current(state).cuDesktopAccessLost, undefined);
+    // Authoritative poll after reconcile finishes omits cuDesktopChecking -> badge must not stick on Checking…
+    state.setSessionLists({
+        active: [{
+                id: 'one',
+                name: 'reconciled',
+                cuOwnerId: 'cu-owner-1',
+            }],
+    });
+    assert.equal(current(state).cuDesktopChecking, undefined, 'absent cuDesktopChecking cleared on refresh');
+    assert.equal(current(state).cuOwnerId, 'cu-owner-1');
+    assert.equal(current(state).model, 'p/m', 'detached non-CU metadata still preserved');
+    // Transition to access_lost, then authoritative poll from an old server (or post-restart session) omitting all CU fields.
+    state.setSessionLists({
+        active: [{
+                id: 'one',
+                name: 'lost',
+                cuDesktopAccessLost: true,
+            }],
+    });
+    assert.equal(current(state).cuDesktopAccessLost, true);
+    assert.equal(current(state).cuOwnerId, undefined, 'absent cuOwnerId cleared on refresh');
+    state.setSessionLists({
+        active: [{
+                id: 'one',
+                name: 'old-server-row',
+            }],
+    });
+    assert.equal(current(state).cuDesktopAccessLost, undefined, 'absent cuDesktopAccessLost cleared on refresh');
+    assert.equal(current(state).cuDesktopChecking, undefined);
+    assert.equal(current(state).cuOwnerId, undefined);
+    assert.equal(current(state).model, 'p/m', 'old server omitting CU fields preserves non-CU detached metadata');
+});

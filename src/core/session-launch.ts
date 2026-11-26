@@ -51,8 +51,6 @@ export interface NewSessionLaunchOptions {
   target?: HarnessLaunchTarget | null;
   /** Harness private root, outside fleet backups. */
   private?: boolean;
-  /** Pre-probed CU Slice-2 capability decision (avoids re-probing `/v1/status` on restart). */
-  cuSlice2?: boolean;
 }
 
 export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
@@ -991,7 +989,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     }
   }
 
-  async function launchNewSession({ descriptor, name, model, thinking, cwd, target, private: privateSession = false, cuSlice2 }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
+  async function launchNewSession({ descriptor, name, model, thinking, cwd, target, private: privateSession = false }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
       // Downstream calls own malformed-cwd failures; these assertions don't validate cwd.
       if (cwd && (cwd as string).startsWith('~')) cwd = path.join(process.env.HOME!, (cwd as string).slice(1).replace(/^\//, ''));
@@ -1006,7 +1004,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       const args = descriptor.argv.new({
         model: model ?? undefined, thinking: thinking ?? undefined, cwd, ...(sessionDir ? { sessionDir } : {}),
       });
-      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name, cuSlice2 }, 'spawn', async () => {
+      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name }, 'spawn', async () => {
         const rpc = await createRPCSession({
           model: model ?? undefined, thinking: thinking ?? undefined, cwd: cwd ?? undefined,
           ...(sessionDir ? { sessionDir } : {}),

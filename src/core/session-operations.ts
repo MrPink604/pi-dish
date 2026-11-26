@@ -17,9 +17,9 @@ import { LifecycleInterruption, OwnershipRefusal, liveSessionSupports, recoveryR
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import { cleanupProcesses } from './session-launch';
 import type { CleanupEvidence, HarnessLaunchTarget, LaunchOutcome, ResumeUncertainty, SessionLaunch } from './session-launch';
-import { ensurePrivateRoot, isPrivateSessionFile, privateRootFor } from './private-sessions';
 import {
   CuBrokerUnavailableError,
+  CuLeaseCheckingError,
   CuSeatBusyError,
   CuTransferUnavailableError,
   cuBrokerUnavailableResponseFields,
@@ -50,6 +50,8 @@ export interface SessionOperationObservations {
   cuCheckCapabilities?(): Promise<CuBrokerCapabilities>;
   /** True when the session currently holds a transferable authenticated CU lease. */
   cuCanTransferSession?(sessionId: string): boolean;
+  /** True while startup reconciliation is still verifying this session's CU lease (`checking` state). */
+  cuIsChecking?(sessionId: string): boolean;
 }
 
 export interface CreateSessionOptions {
@@ -162,6 +164,9 @@ function sessionOperationResponse(outcome: SessionOperationOutcome): SessionOper
     response.body.holder = outcome.cause.holder;
   } else if (outcome.cause instanceof CuBrokerUnavailableError) {
     Object.assign(response.body, cuBrokerUnavailableResponseFields(outcome.cause));
+  } else if (outcome.cause instanceof CuLeaseCheckingError) {
+    response.body.code = outcome.cause.code;
+    response.body.retryable = outcome.cause.retryable;
   }
   if (outcome.kind === 'replacement-not-ready') response.body.stopped = true;
   if (outcome.reportStopUncertain) {
@@ -813,8 +818,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
       }
       const spawn = restartCapture.placement;
       let registry: BridgeRegistryEntry | null = restartCapture.kind === 'pane-restart' ? restartCapture.registry : null;
-      let sessionFile: string | null = null;
-      let privateSessionDir: string | null = null;
+      let sessionFile: string;
       let cwd: string | undefined;
       let resumeModel: string | undefined;
       let windowName: string | null;
@@ -832,28 +836,9 @@ export function createSessionOperations(observations: SessionOperationObservatio
             ? sourceForIdentity(route.harnessId, route.nativeSessionId, filePath(bridgeRegistry.sessionFile))
             : findSessionSource(sessionId);
         } catch {}
-        const rawCandidate = sessionSource?.file || bridgeRegistry.sessionFile;
-        if (typeof rawCandidate !== 'string' || !rawCandidate) {
-          return noAction(409, 'The active agent has no resumable session file.');
-        }
-        try {
-          sessionFile = fs.realpathSync(rawCandidate);
-        } catch (err) {
-          const isEnoent = record(err) && err.code === 'ENOENT';
-          if (isEnoent && descriptor.id === 'omp' && path.isAbsolute(rawCandidate)) {
-            // OMP creates its JSONL lazily on the first prompt; restart a never-prompted
-            // session cleanly as a fresh session instead of refusing with 409.
-            sessionFile = null;
-            if (isPrivateSessionFile(descriptor, rawCandidate)) {
-              privateSessionDir = privateRootFor(descriptor);
-            }
-          } else {
-            return noAction(409, 'The active agent has no resumable session file.');
-          }
-        }
-        cwd = sessionFile
-          ? observedCwd(observations.readSessionCwd(sourceForIdentity(route.harnessId, route.nativeSessionId, sessionFile)))
-          : observedCwd(bridgeRegistry.cwd);
+        try { sessionFile = fs.realpathSync(filePath(sessionSource?.file || bridgeRegistry.sessionFile)); }
+        catch { return noAction(409, 'The active agent has no resumable session file.'); }
+        cwd = observedCwd(observations.readSessionCwd(sourceForIdentity(route.harnessId, route.nativeSessionId, sessionFile)));
         if (!cwd || !fs.existsSync(cwd)) cwd = process.env.HOME;
         resumeModel = observedText(bridgeRegistry.model) || undefined;
         windowName = observedText(bridgeRegistry.name) || null;
@@ -867,6 +852,12 @@ export function createSessionOperations(observations: SessionOperationObservatio
           if (error instanceof OwnershipRefusal) return noAction(error.status, error.message, error);
           throw error;
         }
+      }
+      // Refuse restart while startup reconciliation is still checking this session's CU lease;
+      // never fall through to a destructive fresh restart while status is 'checking'.
+      if (restartCapture.kind === 'pane-restart' && descriptor.id === 'omp' && observations.cuIsChecking?.(sessionId)) {
+        const err = new CuLeaseCheckingError();
+        return noAction(err.status, err.message, err);
       }
       // Probe CU capabilities ONCE before touching the pane (P1-1 & P1-4).
       // - Slice 2b (`bind_transfer`) with an authenticated active/displaced lease:
@@ -888,9 +879,17 @@ export function createSessionOperations(observations: SessionOperationObservatio
             return noAction(errorStatus(error, 503), `The agent was not restarted: ${errorMessage(error)}`, error);
           }
         }
+        if (observations.cuIsChecking?.(sessionId)) {
+          const err = new CuLeaseCheckingError();
+          return noAction(err.status, err.message, err);
+        }
       }
       let workerStopped = false;
       const runFreshCuRestart = async (): Promise<SessionOperationOutcome> => {
+        if (observations.cuIsChecking?.(sessionId)) {
+          const err = new CuLeaseCheckingError();
+          return noAction(err.status, err.message, err);
+        }
         const isHeadless = path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket());
         const prevLocation = isHeadless ? null : await tmux.paneLocation(spawn.socket, spawn.paneId).catch(() => null);
         const stopped = await performSessionClose(sessionId, { beforeAction });
@@ -903,31 +902,19 @@ export function createSessionOperations(observations: SessionOperationObservatio
             ? { type: 'tmux', socket: spawn.socket, tmuxSession: prevLocation.tmuxSession }
             : { type: 'tmux', socket: spawn.socket, newTmuxSession: prevLocation.tmuxSession };
         }
-        const outcome = sessionFile !== null
-          ? await launch.launchResumedSession({
-            descriptor,
-            sessionFile,
-            sessionId,
-            cwd,
-            name: windowName,
-            target: launchTarget,
-            model: resumeModel,
-            cuSlice2: true,
-          })
-          : await launch.launchNewSession({
-            descriptor,
-            cwd,
-            name: windowName,
-            target: launchTarget,
-            model: resumeModel,
-            private: privateSessionDir !== null,
-            cuSlice2: true,
-          });
+        const outcome = await launch.launchResumedSession({
+          descriptor,
+          sessionFile,
+          sessionId,
+          cwd,
+          name: windowName,
+          target: launchTarget,
+          model: resumeModel,
+          cuSlice2: true,
+        });
         if (outcome.kind !== 'ready') {
-          if (sessionFile !== null) {
-            if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
-            else rememberUncertainPlacement(sessionFile, outcome);
-          }
+          if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
+          else rememberUncertainPlacement(sessionFile, outcome);
           throw outcome.error;
         }
         return {
@@ -938,18 +925,6 @@ export function createSessionOperations(observations: SessionOperationObservatio
             paneId: tmux.getSpawn(outcome.id)?.paneId,
           },
         };
-      };
-
-      const buildRespawnArgs = () => {
-        if (sessionFile !== null) {
-          return descriptor.argv.resume({ file: sessionFile, model: resumeModel });
-        }
-        if (privateSessionDir) ensurePrivateRoot(privateSessionDir);
-        return descriptor.argv.new({
-          model: resumeModel,
-          cwd,
-          ...(privateSessionDir ? { sessionDir: privateSessionDir } : {}),
-        });
       };
 
       try {
@@ -964,7 +939,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
           const outcome = await launch.spawnHarnessInTmux({
             descriptor,
             target: { socket: spawn.socket },
-            args: buildRespawnArgs(),
+            args: descriptor.argv.resume({ file: sessionFile, model: resumeModel }),
             cwd,
             name: windowName,
             hidden: path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket()),
@@ -981,13 +956,12 @@ export function createSessionOperations(observations: SessionOperationObservatio
             return { kind: 'stopped', replacement: { id: outcome.id, placement: 'tmux', paneId: spawn.paneId } };
           }
           if (outcome.error instanceof CuTransferUnavailableError) {
-            // Lease became non-transferable before touching the pane; fall back to fresh CU restart.
+            // Lease became non-transferable before touching the pane; fall back to fresh CU restart
+            // unless reconcile is checking.
             return await runFreshCuRestart();
           }
-          if (sessionFile !== null) {
-            if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
-            else rememberUncertainPlacement(sessionFile, outcome);
-          }
+          if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
+          else rememberUncertainPlacement(sessionFile, outcome);
           throw outcome.error;
         }
 
@@ -1002,13 +976,13 @@ export function createSessionOperations(observations: SessionOperationObservatio
           });
           if (stopped.kind !== 'stopped') return { ...stopped, reportStopUncertain: true };
           workerStopped = true;
-          beforeRespawn = () => ownership.preparePrimeReplacement(restartCapture, sessionFile!);
+          beforeRespawn = () => ownership.preparePrimeReplacement(restartCapture, sessionFile);
         }
         const pane = record(spawn.paneProcess) ? spawn.paneProcess : null;
         const outcome = await launch.spawnHarnessInTmux({
           descriptor,
           target: { socket: spawn.socket },
-          args: buildRespawnArgs(),
+          args: descriptor.argv.resume({ file: sessionFile, model: resumeModel }),
           cwd,
           name: windowName,
           hidden: path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket()),
@@ -1021,10 +995,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
           },
         });
         if (outcome.kind !== 'ready') {
-          if (sessionFile !== null) {
-            if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
-            else rememberUncertainPlacement(sessionFile, outcome);
-          }
+          if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
+          else rememberUncertainPlacement(sessionFile, outcome);
           throw outcome.error;
         }
         return { kind: 'stopped', replacement: { id: outcome.id, placement: 'tmux', paneId: spawn.paneId } };

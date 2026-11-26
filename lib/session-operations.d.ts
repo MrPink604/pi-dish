@@ -25,6 +25,8 @@ export interface SessionOperationObservations {
     cuCheckCapabilities?(): Promise<CuBrokerCapabilities>;
     /** True when the session currently holds a transferable authenticated CU lease. */
     cuCanTransferSession?(sessionId: string): boolean;
+    /** True while startup reconciliation is still verifying this session's CU lease (`checking` state). */
+    cuIsChecking?(sessionId: string): boolean;
 }
 export interface CreateSessionOptions {
     harness?: unknown;

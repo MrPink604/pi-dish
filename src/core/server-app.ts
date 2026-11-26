@@ -564,6 +564,7 @@ export function startServer(rootDirectory: string): Server {
     cuCheckSlice2: () => cuAgentLeases.supportsSlice2(),
     cuCheckCapabilities: () => cuAgentLeases.probeCapabilities(),
     cuCanTransferSession: id => cuAgentLeases.canTransferSession(id),
+    cuIsChecking: id => cuAgentLeases.isDesktopChecking(id),
   });
   const featureHandlers = createFeatureHandlers({
     catalog, ownership, findSessionSource,

@@ -160,6 +160,18 @@ export class CuTransferUnavailableError extends Error {
   }
 }
 
+/** Structured retryable 409 error raised when a CU session's lease is still being verified by startup reconcile. */
+export class CuLeaseCheckingError extends Error {
+  readonly status = 409;
+  readonly code = 'cu_checking' as const;
+  readonly retryable = true as const;
+
+  constructor(message = 'Computer-use desktop access is still being verified after restart; retry shortly') {
+    super(message);
+    this.name = 'CuLeaseCheckingError';
+  }
+}
+
 export function cuBrokerUnavailableResponseFields(error: CuBrokerUnavailableError): {
   code: string;
   retryable: boolean;
@@ -477,10 +489,19 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     ?? DEFAULT_LIVENESS_CHECK_MS;
   const commandRetryMs = ports.commandRetryMs ?? DEFAULT_COMMAND_RETRY_MS;
 
+  interface TransferState {
+    aborted: boolean;
+    committed: boolean;
+    readonly originalPid: number;
+    readonly originalPidStartTime: string;
+    replacementPid: number | null;
+    replacementPidStartTime: string | null;
+  }
+
   const recordsByBrokerId = new Map<string, ManagedLeaseRecord>();
   const recordsByOwnerId = new Map<string, ManagedLeaseRecord>();
   const brokerIdBySessionId = new Map<string, string>();
-  const transferStates = new WeakMap<CuAgentSpawnHandle, { aborted: boolean }>();
+  const transferStates = new WeakMap<CuAgentSpawnHandle, TransferState>();
 
   let stopped = false;
   let reconciled = false;
@@ -515,6 +536,72 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       return processAlive({ pid: claimedPid, startTime: claimedStart });
     }
     return pidAlive(claimedPid);
+  }
+
+  /**
+   * True when the broker reports that a bound lease (outside any staged transfer)
+   * lost its claimed MCP peer and has no usable claim or reclaim path left.
+   */
+  function hasLostUsableClaimOrPeer(
+    rec: ManagedLeaseRecord,
+    obj: Record<string, unknown> | null,
+    reason: string | null,
+  ): boolean {
+    if (rec.pendingTransferClaimId !== null) return false;
+    if (obj && obj.stagedTransfer === true) return false;
+    if (rec.pid === null || rec.pid <= 1 || !rec.pidStartTime) return false;
+    if (reason === 'acquired') return false;
+
+    if (reason === 'claimed_peer_reaped' || reason === 'claim_expired') {
+      if (obj && (hasLiveClaimedPeer(obj) || obj.pendingClaim === true || obj.allowReclaim === true)) {
+        return false;
+      }
+      return true;
+    }
+
+    if (obj && typeof obj.pendingClaim === 'boolean') {
+      const peerLive = hasLiveClaimedPeer(obj);
+      const hasPending = obj.pendingClaim === true;
+      const reclaimEnabled = obj.allowReclaim === true;
+      if (!peerLive && !hasPending && !reclaimEnabled) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Marks a live session `access_lost` (stopping heartbeats while keeping the local
+   * record so `isDesktopAccessLost()` remains true) and releases/cancels the broker
+   * seat via pure `owner_match` (never `force: true`) so the seat frees promptly.
+   */
+  function markAccessLostAndRelease(
+    rec: ManagedLeaseRecord,
+    initialTarget: 'active' | 'displaced',
+    epoch: number | null,
+  ): Promise<void> {
+    const {
+      brokerSessionId,
+      leaseOwnerId,
+      pid,
+      pidStartTime,
+    } = rec;
+    const effectiveEpoch = epoch !== null && epoch >= 1 ? epoch : (rec.epoch >= 1 ? rec.epoch : null);
+    markAccessLost(rec);
+    if (!ports.broker.available() || !hasCap(SLICE2B_CAPABILITIES.ownerMatch)) {
+      return Promise.resolve();
+    }
+    return ownerMatchedReleaseOrCancel({
+      brokerSessionId,
+      leaseOwnerId,
+      sessionSecret: null,
+      pid,
+      pidStartTime,
+      epoch: effectiveEpoch,
+      initialTarget,
+    }).catch(error => {
+      log(`[cu-lease] owner-matched access_lost release failed for ${leaseOwnerId}: ${errorMessage(error)}`);
+    });
   }
 
   /**
@@ -1179,13 +1266,13 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           && snapshotObjMatchesOwner(body.lease, params.leaseOwnerId, params.brokerSessionId);
         const displacedMatchesUs = snapshotObjMatchesOwner(body.preempted, params.leaseOwnerId, params.brokerSessionId);
 
-        if (target === 'active' && code === 'lease_preempted' && !switchedTarget) {
+        if (target === 'active' && (code === 'lease_preempted' || (code === 'state_mismatch' && displacedMatchesUs)) && !switchedTarget) {
           switchedTarget = true;
           target = 'displaced';
           attemptEpoch = conflictEpoch !== null && conflictEpoch >= 1 ? conflictEpoch : null;
           continue;
         }
-        if (target === 'displaced' && code === 'lease_active' && !switchedTarget) {
+        if (target === 'displaced' && (code === 'lease_active' || (code === 'state_mismatch' && activeMatchesUs)) && !switchedTarget) {
           switchedTarget = true;
           target = 'active';
           attemptEpoch = conflictEpoch !== null && conflictEpoch >= 1 ? conflictEpoch : null;
@@ -1394,7 +1481,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     matchedObj: Record<string, unknown>,
   ): Promise<
     | { ok: true; body: Record<string, unknown>; sessionSecret: string }
-    | { ok: false; reason: string }
+    | { ok: false; reason: string; releaseOnFailure?: boolean; target?: 'active' | 'displaced'; epoch?: number | null }
   > {
     if (rec.pid === null || rec.pid <= 1 || !rec.pidStartTime) {
       return { ok: false, reason: 'missing_birth' };
@@ -1430,17 +1517,29 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           return { ok: false, reason: 'missing_session_secret' };
         }
         const renewTarget = pickString(body, 'target');
-        const renewObj = renewTarget === 'displaced'
+        const renewState = pickString(body, 'state');
+        const targetKind: 'active' | 'displaced' = renewTarget === 'displaced' || renewState === 'human' ? 'displaced' : 'active';
+        const renewEpoch = pickFiniteNumber(body, 'epoch') ?? attemptEpoch;
+        const renewObj = targetKind === 'displaced'
           ? (isRecord(body.preempted) ? body.preempted : matchedObj)
           : (isRecord(body.lease) ? body.lease : matchedObj);
         const claimObj = isRecord(body.claim) ? body.claim : null;
         const claimStatus = claimObj ? pickString(claimObj, 'status') : null;
+        const claimedPeerAlive = claimStatus === 'already_claimed'
+          ? (renewObj && 'mcpClaimed' in renewObj ? hasLiveClaimedPeer(renewObj) : true)
+          : hasLiveClaimedPeer(renewObj);
         const claimUsable = claimStatus === 'refreshed'
-          || claimStatus === 'already_claimed'
+          || (claimStatus === 'already_claimed' && claimedPeerAlive)
           || claimStatus === 'reclaimable'
-          || ((claimStatus === 'outstanding' || claimStatus === null) && hasLiveClaimedPeer(renewObj));
+          || ((claimStatus === 'outstanding' || claimStatus === null) && claimedPeerAlive);
         if (!claimUsable) {
-          return { ok: false, reason: `unusable_claim_status:${claimStatus ?? 'missing'}` };
+          return {
+            ok: false,
+            reason: `unusable_claim_status:${claimStatus ?? 'missing'}`,
+            releaseOnFailure: true,
+            target: targetKind,
+            epoch: renewEpoch,
+          };
         }
         return { ok: true, body, sessionSecret: newSecret };
       }
@@ -1601,6 +1700,8 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
             if (isDisplaced) {
               scheduleCommand(rec, 'abort', brokerEpoch, effectiveGen);
             }
+          } else if (canOwnerMatch && matchedObj && hasLostUsableClaimOrPeer(rec, matchedObj, null)) {
+            await markAccessLostAndRelease(rec, isDisplaced ? 'displaced' : 'active', brokerEpoch);
           } else {
             markAccessLost(rec);
           }
@@ -1621,7 +1722,11 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
 
         if (!renewed.ok) {
           log(`[cu-lease] startup renew failed for ${rec.leaseOwnerId}: ${renewed.reason}`);
-          markAccessLost(rec);
+          if (renewed.releaseOnFailure) {
+            await markAccessLostAndRelease(rec, renewed.target ?? (isDisplaced ? 'displaced' : 'active'), renewed.epoch ?? brokerEpoch);
+          } else {
+            markAccessLost(rec);
+          }
           scheduleCommand(rec, 'abort', Math.max(0, brokerEpoch), effectiveGen);
           continue;
         }
@@ -1642,16 +1747,26 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           updateRecordPosition(rec, pos);
         }
 
+        const renewTarget = pickString(renewBody, 'target');
+        const renewState = pickString(renewBody, 'state') ?? brokerState;
+        const displaced = renewTarget === 'displaced' || renewState === 'human';
+        const renewObj = displaced
+          ? (isRecord(renewBody.preempted) ? renewBody.preempted : matchedObj)
+          : (isRecord(renewBody.lease) ? renewBody.lease : matchedObj);
+        const finalGen = rec.generation ?? renewGen;
+        ensureDeliveryContext(rec, finalGen);
+
+        if (hasLostUsableClaimOrPeer(rec, renewObj, null)) {
+          await markAccessLostAndRelease(rec, displaced ? 'displaced' : 'active', renewEpoch);
+          scheduleCommand(rec, 'abort', Math.max(0, rec.epoch), finalGen);
+          continue;
+        }
+
         rec.sessionSecret = renewed.sessionSecret;
         rec.adoptedWithoutSecret = false;
         rec.leaseId = pickString(renewBody, 'leaseId') ?? pickString(matchedObj, 'leaseId') ?? rec.leaseId;
         rec.heartbeatIntervalMs = resolveHeartbeatMs(pickFiniteNumber(renewBody, 'heartbeatIntervalSec'));
 
-        const renewTarget = pickString(renewBody, 'target');
-        const renewState = pickString(renewBody, 'state') ?? brokerState;
-        const displaced = renewTarget === 'displaced' || renewState === 'human';
-        const finalGen = rec.generation ?? renewGen;
-        ensureDeliveryContext(rec, finalGen);
         rec.status = displaced ? 'preempted' : 'holding';
         startHeartbeat(rec);
         if (displaced) {
@@ -1821,10 +1936,11 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         throw httpError(claim.message, claim.status);
       }
 
-      const pos: BrokerPosition = { generation, cursor, epoch };
+      const initialCursor = Math.max(cursor ?? -1, claim.cursor ?? -1);
+      const pos: BrokerPosition = { generation: claim.generation ?? generation, cursor: initialCursor >= 0 ? initialCursor : null, epoch };
       const order = comparePosition(pos, { allowNewGeneration: true });
       if (order === 'new_generation') {
-        resetAllWatermarksForNewGeneration(generation);
+        resetAllWatermarksForNewGeneration(pos.generation);
       }
       if (order !== 'stale') {
         advanceGlobalPosition(pos, order === 'new_generation');
@@ -1839,8 +1955,8 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         sessionId: knownSessionId,
         status: 'holding',
         epoch,
-        lastCursor: cursor ?? -1,
-        generation,
+        lastCursor: initialCursor,
+        generation: pos.generation,
         pid: null,
         pidStartTime: null,
         adoptedWithoutSecret: false,
@@ -1978,7 +2094,14 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         expectedPidStartTime,
       }),
     };
-    transferStates.set(handle, { aborted: false });
+    transferStates.set(handle, {
+      aborted: false,
+      committed: false,
+      originalPid: expectedPid,
+      originalPidStartTime: expectedPidStartTime,
+      replacementPid: null,
+      replacementPidStartTime: null,
+    });
     return handle;
   }
 
@@ -2116,8 +2239,16 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       throw bindError;
     }
 
-    if (transfer && rec.pendingTransferClaimId === transfer.claimId) {
-      rec.pendingTransferClaimId = null;
+    if (transfer) {
+      const state = transferStates.get(handle);
+      if (state) {
+        state.committed = true;
+        state.replacementPid = proc.pid;
+        state.replacementPidStartTime = proc.startTime;
+      }
+      if (rec.pendingTransferClaimId === transfer.claimId) {
+        rec.pendingTransferClaimId = null;
+      }
     }
 
     // Check record still exists after await.
@@ -2181,18 +2312,37 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     const rec = recordsByBrokerId.get(handle.brokerSessionId);
     if (!rec) return;
     if (handle.transfer) {
-      await abortStagedTransfer(rec, handle);
+      const state = transferStates.get(handle);
       if (rec.pendingTransferClaimId === handle.transfer.claimId) {
         rec.pendingTransferClaimId = null;
       }
-      const boundAlive = rec.pid !== null
-        && rec.pid > 1
-        && rec.pidStartTime !== null
-        && processAlive({ pid: rec.pid, startTime: rec.pidStartTime });
-      if (boundAlive) {
-        // Pre-respawn failure: old pane is still alive and its active/displaced lease remains intact.
+      if (!state?.committed) {
+        await abortStagedTransfer(rec, handle);
+        // Before bind commits, keep the lease ONLY when the proven original pre-transfer
+        // birth is still alive and still matches the record's bound birth. Never treat an
+        // arbitrary live rec.pid as proof the old pane survived.
+        const origPid = state?.originalPid ?? handle.transfer.expectedPid;
+        const origStart = state?.originalPidStartTime ?? handle.transfer.expectedPidStartTime;
+        const originalProvenAlive = origPid > 1
+          && Boolean(origStart)
+          && rec.pid === origPid
+          && rec.pidStartTime === origStart
+          && processAlive({ pid: origPid, startTime: origStart });
+        if (originalProvenAlive) {
+          return;
+        }
+        await releaseRecord(rec);
         return;
       }
+      // After bind committed to the replacement birth, any registration or launch failure
+      // MUST stop heartbeats and release/cancel the replacement birth — even if tmux cleanup
+      // failed and the replacement process is still alive.
+      if (state.replacementPid !== null && state.replacementPidStartTime !== null) {
+        rec.pid = state.replacementPid;
+        rec.pidStartTime = state.replacementPidStartTime;
+      }
+      await releaseRecord(rec);
+      return;
     }
     await releaseRecord(rec);
   }
@@ -2318,8 +2468,13 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     if (isPreemptSignal && preemptedRef) {
       const rec = findRecordForRef(preemptedRef);
       if (rec && !rec.pendingStartupReconcile && rec.status !== 'access_lost' && !isRecordObservationStale(rec, pos)) {
-        // P1-5: On a broker restart (generationChanged) or re-adopted record, check claimed peer liveness.
-        if ((rec.adoptedWithoutSecret || generationChanged) && preemptedObj && !hasLiveClaimedPeer(preemptedObj)) {
+        if (hasLostUsableClaimOrPeer(rec, preemptedObj, reason)) {
+          updateRecordPosition(rec, pos);
+          void markAccessLostAndRelease(rec, 'displaced', epoch);
+          storeDirty = true;
+          scheduleCommand(rec, 'abort', epoch, effectiveGen);
+        } else if ((rec.adoptedWithoutSecret || generationChanged) && preemptedObj && !hasLiveClaimedPeer(preemptedObj)) {
+          // P1-5: On a broker restart (generationChanged) or re-adopted record, check claimed peer liveness.
           markAccessLost(rec);
           updateRecordPosition(rec, pos);
           storeDirty = true;
@@ -2338,7 +2493,11 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     if (explicitHandBack && handBackRef) {
       const rec = findRecordForRef(handBackRef);
       if (rec && !rec.pendingStartupReconcile && rec.status !== 'access_lost' && !isRecordObservationStale(rec, pos)) {
-        if ((rec.adoptedWithoutSecret || generationChanged) && handBackObj && !hasLiveClaimedPeer(handBackObj)) {
+        if (hasLostUsableClaimOrPeer(rec, handBackObj, reason)) {
+          updateRecordPosition(rec, pos);
+          void markAccessLostAndRelease(rec, 'active', epoch);
+          storeDirty = true;
+        } else if ((rec.adoptedWithoutSecret || generationChanged) && handBackObj && !hasLiveClaimedPeer(handBackObj)) {
           markAccessLost(rec);
           updateRecordPosition(rec, pos);
           storeDirty = true;
@@ -2353,7 +2512,11 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
       // Reconnect/resync: if hand_back occurred while disconnected while we knew we were preempted, nudge once.
       const rec = findRecordForRef(leaseRef);
       if (rec && !rec.pendingStartupReconcile && rec.status === 'preempted' && !isRecordObservationStale(rec, pos)) {
-        if ((rec.adoptedWithoutSecret || generationChanged) && leaseObj && !hasLiveClaimedPeer(leaseObj)) {
+        if (hasLostUsableClaimOrPeer(rec, leaseObj, reason)) {
+          updateRecordPosition(rec, pos);
+          void markAccessLostAndRelease(rec, 'active', epoch);
+          storeDirty = true;
+        } else if ((rec.adoptedWithoutSecret || generationChanged) && leaseObj && !hasLiveClaimedPeer(leaseObj)) {
           markAccessLost(rec);
           updateRecordPosition(rec, pos);
           storeDirty = true;
@@ -2396,8 +2559,12 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         if (rec.pendingStartupReconcile) continue;
         if (refMatchesRecord(leaseRef, rec)) {
           if (rec.status === 'access_lost' || isRecordObservationStale(rec, pos)) continue;
-          // P1-5: If re-adopted or after a broker restart without a live claimed peer, mark access_lost and stop heartbeats.
-          if ((rec.adoptedWithoutSecret || generationChanged) && leaseObj && !hasLiveClaimedPeer(leaseObj)) {
+          if (hasLostUsableClaimOrPeer(rec, leaseObj, reason)) {
+            updateRecordPosition(rec, pos);
+            void markAccessLostAndRelease(rec, 'active', epoch);
+            storeDirty = true;
+          } else if ((rec.adoptedWithoutSecret || generationChanged) && leaseObj && !hasLiveClaimedPeer(leaseObj)) {
+            // P1-5: If re-adopted or after a broker restart without a live claimed peer, mark access_lost and stop heartbeats.
             markAccessLost(rec);
             updateRecordPosition(rec, pos);
             storeDirty = true;

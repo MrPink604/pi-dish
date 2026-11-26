@@ -56,6 +56,13 @@ export declare class CuTransferUnavailableError extends Error {
     readonly code: 'cu_transfer_unavailable';
     constructor(message?: string);
 }
+/** Structured retryable 409 error raised when a CU session's lease is still being verified by startup reconcile. */
+export declare class CuLeaseCheckingError extends Error {
+    readonly status = 409;
+    readonly code: 'cu_checking';
+    readonly retryable: true;
+    constructor(message?: string);
+}
 export declare function cuBrokerUnavailableResponseFields(error: CuBrokerUnavailableError): {
     code: string;
     retryable: boolean;
