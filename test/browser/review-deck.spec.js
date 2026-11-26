@@ -385,7 +385,10 @@ async function createDeck(base, sessionId, spec, headers = {}) {
     }, { Authorization: `Bearer ${peer.token}` });
     // Open a clean tab without the fixture's localStorage direct-peer init script
     // so `self` advertises `peer` exclusively via hub-proxied `/hosts/remote`.
-    await page.evaluate(() => localStorage.removeItem('pi-dish-hosts'));
+    await page.evaluate(() => {
+        localStorage.removeItem('pi-dish-hosts');
+        localStorage.removeItem('pi-dish-session');
+    });
     const tab = await page.context().newPage();
     tab.on('pageerror', error => errors.push(error.message));
     try {
@@ -893,7 +896,12 @@ async function createDeck(base, sessionId, spec, headers = {}) {
     (0, fixtures_js_1.expect)(dismissResult?.status).toBe('dismissed');
     await (0, fixtures_js_1.expect)(dismissEl.locator('.review-delivery-badge')).toHaveCount(0);
     // Version skew & cross-host: clean tab using hub-proxied `/hosts/remote`.
-    await page.evaluate(() => localStorage.removeItem('pi-dish-hosts'));
+    // Clear `pi-dish-session` too so the new tab stays on `#emptyState` instead of
+    // racing `restoreSavedSession()` against clicking `.empty-menu-btn`.
+    await page.evaluate(() => {
+        localStorage.removeItem('pi-dish-hosts');
+        localStorage.removeItem('pi-dish-session');
+    });
     const tab = await page.context().newPage();
     tab.on('pageerror', error => errors.push(error.message));
     try {
@@ -974,6 +982,7 @@ async function createDeck(base, sessionId, spec, headers = {}) {
     await (0, fixtures_js_1.expect)(raceEl).toBeVisible();
     const raceDismissBtn = raceEl.locator('[data-review-action="dismiss"]');
     await raceDismissBtn.click();
+    await (0, fixtures_js_1.expect)(raceDismissBtn).toHaveClass(/\barmed\b/);
     await raceDismissBtn.click();
     const held1 = (0, fixtures_js_1.requiredRoute)(await firstDismiss.received);
     // Navigate away to peer and back to self, then start a second dismiss request on the same deck.
@@ -983,6 +992,7 @@ async function createDeck(base, sessionId, spec, headers = {}) {
     await fleet.row(self, fixtures_js_1.ROOT).click();
     await (0, fixtures_js_1.expect)(raceEl).toBeVisible();
     await raceDismissBtn.click();
+    await (0, fixtures_js_1.expect)(raceDismissBtn).toHaveClass(/\barmed\b/);
     await raceDismissBtn.click();
     const held2 = (0, fixtures_js_1.requiredRoute)(await secondDismiss.received);
     await (0, fixtures_js_1.expect)(raceDismissBtn).toBeDisabled();

@@ -427,7 +427,10 @@ test('peer /hosts/<name> proxying, submit error recovery, and HTML/JS version sk
 
   // Open a clean tab without the fixture's localStorage direct-peer init script
   // so `self` advertises `peer` exclusively via hub-proxied `/hosts/remote`.
-  await page.evaluate(() => localStorage.removeItem('pi-dish-hosts'));
+  await page.evaluate(() => {
+    localStorage.removeItem('pi-dish-hosts');
+    localStorage.removeItem('pi-dish-session');
+  });
   const tab = await page.context().newPage();
   tab.on('pageerror', error => errors.push(error.message));
   try {
@@ -1001,7 +1004,12 @@ test('reject with optional reason, two-tap dismiss, receipts, draft clearing, cr
   await expect(dismissEl.locator('.review-delivery-badge')).toHaveCount(0);
 
   // Version skew & cross-host: clean tab using hub-proxied `/hosts/remote`.
-  await page.evaluate(() => localStorage.removeItem('pi-dish-hosts'));
+  // Clear `pi-dish-session` too so the new tab stays on `#emptyState` instead of
+  // racing `restoreSavedSession()` against clicking `.empty-menu-btn`.
+  await page.evaluate(() => {
+    localStorage.removeItem('pi-dish-hosts');
+    localStorage.removeItem('pi-dish-session');
+  });
   const tab = await page.context().newPage();
   tab.on('pageerror', error => errors.push(error.message));
   try {
@@ -1080,6 +1088,7 @@ test('reject with optional reason, two-tap dismiss, receipts, draft clearing, cr
   await expect(raceEl).toBeVisible();
   const raceDismissBtn = raceEl.locator('[data-review-action="dismiss"]');
   await raceDismissBtn.click();
+  await expect(raceDismissBtn).toHaveClass(/\barmed\b/);
   await raceDismissBtn.click();
   const held1 = requiredRoute(await firstDismiss.received);
 
@@ -1090,6 +1099,7 @@ test('reject with optional reason, two-tap dismiss, receipts, draft clearing, cr
   await fleet.row(self, ROOT).click();
   await expect(raceEl).toBeVisible();
   await raceDismissBtn.click();
+  await expect(raceDismissBtn).toHaveClass(/\barmed\b/);
   await raceDismissBtn.click();
   const held2 = requiredRoute(await secondDismiss.received);
   await expect(raceDismissBtn).toBeDisabled();
