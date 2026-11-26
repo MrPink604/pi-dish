@@ -12,7 +12,8 @@ const APPLY_STATUS_FETCH_TIMEOUT_MS = 10_000;
 const PREVIEW_FETCH_TIMEOUT_MS = 25_000;
 const UNKNOWN_OUTCOME_MESSAGE = 'Unknown outcome: reload the list and check the fleet-config log.';
 const OFFLINE_WARNING_HOSTS = new Set(['jacobs-macbook-air']);
-const CONNECTIVITY_ERROR_RE = /\b(ssh\s+connect|unreachable|timed?\s*out|connection\s+refused|could\s+not\s+resolve\s+hostname|no\s+route\s+to\s+host|host\s+is\s+down|network\s+is\s+down|connection\s+closed|connection\s+reset)\b/i;
+// Only transport-level SSH/network errors count as "offline"; bare "timed out" stays a failure.
+const TRANSPORT_OFFLINE_ERROR_RE = /\b(?:ssh:\s*connect\s+to\s+host|connection\s+timed\s+out\s+during\s+(?:banner|connect)|no\s+route\s+to\s+host|could\s+not\s+resolve\s+hostname|connection\s+refused|network\s+is\s+unreachable)\b/i;
 
 export interface OmpModelsState {
   readonly available: boolean;
@@ -55,9 +56,10 @@ export interface OmpModelsApplyResult {
 
 export type OmpModelsApplyStatus =
   | { readonly state: 'idle' }
-  | { readonly state: 'running'; readonly startedAt: number | null; readonly base: string }
+  | { readonly state: 'running'; readonly opId: string; readonly startedAt: number | null; readonly base: string }
   | {
       readonly state: 'done';
+      readonly opId: string;
       readonly startedAt: number | null;
       readonly finishedAt: number | null;
       readonly base: string;
@@ -68,7 +70,7 @@ export type OmpHostStatusKind = 'ok' | 'warn' | 'error';
 
 export function classifyOmpHostResult(host: string, status: string, allHostsFailed: boolean): OmpHostStatusKind {
   if (status === 'ok') return 'ok';
-  if (!allHostsFailed && OFFLINE_WARNING_HOSTS.has(host) && CONNECTIVITY_ERROR_RE.test(status)) return 'warn';
+  if (!allHostsFailed && OFFLINE_WARNING_HOSTS.has(host) && TRANSPORT_OFFLINE_ERROR_RE.test(status)) return 'warn';
   return 'error';
 }
 
@@ -179,15 +181,18 @@ export function decodeOmpModelsApply(value: unknown): OmpModelsApplyResult {
 export function decodeOmpModelsApplyStatus(value: unknown): OmpModelsApplyStatus {
   if (!record(value)) throw new Error('Invalid apply-status response');
   if (value.state === 'idle') return { state: 'idle' };
+  const opId = typeof value.opId === 'string' && value.opId.trim() ? value.opId.trim() : '';
+  if (!opId) throw new Error('Invalid apply-status payload: missing opId');
   const startedAt = typeof value.startedAt === 'number' && Number.isFinite(value.startedAt) ? value.startedAt : null;
   const base = typeof value.base === 'string' ? value.base : '';
   if (value.state === 'running') {
-    return { state: 'running', startedAt, base };
+    return { state: 'running', opId, startedAt, base };
   }
   if (value.state === 'done' && record(value.result) && typeof value.result.status === 'number') {
     const finishedAt = typeof value.finishedAt === 'number' && Number.isFinite(value.finishedAt) ? value.finishedAt : null;
     return {
       state: 'done',
+      opId,
       startedAt,
       finishedAt,
       base,
@@ -231,7 +236,7 @@ interface BannerState {
   readonly kind: 'policy' | 'conflict' | 'locked' | 'error' | 'info';
   readonly message: string;
   readonly reasons?: readonly string[];
-  readonly retryAction?: 'load' | 'reload-keep-draft' | 'review' | 'apply';
+  readonly retryAction?: 'load' | 'reload-keep-draft' | 'review' | 'apply' | 'reconcile';
 }
 
 interface PreviewState {
@@ -316,11 +321,15 @@ export function createOmpModels(options: {
   const rowPreviews = new Map<number, RowPreviewState>();
   let review: { readonly baseSha: string; readonly snapshot: readonly string[]; readonly result: OmpModelsDryRun } | null = null;
   let applyResult: OmpModelsApplyResult | null = null;
+  let applyResultOwn = false;
   let banner: BannerState | null = null;
-  let busyAction: 'review' | 'apply' | 'reload' | null = null;
+  let busyAction: 'review' | 'apply' | 'reload' | 'reconcile' | null = null;
+  let applyNeedsReload = false;
+  let reconcileLocked = false;
+  let pendingApplyOpId: string | null = null;
   let pendingApplySnapshot: readonly string[] | null = null;
-  let lastApplyFinishedAt: number | null = null;
-  let dismissedApplyFinishedAt: number | null = null;
+  let lastApplyOpId: string | null = null;
+  let dismissedApplyOpId: string | null = null;
 
   function isOpen(): boolean {
     return !disposed && !!modal && modal.style.display === 'flex';
@@ -352,8 +361,11 @@ export function createOmpModels(options: {
   }
 
   function dismissPreviousApply(): void {
-    if (lastApplyFinishedAt !== null) dismissedApplyFinishedAt = lastApplyFinishedAt;
-    if (applyResult) applyResult = null;
+    if (lastApplyOpId !== null) dismissedApplyOpId = lastApplyOpId;
+    if (applyResult) {
+      applyResult = null;
+      applyResultOwn = false;
+    }
   }
 
   function ensureModal(): HTMLElement {
@@ -414,7 +426,7 @@ export function createOmpModels(options: {
   }
 
   function hasPendingReview(): boolean {
-    return !!review && review.result.changed && review.baseSha === baseSha && sameList(review.snapshot, draft);
+    return !applyNeedsReload && !reconcileLocked && !!review && review.result.changed && review.baseSha === baseSha && sameList(review.snapshot, draft);
   }
 
   function isDirty(): boolean {
@@ -428,8 +440,9 @@ export function createOmpModels(options: {
 
   function renderBannerHtml(): string {
     if (!banner) return '';
+    const actionLabel = banner.retryAction === 'reconcile' ? 'Reload' : 'Retry';
     const retryBtn = banner.retryAction
-      ? ` <button type="button" class="btn-small omp-banner-retry" data-omp-action="retry" data-omp-retry="${banner.retryAction}">Retry</button>`
+      ? ` <button type="button" class="btn-small omp-banner-retry" data-omp-action="retry" data-omp-retry="${banner.retryAction}">${actionLabel}</button>`
       : '';
     if (banner.kind === 'policy') {
       const items = (banner.reasons || []).map(reason => `<li>${escapeHtml(reason)}</li>`).join('');
@@ -514,19 +527,25 @@ export function createOmpModels(options: {
     let heading: string;
     let panelClass: string;
     if (applyResult.allHostsFailed) {
-      heading = `Committed ${shortSha(applyResult.sha)} to fleet-config, but deployment failed on every host.`;
+      heading = applyResultOwn
+        ? `Committed ${shortSha(applyResult.sha)} to fleet-config, but deployment failed on every host.`
+        : `Last apply on this host (${shortSha(applyResult.sha)}): committed to fleet-config, but deployment failed on every host.`;
       panelClass = 'omp-apply-error';
     } else if (applyResult.unchanged) {
-      heading = `No changes needed (fleet.yml is already at ${shortSha(applyResult.sha)}).`;
+      heading = applyResultOwn
+        ? `No changes needed (fleet.yml is already at ${shortSha(applyResult.sha)}).`
+        : `Last apply on this host (${shortSha(applyResult.sha)}): no changes needed.`;
       panelClass = 'omp-apply-ok';
     } else {
-      heading = `Applied ${shortSha(applyResult.sha)} to fleet-config.`;
+      heading = applyResultOwn
+        ? `Applied ${shortSha(applyResult.sha)} to fleet-config.`
+        : `Last apply on this host (${shortSha(applyResult.sha)}): completed.`;
       panelClass = 'omp-apply-ok';
     }
     const restartNote = applyResult.restartRequired
       ? '<p class="omp-restart-note" id="ompModelsRestartNote">Running OMP sessions need a restart to pick up the updated allow-list.</p>'
       : '';
-    return `<section class="omp-models-apply-result ${panelClass}" id="ompModelsApplyResult" role="status">
+    return `<section class="omp-models-apply-result ${panelClass}" id="ompModelsApplyResult" data-apply-source="${applyResultOwn ? 'own' : 'status'}" role="status">
       <strong>${escapeHtml(heading)}</strong>
       ${restartNote}
       ${entries.length ? `<ul class="omp-host-results">${hostRows}</ul>` : ''}
@@ -573,7 +592,7 @@ export function createOmpModels(options: {
       ? disabledProviders.map(provider => `<code class="omp-disabled-chip">${escapeHtml(provider)}</code>`).join('')
       : '<span class="omp-disabled-none">none</span>';
 
-    const locked = busyAction !== null;
+    const locked = busyAction !== null || reconcileLocked;
     const rowsHtml = draft.map((pattern, index) => {
       if (index === 0) {
         return `<li class="omp-model-row pinned" data-index="0">
@@ -658,14 +677,20 @@ export function createOmpModels(options: {
     footer.style.display = '';
     const dirty = isDirty();
     const readyToApply = hasPendingReview();
-    resetBtn.disabled = busyAction !== null || !dirty;
-    reviewBtn.disabled = busyAction !== null;
+    resetBtn.disabled = busyAction !== null || reconcileLocked || !dirty;
+    reviewBtn.disabled = busyAction !== null || reconcileLocked || applyNeedsReload;
     reviewBtn.textContent = busyAction === 'review' ? 'Reviewing…' : 'Review';
-    applyBtn.disabled = busyAction !== null || !readyToApply;
+    applyBtn.disabled = busyAction !== null || reconcileLocked || applyNeedsReload || !readyToApply;
     applyBtn.textContent = busyAction === 'apply' ? 'Applying…' : 'Apply';
 
     if (busyAction === 'apply') {
       statusEl.textContent = 'Applying and deploying to fleet hosts (closing will not cancel or lose the result)…';
+    } else if (busyAction === 'reconcile') {
+      statusEl.textContent = 'Apply finished — reloading updated allow-list before editing…';
+    } else if (reconcileLocked) {
+      statusEl.textContent = 'Reload the updated allow-list before editing.';
+    } else if (applyNeedsReload) {
+      statusEl.textContent = 'Outcome unknown — reload the allow-list before reviewing or applying again.';
     } else if (busyAction === 'review') {
       statusEl.textContent = 'Checking policy and building diff…';
     } else if (busyAction === 'reload') {
@@ -777,30 +802,53 @@ export function createOmpModels(options: {
     }
   }
 
+  function markUnknownApplyOutcome(message?: string, requireReload = true): void {
+    review = null;
+    applyResult = null;
+    applyResultOwn = false;
+    if (requireReload) applyNeedsReload = true;
+    banner = {
+      kind: 'error',
+      message: message || UNKNOWN_OUTCOME_MESSAGE,
+    };
+  }
+
   function applyOutcomeToUi(
     status: number,
     data: unknown,
-    snapshot: readonly string[] | null,
-    finishedAt: number | null,
-    fromReopen: boolean,
+    opts: {
+      readonly ownMatch: boolean;
+      readonly snapshot: readonly string[] | null;
+      readonly opId: string | null;
+      readonly alreadyReloaded?: boolean;
+    },
   ): boolean {
-    if (finishedAt !== null) lastApplyFinishedAt = finishedAt;
+    const { ownMatch, snapshot, opId, alreadyReloaded = false } = opts;
+    if (opId !== null) lastApplyOpId = opId;
     if (status >= 200 && status < 300) {
       try {
         const decoded = decodeOmpModelsApply(data);
-        if (decoded.sha) baseSha = decoded.sha;
-        if (snapshot) savedModels = [...snapshot];
-        review = null;
+        if (ownMatch) {
+          if (decoded.sha) baseSha = decoded.sha;
+          if (snapshot) savedModels = [...snapshot];
+          review = null;
+          banner = null;
+          applyResult = decoded;
+          applyResultOwn = true;
+          return false;
+        }
+        // Informational only: never mutate draft, savedModels, or baseSha from another operation's result.
         banner = null;
         applyResult = decoded;
+        applyResultOwn = false;
         return false;
       } catch {
-        banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+        markUnknownApplyOutcome(undefined, !alreadyReloaded);
         return false;
       }
     }
     if (!record(data)) {
-      banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+      markUnknownApplyOutcome(undefined, !alreadyReloaded);
       return false;
     }
     if (status === 501 || data.error === 'unavailable') {
@@ -820,7 +868,7 @@ export function createOmpModels(options: {
       return false;
     }
     if (status === 409 && data.error === 'conflict') {
-      if (fromReopen) {
+      if (!ownMatch) {
         banner = {
           kind: 'conflict',
           message: 'Previous apply hit a conflict because the allow-list changed elsewhere.',
@@ -835,40 +883,41 @@ export function createOmpModels(options: {
       banner = {
         kind: 'locked',
         message: typeof data.message === 'string' && data.message ? data.message : 'Another omp-models update holds the lock.',
-        retryAction: !fromReopen && hasPendingReview() ? 'apply' : undefined,
+        retryAction: ownMatch && hasPendingReview() ? 'apply' : undefined,
       };
       return false;
     }
     if (data.allHostsFailed === true) {
       try {
         const decoded = decodeOmpModelsApply(data);
-        if (decoded.sha) baseSha = decoded.sha;
-        if (snapshot) savedModels = [...snapshot];
-        review = null;
+        if (ownMatch) {
+          if (decoded.sha) baseSha = decoded.sha;
+          if (snapshot) savedModels = [...snapshot];
+          review = null;
+        }
         banner = null;
         applyResult = decoded;
+        applyResultOwn = ownMatch;
         return false;
       } catch {
-        banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+        markUnknownApplyOutcome(undefined, !alreadyReloaded);
         return false;
       }
     }
     if (data.unknownOutcome === true || data.error === 'unknown_outcome' || data.error === 'invalid_output') {
-      banner = {
-        kind: 'error',
-        message: typeof data.message === 'string' && data.message ? data.message : UNKNOWN_OUTCOME_MESSAGE,
-      };
+      markUnknownApplyOutcome(
+        typeof data.message === 'string' && data.message ? data.message : undefined,
+        !alreadyReloaded,
+      );
       return false;
     }
     // Once apply has been started on the helper, never present generic errors as retryable.
-    banner = {
-      kind: 'error',
-      message: typeof data.message === 'string' && data.message
-        ? data.message
-        : typeof data.error === 'string' && data.error
-          ? data.error
-          : UNKNOWN_OUTCOME_MESSAGE,
-    };
+    const msg = typeof data.message === 'string' && data.message
+      ? data.message
+      : typeof data.error === 'string' && data.error
+        ? data.error
+        : UNKNOWN_OUTCOME_MESSAGE;
+    markUnknownApplyOutcome(msg, !alreadyReloaded);
     return false;
   }
 
@@ -889,6 +938,8 @@ export function createOmpModels(options: {
       if (openSeq !== openSequence || !isOpen()) return;
       if (response.status === 501 || (record(data) && data.error === 'unavailable')) {
         busyAction = null;
+        pendingApplyOpId = null;
+        pendingApplySnapshot = null;
         loadState = 'unavailable';
         unavailableMessage = record(data) && typeof data.message === 'string' && data.message
           ? data.message
@@ -898,54 +949,139 @@ export function createOmpModels(options: {
       }
       if (!response.ok) {
         busyAction = null;
+        pendingApplyOpId = null;
         pendingApplySnapshot = null;
-        banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+        markUnknownApplyOutcome();
         renderBody();
         return;
       }
       const status = decodeOmpModelsApplyStatus(data);
       if (status.state === 'running') {
+        if (pendingApplyOpId !== null && status.opId !== pendingApplyOpId) {
+          busyAction = null;
+          pendingApplyOpId = null;
+          pendingApplySnapshot = null;
+          markUnknownApplyOutcome();
+          renderBody();
+          return;
+        }
         scheduleApplyStatusPoll(openSeq);
         return;
       }
-      busyAction = null;
+      const expectedOpId = pendingApplyOpId;
       const snapshot = pendingApplySnapshot;
+      pendingApplyOpId = null;
       pendingApplySnapshot = null;
       if (status.state === 'done') {
-        const delegated = applyOutcomeToUi(status.result.status, status.result.body, snapshot, status.finishedAt, snapshot === null);
-        if (!delegated) {
+        if (expectedOpId !== null && status.opId !== expectedOpId) {
+          busyAction = null;
+          markUnknownApplyOutcome();
           renderBody();
-          // If an apply started in an earlier modal open succeeded, refresh the displayed list while preserving the result panel.
-          if (snapshot === null && status.result.status >= 200 && status.result.status < 300) {
-            void refreshAfterExternalApply(openSeq);
+          return;
+        }
+        const ownMatch = expectedOpId !== null && status.opId === expectedOpId && snapshot !== null;
+        if (ownMatch) {
+          busyAction = null;
+          const delegated = applyOutcomeToUi(status.result.status, status.result.body, {
+            ownMatch: true,
+            snapshot,
+            opId: status.opId,
+          });
+          if (!delegated) renderBody();
+          return;
+        }
+        // Reopened while another/prior apply was running: show status as info only and keep editing locked through reconciliation GET.
+        const delegated = applyOutcomeToUi(status.result.status, status.result.body, {
+          ownMatch: false,
+          snapshot: null,
+          opId: status.opId,
+        });
+        if (!delegated) {
+          if (applyResult !== null) {
+            void reconcileAfterApply(openSeq);
+          } else {
+            busyAction = null;
+            renderBody();
           }
         }
         return;
       }
-      banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+      busyAction = null;
+      markUnknownApplyOutcome();
       renderBody();
     } catch {
       if (openSeq !== openSequence || !isOpen()) return;
       busyAction = null;
+      pendingApplyOpId = null;
       pendingApplySnapshot = null;
-      banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+      markUnknownApplyOutcome();
       renderBody();
     }
   }
 
-  async function refreshAfterExternalApply(openSeq: number): Promise<void> {
+  /** Reconciles the modal list after an observed apply completes while keeping editing locked until GET succeeds. */
+  async function reconcileAfterApply(openSeq: number): Promise<void> {
+    if (openSeq !== openSequence || !isOpen()) return;
+    busyAction = 'reconcile';
+    reconcileLocked = true;
+    banner = {
+      kind: 'info',
+      message: 'Apply finished — reloading updated allow-list before editing…',
+    };
+    renderBody();
     try {
       const response = await options.request(null, '/api/omp-models', { timeoutMs: 65_000 });
       const data = await readJson(response);
-      if (openSeq !== openSequence || !isOpen() || !response.ok) return;
+      if (openSeq !== openSequence || !isOpen()) return;
+      if (response.status === 501 || (record(data) && data.error === 'unavailable')) {
+        busyAction = null;
+        reconcileLocked = false;
+        loadState = 'unavailable';
+        unavailableMessage = record(data) && typeof data.message === 'string' && data.message
+          ? data.message
+          : 'OMP model allow-list management is unavailable on this host.';
+        renderBody();
+        return;
+      }
+      if (!response.ok) {
+        const msg = record(data) && typeof data.message === 'string' && data.message
+          ? data.message
+          : record(data) && typeof data.error === 'string' && data.error
+            ? data.error
+            : `HTTP ${response.status}`;
+        busyAction = null;
+        reconcileLocked = true;
+        banner = {
+          kind: 'error',
+          message: `Apply finished, but reloading the updated allow-list failed (${msg}). Reload before editing.`,
+          retryAction: 'reconcile',
+        };
+        renderBody();
+        return;
+      }
       const state = decodeOmpModelsState(data);
       baseSha = state.sha;
       savedModels = [...state.enabledModels];
       disabledProviders = [...state.disabledProviders];
       draft = [...state.enabledModels];
+      review = null;
+      applyNeedsReload = false;
+      reconcileLocked = false;
+      busyAction = null;
+      banner = null;
       renderBody();
       schedulePreview(true);
-    } catch { /* keep the apply result visible */ }
+    } catch (error) {
+      if (openSeq !== openSequence || !isOpen()) return;
+      busyAction = null;
+      reconcileLocked = true;
+      banner = {
+        kind: 'error',
+        message: `Apply finished, but reloading the updated allow-list failed (${errorMessage(error)}). Reload before editing.`,
+        retryAction: 'reconcile',
+      };
+      renderBody();
+    }
   }
 
   async function fetchApplyStatusForOpen(): Promise<OmpModelsApplyStatus | null> {
@@ -966,16 +1102,17 @@ export function createOmpModels(options: {
       banner = null;
       review = null;
       applyResult = null;
+      applyResultOwn = false;
       rowPreviews.clear();
       preview = { loading: false, result: null, error: null };
     }
     // Disable editing and reload controls immediately while GET is in flight.
     renderBody();
     try {
-      const [response, applyStatus] = await Promise.all([
-        options.request(null, '/api/omp-models', { timeoutMs: 65_000 }),
-        checkApplyStatus ? fetchApplyStatusForOpen() : Promise.resolve(null),
-      ]);
+      // Read apply-status before GET /api/omp-models so a completed apply is always reflected in GET.
+      const applyStatus = checkApplyStatus ? await fetchApplyStatusForOpen() : null;
+      if (openSeq !== openSequence || !isOpen()) return false;
+      const response = await options.request(null, '/api/omp-models', { timeoutMs: 65_000 });
       const data = await readJson(response);
       if (openSeq !== openSequence || !isOpen()) return false;
       if (response.status === 501 || (record(data) && data.error === 'unavailable')) {
@@ -1008,6 +1145,8 @@ export function createOmpModels(options: {
       }
       loadState = 'ready';
       busyAction = null;
+      applyNeedsReload = false;
+      reconcileLocked = false;
       if (keepDraft && banner?.retryAction === 'reload-keep-draft') {
         banner = {
           kind: 'conflict',
@@ -1017,23 +1156,26 @@ export function createOmpModels(options: {
 
       if (applyStatus?.state === 'running') {
         busyAction = 'apply';
+        pendingApplyOpId = null;
+        pendingApplySnapshot = null;
         banner = {
           kind: 'info',
-          message: 'An apply is currently running on this host. Waiting for deployment results…',
+          message: 'Another apply is running on this host. Waiting for deployment results…',
         };
         renderBody();
         scheduleApplyStatusPoll(openSeq);
         return true;
       }
-      if (applyStatus?.state === 'done' && (applyStatus.finishedAt === null || applyStatus.finishedAt !== dismissedApplyFinishedAt)) {
-        const delegated = applyOutcomeToUi(applyStatus.result.status, applyStatus.result.body, null, applyStatus.finishedAt, true);
+      if (applyStatus?.state === 'done' && applyStatus.opId !== dismissedApplyOpId) {
+        const delegated = applyOutcomeToUi(applyStatus.result.status, applyStatus.result.body, {
+          ownMatch: false,
+          snapshot: null,
+          opId: applyStatus.opId,
+          alreadyReloaded: true,
+        });
         if (!delegated) {
           renderBody();
-          if (applyStatus.result.status >= 200 && applyStatus.result.status < 300 && baseSha !== state.sha) {
-            void refreshAfterExternalApply(openSeq);
-          } else {
-            schedulePreview(true);
-          }
+          schedulePreview(true);
         }
         return true;
       }
@@ -1115,7 +1257,7 @@ export function createOmpModels(options: {
   }
 
   async function runDryRun(): Promise<void> {
-    if (loadState !== 'ready' || busyAction !== null) return;
+    if (loadState !== 'ready' || busyAction !== null || reconcileLocked || applyNeedsReload) return;
     const openSeq = openSequence;
     const snapshot = [...draft];
     const targetSha = baseSha;
@@ -1152,12 +1294,13 @@ export function createOmpModels(options: {
   }
 
   async function runApply(): Promise<void> {
-    if (loadState !== 'ready' || busyAction !== null || !hasPendingReview()) return;
+    if (loadState !== 'ready' || busyAction !== null || reconcileLocked || applyNeedsReload || !hasPendingReview()) return;
     const openSeq = openSequence;
     const snapshot = [...draft];
     const targetSha = baseSha;
     dismissPreviousApply();
     busyAction = 'apply';
+    pendingApplyOpId = null;
     pendingApplySnapshot = snapshot;
     banner = null;
     renderBody();
@@ -1170,35 +1313,68 @@ export function createOmpModels(options: {
       });
       const data = await readJson(response);
       if (openSeq !== openSequence || !isOpen()) return;
-      if (response.status === 202 || (record(data) && data.state === 'running' && (response.status === 200 || response.status === 409))) {
+      // 409 apply_in_progress: our draft was rejected — keep draft dirty, invalidate review, never show Applied.
+      if (response.status === 409 && record(data) && data.error === 'apply_in_progress') {
+        busyAction = null;
+        pendingApplyOpId = null;
+        pendingApplySnapshot = null;
+        review = null;
+        applyResult = null;
+        applyResultOwn = false;
         banner = {
           kind: 'info',
-          message: response.status === 409
-            ? 'Another apply is already running on this host. Waiting for deployment results…'
-            : 'Applying and deploying to fleet hosts…',
+          message: 'Another apply is running. Your draft was not applied; reload and review again once it finishes.',
+        };
+        renderBody();
+        return;
+      }
+      if (response.status === 202) {
+        const opId = record(data) && typeof data.opId === 'string' && data.opId.trim() ? data.opId.trim() : null;
+        if (!opId) {
+          busyAction = null;
+          pendingApplyOpId = null;
+          pendingApplySnapshot = null;
+          markUnknownApplyOutcome();
+          renderBody();
+          return;
+        }
+        pendingApplyOpId = opId;
+        banner = {
+          kind: 'info',
+          message: 'Applying and deploying to fleet hosts…',
         };
         renderBody();
         scheduleApplyStatusPoll(openSeq);
         return;
       }
       busyAction = null;
+      pendingApplyOpId = null;
       pendingApplySnapshot = null;
-      const delegated = applyOutcomeToUi(response.status, data, snapshot, null, false);
+      const responseOpId = record(data) && typeof data.opId === 'string' && data.opId.trim() ? data.opId.trim() : null;
+      if (response.status >= 200 && response.status < 300 && !responseOpId) {
+        markUnknownApplyOutcome();
+        renderBody();
+        return;
+      }
+      const delegated = applyOutcomeToUi(response.status, data, {
+        ownMatch: true,
+        snapshot,
+        opId: responseOpId,
+      });
       if (!delegated) renderBody();
     } catch {
       if (openSeq !== openSequence || !isOpen()) return;
-      // Once apply was submitted, never show a Retry button; poll apply-status to discover the true server state.
-      banner = {
-        kind: 'info',
-        message: 'Apply request interrupted — checking server apply status…',
-      };
+      // Without a confirmed opId from POST /apply, fail closed: invalidate review and require reload.
+      busyAction = null;
+      pendingApplyOpId = null;
+      pendingApplySnapshot = null;
+      markUnknownApplyOutcome();
       renderBody();
-      scheduleApplyStatusPoll(openSeq);
     }
   }
 
   function resetDraft(): void {
-    if (loadState !== 'ready' || busyAction !== null) return;
+    if (loadState !== 'ready' || busyAction !== null || reconcileLocked) return;
     draft = [...savedModels];
     rowPreviews.clear();
     banner = null;
@@ -1208,7 +1384,7 @@ export function createOmpModels(options: {
   }
 
   function addPattern(): void {
-    if (loadState !== 'ready' || busyAction !== null) return;
+    if (loadState !== 'ready' || busyAction !== null || reconcileLocked) return;
     const input = modal?.querySelector<HTMLInputElement>('#ompModelsAddInput');
     const value = (input?.value || '').trim();
     if (!value) return;
@@ -1225,16 +1401,22 @@ export function createOmpModels(options: {
     const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-omp-action]') : null;
     if (!target || busyAction !== null) return;
     const action = target.dataset.ompAction;
-    if (action === 'add') {
-      addPattern();
-      return;
-    }
     if (action === 'retry') {
       const kind = target.dataset.ompRetry;
+      if (kind === 'reconcile') {
+        void reconcileAfterApply(openSequence);
+        return;
+      }
+      if (reconcileLocked) return;
       if (kind === 'load') void reloadFresh(false);
       else if (kind === 'reload-keep-draft') void reloadFresh(true);
       else if (kind === 'review') void runDryRun();
       else if (kind === 'apply') void runApply();
+      return;
+    }
+    if (reconcileLocked) return;
+    if (action === 'add') {
+      addPattern();
       return;
     }
     const index = Number(target.dataset.index);
@@ -1275,7 +1457,7 @@ export function createOmpModels(options: {
   function handleBodyInput(event: Event): void {
     const target = event.target;
     if (!(target instanceof HTMLInputElement) || !target.classList.contains('omp-model-input') || target.id === 'ompModelsAddInput') return;
-    if (busyAction !== null) return;
+    if (busyAction !== null || reconcileLocked) return;
     const index = Number(target.dataset.index);
     if (!Number.isInteger(index) || index <= 0 || index >= draft.length) return;
     draft[index] = target.value;
@@ -1308,6 +1490,8 @@ export function createOmpModels(options: {
     abortPreviews();
     clearApplyPollTimer();
     busyAction = null;
+    reconcileLocked = false;
+    pendingApplyOpId = null;
     pendingApplySnapshot = null;
     matchesOpen = false;
     overlay.style.display = 'flex';
@@ -1320,6 +1504,8 @@ export function createOmpModels(options: {
     abortPreviews();
     clearApplyPollTimer();
     busyAction = null;
+    reconcileLocked = false;
+    pendingApplyOpId = null;
     pendingApplySnapshot = null;
     if (modal) modal.style.display = 'none';
   }

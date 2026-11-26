@@ -57,9 +57,10 @@ export interface OmpModelsHttpReply {
 
 export type OmpModelsApplyStatus =
   | { readonly state: 'idle' }
-  | { readonly state: 'running'; readonly startedAt: number; readonly base: string }
+  | { readonly state: 'running'; readonly opId: string; readonly startedAt: number; readonly base: string }
   | {
       readonly state: 'done';
+      readonly opId: string;
       readonly startedAt: number;
       readonly finishedAt: number;
       readonly base: string;
@@ -929,14 +930,16 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
           body: {
             error: 'apply_in_progress',
             state: 'running',
+            opId: applyState.opId,
             startedAt: applyState.startedAt,
             base: applyState.base,
             message: 'Another apply is already in progress.',
           },
         };
       }
+      const opId = crypto.randomUUID();
       const startedAt = Date.now();
-      applyState = { state: 'running', startedAt, base };
+      applyState = { state: 'running', opId, startedAt, base };
 
       // Single-flight background execution: never kill a running `set` on an HTTP deadline.
       const task = (async (): Promise<OmpModelsHttpReply> => {
@@ -952,13 +955,17 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
           return unknownApplyOutcomeReply('unknown_outcome', null);
         }
       })().then(reply => {
-        applyState = { state: 'done', startedAt, finishedAt: Date.now(), base, result: reply };
-        return reply;
+        const stampedReply: OmpModelsHttpReply = {
+          status: reply.status,
+          body: { ...reply.body, opId },
+        };
+        applyState = { state: 'done', opId, startedAt, finishedAt: Date.now(), base, result: stampedReply };
+        return stampedReply;
       });
 
       const waitMs = options.applyWaitMs ?? envTimeout('PI_DISH_OMP_MODELS_APPLY_WAIT_MS', DEFAULT_APPLY_WAIT_MS);
       if (waitMs <= 0) {
-        return { status: 202, body: { state: 'running', startedAt, base } };
+        return { status: 202, body: { state: 'running', opId, startedAt, base } };
       }
       let waitTimer: NodeJS.Timeout | null = null;
       const settled = await Promise.race([
@@ -970,7 +977,7 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
       ]);
       if (waitTimer !== null) clearTimeout(waitTimer);
       if (settled.done) return settled.reply;
-      return { status: 202, body: { state: 'running', startedAt, base } };
+      return { status: 202, body: { state: 'running', opId, startedAt, base } };
     },
     applyStatus() {
       if (!available()) return unavailableReply();
@@ -982,6 +989,7 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
           status: 200,
           body: {
             state: 'running',
+            opId: applyState.opId,
             startedAt: applyState.startedAt,
             base: applyState.base,
           },
@@ -991,6 +999,7 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
         status: 200,
         body: {
           state: 'done',
+          opId: applyState.opId,
           startedAt: applyState.startedAt,
           finishedAt: applyState.finishedAt,
           base: applyState.base,

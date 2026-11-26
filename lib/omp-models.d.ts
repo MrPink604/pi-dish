@@ -26,10 +26,12 @@ export type OmpModelsApplyStatus = {
     readonly state: 'idle';
 } | {
     readonly state: 'running';
+    readonly opId: string;
     readonly startedAt: number;
     readonly base: string;
 } | {
     readonly state: 'done';
+    readonly opId: string;
     readonly startedAt: number;
     readonly finishedAt: number;
     readonly base: string;

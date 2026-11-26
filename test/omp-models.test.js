@@ -574,41 +574,53 @@ test('single-flight Apply returns 202 + 409 apply_in_progress, never kills runni
     const service = (0, omp_models_js_1.createOmpModelsService)({ fleetBin, tmpDir, applyWaitMs: 60 });
     try {
         assert.deepEqual(service.applyStatus(), { status: 200, body: { state: 'idle' } });
-        // Start slow apply -> POST returns 202 {state:"running"} after applyWaitMs without killing the child
+        // Start slow apply -> POST returns 202 {state:"running", opId} after applyWaitMs without killing the child
         setControl({ mode: 'wait-file', gateFile: gate1, gatePayload: { sha: SHA_B, hosts: { beelink: 'ok' } } });
         const first = await service.apply({ base: SHA_A, enabledModels: ['anthropic/claude-opus-5-5'] });
         assert.equal(first.status, 202);
         assert.equal(first.body.state, 'running');
-        // Second apply while running gets 409 {error:"apply_in_progress"}
+        assert.equal(typeof first.body.opId, 'string');
+        assert.ok(String(first.body.opId).length > 0);
+        const opId1 = String(first.body.opId);
+        // Second apply while running gets 409 {error:"apply_in_progress"} referencing the running opId
         const second = await service.apply({ base: SHA_A, enabledModels: ['anthropic/claude-opus-5-5'] });
         assert.equal(second.status, 409);
         assert.equal(second.body.error, 'apply_in_progress');
-        assert.equal(service.applyStatus().body.state, 'running');
+        assert.equal(second.body.opId, opId1);
+        const runningStatus = service.applyStatus();
+        assert.equal(runningStatus.body.state, 'running');
+        assert.equal(runningStatus.body.opId, opId1);
         // Child is still alive (was NOT killed when 202 returned)
         const runLog = readLogEntries(logFile).at(-1);
         assert.equal(pidAlive(Number(runLog.pid)), true);
-        // Release gate -> helper finishes cleanly -> applyStatus reports done with 200 result
+        // Release gate -> helper finishes cleanly -> applyStatus reports done with matching opId and 200 result
         fs.writeFileSync(gate1, 'go');
         await waitUntil(() => service.applyStatus().body.state === 'done');
         const done1 = service.applyStatus();
         assert.equal(done1.status, 200);
         assert.equal(done1.body.state, 'done');
+        assert.equal(done1.body.opId, opId1);
         const result1 = (0, test_types_js_1.record)(done1.body.result);
         assert.equal(result1.status, 200);
+        assert.equal((0, test_types_js_1.record)(result1.body).opId, opId1);
         assert.equal((0, test_types_js_1.record)(result1.body).sha, SHA_B);
         assert.equal(fs.existsSync(String((0, test_types_js_1.record)(runLog.fileInfo).path)), false, 'apply temp file removed after completion');
-        // Next apply dies without parseable JSON -> apply-status records unknown_outcome with retryable:false
+        // Next apply gets a distinct opId and dies without parseable JSON -> apply-status records unknown_outcome with retryable:false
         setControl({ mode: 'wait-file', gateFile: gate2, afterGate: 'die-no-json' });
         const third = await service.apply({ base: SHA_B, enabledModels: ['anthropic/claude-opus-5-5'] });
         assert.equal(third.status, 202);
+        const opId2 = String(third.body.opId);
+        assert.notEqual(opId2, opId1);
         fs.writeFileSync(gate2, 'go');
         await waitUntil(() => {
             const st = service.applyStatus();
-            return st.body.state === 'done' && (0, test_types_js_1.record)((0, test_types_js_1.record)(st.body.result).body).error === 'unknown_outcome';
+            return st.body.state === 'done' && st.body.opId === opId2;
         });
         const done2 = service.applyStatus();
+        assert.equal(done2.body.opId, opId2);
         const res2 = (0, test_types_js_1.record)(done2.body.result);
         assert.equal(res2.status, 502);
+        assert.equal((0, test_types_js_1.record)(res2.body).opId, opId2);
         assert.equal((0, test_types_js_1.record)(res2.body).unknownOutcome, true);
         assert.equal((0, test_types_js_1.record)(res2.body).retryable, false);
         assert.match(String((0, test_types_js_1.record)(res2.body).message), /unknown outcome.*fleet-config log/i);
@@ -779,6 +791,11 @@ test('HTTP routes enforce availability, bearer auth, CSRF, apply-status, harness
         assert.equal((0, test_types_js_1.record)(desc.capabilities).ompModels, undefined);
         assert.equal((await fetch(`${srvNoFleet.base}/api/omp-models`)).status, 501);
         assert.equal((await fetch(`${srvNoFleet.base}/api/omp-models/apply-status`)).status, 501);
+        assert.equal((await fetch(`${srvNoFleet.base}/api/omp-models/apply`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Origin: srvNoFleet.base, 'Sec-Fetch-Site': 'same-origin' },
+            body: JSON.stringify({ base: SHA_A, enabledModels: ['anthropic/claude-opus-5-5'] }),
+        })).status, 501);
     }
     finally {
         await srvNoFleet.stop();
@@ -809,6 +826,11 @@ test('HTTP routes enforce availability, bearer auth, CSRF, apply-status, harness
         // Bearer auth required
         assert.equal((await fetch(`${srv.base}/api/omp-models`)).status, 401);
         assert.equal((await fetch(`${srv.base}/api/omp-models/apply-status`)).status, 401);
+        assert.equal((await fetch(`${srv.base}/api/omp-models/apply`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base: SHA_A, enabledModels: ['anthropic/claude-opus-5-5'] }),
+        })).status, 401);
         // CSRF checks on mutating endpoints
         assert.equal((await fetch(`${srv.base}/api/omp-models/apply`, {
             method: 'POST',
@@ -862,9 +884,14 @@ test('HTTP routes enforce availability, bearer auth, CSRF, apply-status, harness
             body: JSON.stringify({ base: SHA_A, enabledModels: ['anthropic/claude-opus-5-5', 'deepseek/*'] }),
         });
         assert.equal(applyRes.status, 200);
-        assert.equal((0, test_types_js_1.record)(await applyRes.json()).sha, SHA_B);
+        const applyBody = (0, test_types_js_1.record)(await applyRes.json());
+        assert.equal(applyBody.sha, SHA_B);
+        assert.equal(typeof applyBody.opId, 'string');
+        assert.ok(String(applyBody.opId).length > 0);
         const statusAfter = (0, test_types_js_1.record)(await (await fetch(`${srv.base}/api/omp-models/apply-status`, { headers: authHeaders })).json());
         assert.equal(statusAfter.state, 'done');
+        assert.equal(statusAfter.opId, applyBody.opId);
+        assert.equal((0, test_types_js_1.record)((0, test_types_js_1.record)(statusAfter.result).body).opId, applyBody.opId);
         // PUT /api/harnesses/omp/settings refuses enabledModels cleanly
         const blockedSetting = await fetch(`${srv.base}/api/harnesses/omp/settings`, {
             method: 'PUT',

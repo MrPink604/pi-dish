@@ -105,6 +105,7 @@ for (const viewport of [
                 currentList = payload.enabledModels.map(String);
             return route.fulfill({
                 json: {
+                    opId: 'op-happy-1',
                     sha: SHA_2,
                     unchanged: false,
                     allHostsFailed: false,
@@ -225,6 +226,7 @@ for (const viewport of [
             // Non-connectivity error on jacobs-macbook-air must classify as error, NOT offline warning
             return route.fulfill({
                 json: {
+                    opId: 'op-mac-auth-fail',
                     sha: SHA_3,
                     unchanged: false,
                     allHostsFailed: false,
@@ -236,6 +238,7 @@ for (const viewport of [
         return route.fulfill({
             status: 502,
             json: {
+                opId: 'op-unknown-1',
                 error: 'unknown_outcome',
                 unknownOutcome: true,
                 retryable: false,
@@ -335,7 +338,7 @@ for (const viewport of [
         json: { dryRun: true, sha: currentSha, changed: true, diff: '+  - deepseek/*\n' },
     }));
     await page.route(`${fleet.self.base}/api/omp-models/apply`, (route) => {
-        applyStatusPayload = { state: 'running', startedAt: Date.now(), base: currentSha };
+        applyStatusPayload = { state: 'running', opId: 'op-reopen-1', startedAt: Date.now(), base: currentSha };
         return route.fulfill({ status: 202, json: applyStatusPayload });
     });
     await page.evaluate(() => fixtureApp.features.ompModelsController.open());
@@ -360,22 +363,25 @@ for (const viewport of [
     currentList = ['anthropic/claude-opus-5-5', 'openai-codex/*', 'deepseek/*'];
     applyStatusPayload = {
         state: 'done',
+        opId: 'op-reopen-1',
         startedAt: Date.now() - 500,
         finishedAt: Date.now(),
         base: SHA_1,
         result: {
             status: 200,
             body: {
+                opId: 'op-reopen-1',
                 sha: SHA_2,
                 unchanged: false,
                 allHostsFailed: false,
                 restartRequired: true,
-                hosts: { beelink: 'ok', 'jacobs-macbook-air': 'Connection timed out' },
+                hosts: { beelink: 'ok', 'jacobs-macbook-air': 'ssh: connect to host jacobs-macbook-air port 22: Operation timed out' },
             },
         },
     };
-    // Reopen modal -> immediately displays the completed result from apply-status!
+    // Reopen modal -> immediately displays the completed result from apply-status as info only
     await page.evaluate(() => fixtureApp.features.ompModelsController.open());
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toHaveAttribute('data-apply-source', 'status');
     await (0, fixtures_js_1.expect)(page.locator('#ompModelsRestartNote')).toContainText('Running OMP sessions need a restart');
     await (0, fixtures_js_1.expect)(page.locator('.omp-host-row[data-host="beelink"]')).toHaveAttribute('data-status-kind', 'ok');
     await (0, fixtures_js_1.expect)(page.locator('.omp-host-row[data-host="jacobs-macbook-air"]')).toHaveAttribute('data-status-kind', 'warn');
@@ -433,4 +439,312 @@ for (const viewport of [
     await page.locator('#ompModelsReview').click();
     await (0, fixtures_js_1.expect)(page.locator('#ompModelsDiff')).toContainText('+  - deepseek/*');
     (0, fixtures_js_1.expect)(pageErrors).toEqual([]);
+});
+(0, fixtures_js_1.test)('regression A: 409 apply_in_progress keeps draft dirty, invalidates review, never shows Applied, and reopen status never mutates draft', async ({ page, fleet }) => {
+    await enableLocalCapability(page, fleet.self.base, true);
+    await mockPreview(page, fleet.self.base);
+    let currentSha = SHA_1;
+    let currentList = ['anthropic/claude-opus-5-5', 'openai-codex/*'];
+    let statusPayload = { state: 'idle' };
+    let applyMode = 'conflict-running';
+    await page.route(`${fleet.self.base}/api/omp-models`, (route) => route.fulfill({
+        json: { available: true, sha: currentSha, enabledModels: currentList, disabledProviders: ['openrouter'] },
+    }));
+    await page.route(`${fleet.self.base}/api/omp-models/apply-status`, (route) => route.fulfill({
+        json: statusPayload,
+    }));
+    await page.route(`${fleet.self.base}/api/omp-models/dry-run`, (route) => route.fulfill({
+        json: { dryRun: true, sha: currentSha, changed: true, diff: '+  - deepseek/*\n' },
+    }));
+    await page.route(`${fleet.self.base}/api/omp-models/apply`, (route) => {
+        if (applyMode === 'conflict-running') {
+            // Another editor's op finishes shortly after; this editor MUST NOT claim it applied our draft!
+            statusPayload = {
+                state: 'done',
+                opId: 'op-other-editor',
+                startedAt: Date.now() - 200,
+                finishedAt: Date.now(),
+                base: SHA_1,
+                result: {
+                    status: 200,
+                    body: { opId: 'op-other-editor', sha: SHA_2, unchanged: false, hosts: { beelink: 'ok' }, restartRequired: true },
+                },
+            };
+            return route.fulfill({
+                status: 409,
+                json: {
+                    error: 'apply_in_progress',
+                    state: 'running',
+                    opId: 'op-other-editor',
+                    startedAt: Date.now() - 200,
+                    base: SHA_1,
+                    message: 'Another apply is already in progress.',
+                },
+            });
+        }
+        // 202 with op-mine, while apply-status returns done for a DIFFERENT opId
+        statusPayload = {
+            state: 'done',
+            opId: 'op-someone-else',
+            startedAt: Date.now() - 100,
+            finishedAt: Date.now(),
+            base: SHA_1,
+            result: {
+                status: 200,
+                body: { opId: 'op-someone-else', sha: SHA_2, unchanged: false, hosts: { beelink: 'ok' }, restartRequired: true },
+            },
+        };
+        return route.fulfill({
+            status: 202,
+            json: { state: 'running', opId: 'op-mine', startedAt: Date.now(), base: SHA_1 },
+        });
+    });
+    await page.evaluate(() => fixtureApp.features.ompModelsController.open());
+    await page.locator('#ompModelsAddInput').fill('deepseek/*');
+    await page.locator('#ompModelsAddBtn').click();
+    await page.locator('#ompModelsReview').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeEnabled();
+    // 409 apply_in_progress -> shows "Another apply is running", keeps draft dirty, invalidates review, NEVER shows Applied
+    await page.locator('#ompModelsApply').click();
+    await (0, fixtures_js_1.expect)(page.locator('.omp-models-banner')).toContainText('Another apply is running');
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReviewPanel')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReset')).toBeEnabled();
+    await (0, fixtures_js_1.expect)(page.locator('.omp-model-row[data-index="2"] .omp-model-input')).toHaveValue('deepseek/*');
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsSha')).toContainText(SHA_1.slice(0, 7));
+    // Mismatched opId on 202 polling -> NEVER marks draft saved or shows Applied; fails closed to unknown outcome
+    applyMode = 'mismatch-opid';
+    await page.locator('#ompModelsReview').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeEnabled();
+    await page.locator('#ompModelsApply').click();
+    await (0, fixtures_js_1.expect)(page.locator('.omp-models-banner')).toContainText('Unknown outcome: reload the list and check the fleet-config log.');
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReset')).toBeEnabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReview')).toBeDisabled();
+    // Reopening with no submitted opId when apply-status has done (SHA_2) and GET has SHA_3: shows status info only, keeps GET's SHA_3 and list
+    currentSha = SHA_3;
+    currentList = ['anthropic/claude-opus-5-5', 'from-get/*'];
+    await page.locator('#ompModelsClose').click();
+    await page.evaluate(() => fixtureApp.features.ompModelsController.open());
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toHaveAttribute('data-apply-source', 'status');
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toContainText('Last apply on this host');
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsSha')).toContainText(SHA_3.slice(0, 7));
+    await (0, fixtures_js_1.expect)(page.locator('.omp-model-row[data-index="1"] .omp-model-input')).toHaveValue('from-get/*');
+});
+(0, fixtures_js_1.test)('regression B: unknown_outcome and invalid_output on apply invalidate review and require reload + fresh Review before another Apply', async ({ page, fleet }) => {
+    await enableLocalCapability(page, fleet.self.base, true);
+    await mockIdleApplyStatus(page, fleet.self.base);
+    await mockPreview(page, fleet.self.base);
+    let currentSha = SHA_1;
+    let failNextGet = false;
+    let applyMode = 'unknown';
+    await page.route(`${fleet.self.base}/api/omp-models`, (route) => {
+        if (failNextGet) {
+            failNextGet = false;
+            return route.fulfill({ status: 502, json: { error: 'helper_error', message: 'reload failed' } });
+        }
+        return route.fulfill({
+            json: { available: true, sha: currentSha, enabledModels: ['anthropic/claude-opus-5-5', 'openai-codex/*'], disabledProviders: [] },
+        });
+    });
+    await page.route(`${fleet.self.base}/api/omp-models/dry-run`, (route) => route.fulfill({
+        json: { dryRun: true, sha: currentSha, changed: true, diff: '+  - deepseek/*\n' },
+    }));
+    await page.route(`${fleet.self.base}/api/omp-models/apply`, (route) => {
+        if (applyMode === 'unknown') {
+            return route.fulfill({
+                status: 502,
+                json: {
+                    opId: 'op-unk',
+                    error: 'unknown_outcome',
+                    unknownOutcome: true,
+                    retryable: false,
+                    message: 'Unknown outcome: reload the list and check the fleet-config log.',
+                },
+            });
+        }
+        if (applyMode === 'invalid-200') {
+            // Malformed 200 missing hosts -> invalid_output
+            return route.fulfill({ status: 200, json: { opId: 'op-bad', sha: SHA_2 } });
+        }
+        return route.fulfill({
+            status: 200,
+            json: { opId: 'op-good', sha: SHA_2, unchanged: false, hosts: { beelink: 'ok' }, allHostsFailed: false, restartRequired: true },
+        });
+    });
+    await page.evaluate(() => fixtureApp.features.ompModelsController.open());
+    await page.locator('#ompModelsAddInput').fill('deepseek/*');
+    await page.locator('#ompModelsAddBtn').click();
+    await page.locator('#ompModelsReview').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeEnabled();
+    // 1. unknown_outcome invalidates review and disables both Review and Apply with no Retry button
+    await page.locator('#ompModelsApply').click();
+    await (0, fixtures_js_1.expect)(page.locator('.omp-models-banner')).toContainText('Unknown outcome');
+    await (0, fixtures_js_1.expect)(page.locator('.omp-banner-retry')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReviewPanel')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReview')).toBeDisabled();
+    // A failed reload MUST NOT unlock Review/Apply
+    failNextGet = true;
+    await page.locator('#ompModelsReload').click();
+    await (0, fixtures_js_1.expect)(page.locator('.omp-models-banner')).toContainText('reload failed');
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsFooter')).toBeHidden();
+    // Successful reload unlocks Review, but Apply stays disabled until a fresh Review
+    await page.locator('.omp-banner-retry').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReview')).toBeEnabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeDisabled();
+    // 2. invalid_output (malformed 200) also invalidates review and blocks Review/Apply until reload + fresh Review
+    applyMode = 'invalid-200';
+    await page.locator('#ompModelsAddInput').fill('deepseek/*');
+    await page.locator('#ompModelsAddBtn').click();
+    await page.locator('#ompModelsReview').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeEnabled();
+    await page.locator('#ompModelsApply').click();
+    await (0, fixtures_js_1.expect)(page.locator('.omp-models-banner')).toContainText('Unknown outcome');
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReviewPanel')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReview')).toBeDisabled();
+    // Reload + edit + fresh Review enables Apply and succeeds cleanly
+    applyMode = 'ok';
+    await page.locator('#ompModelsReload').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeDisabled();
+    await page.locator('#ompModelsAddInput').fill('deepseek/*');
+    await page.locator('#ompModelsAddBtn').click();
+    await page.locator('#ompModelsReview').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeEnabled();
+    await page.locator('#ompModelsApply').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toContainText('Applied 2222222');
+});
+(0, fixtures_js_1.test)('regression C: reopening during running Apply keeps editing locked until reconciliation GET finishes, and keeps result panel + Reload button if GET fails', async ({ page, fleet }) => {
+    await enableLocalCapability(page, fleet.self.base, true);
+    await mockPreview(page, fleet.self.base);
+    let getCalls = 0;
+    let holdReconcileGet = false;
+    let heldReconcileRoute = null;
+    let statusPayload = { state: 'running', opId: 'op-bg-1', startedAt: Date.now() - 500, base: SHA_1 };
+    await page.route(`${fleet.self.base}/api/omp-models`, (route) => {
+        getCalls++;
+        if (getCalls === 1) {
+            return route.fulfill({
+                json: { available: true, sha: SHA_1, enabledModels: ['anthropic/claude-opus-5-5', 'openai-codex/*'], disabledProviders: [] },
+            });
+        }
+        if (holdReconcileGet) {
+            holdReconcileGet = false;
+            heldReconcileRoute = route;
+            return;
+        }
+        return route.fulfill({
+            json: { available: true, sha: SHA_2, enabledModels: ['anthropic/claude-opus-5-5', 'openai-codex/*', 'from-bg/*'], disabledProviders: [] },
+        });
+    });
+    await page.route(`${fleet.self.base}/api/omp-models/apply-status`, (route) => route.fulfill({
+        json: statusPayload,
+    }));
+    await page.evaluate(() => fixtureApp.features.ompModelsController.open());
+    await (0, fixtures_js_1.expect)(page.locator('.omp-model-row[data-index="1"] .omp-model-input')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsAddInput')).toBeDisabled();
+    // Apply finishes while modal is open -> reconciliation GET starts; editing MUST stay locked until GET finishes
+    holdReconcileGet = true;
+    statusPayload = {
+        state: 'done',
+        opId: 'op-bg-1',
+        startedAt: Date.now() - 500,
+        finishedAt: Date.now(),
+        base: SHA_1,
+        result: {
+            status: 200,
+            body: { opId: 'op-bg-1', sha: SHA_2, unchanged: false, hosts: { beelink: 'ok' }, allHostsFailed: false, restartRequired: true },
+        },
+    };
+    await fixtures_js_1.expect.poll(() => !!heldReconcileRoute).toBe(true);
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('.omp-model-row[data-index="1"] .omp-model-input')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsAddInput')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReview')).toBeDisabled();
+    // Fail reconciliation GET -> result panel stays visible, banner offers Reload button, editing stays LOCKED
+    await (0, fixtures_js_1.requiredRoute)(heldReconcileRoute).fulfill({ status: 502, json: { error: 'git_busy', message: 'git busy' } });
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsRestartNote')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('[data-omp-retry="reconcile"]')).toHaveText('Reload');
+    await (0, fixtures_js_1.expect)(page.locator('.omp-model-row[data-index="1"] .omp-model-input')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsAddInput')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsReview')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApply')).toBeDisabled();
+    // Clicking Reload succeeds -> updates list to SHA_2 + from-bg/*, keeps result panel, unlocks editing
+    await page.locator('[data-omp-retry="reconcile"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsSha')).toContainText(SHA_2.slice(0, 7));
+    await (0, fixtures_js_1.expect)(page.locator('.omp-model-row[data-index="2"] .omp-model-input')).toHaveValue('from-bg/*');
+    await (0, fixtures_js_1.expect)(page.locator('.omp-model-row[data-index="2"] .omp-model-input')).toBeEnabled();
+    await (0, fixtures_js_1.expect)(page.locator('#ompModelsApplyResult')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('[data-omp-retry="reconcile"]')).toHaveCount(0);
+});
+(0, fixtures_js_1.test)('regression E: bare timed out is an ordinary Mac failure; only transport-specific errors classify as offline warning', async ({ page, fleet }) => {
+    await enableLocalCapability(page, fleet.self.base, true);
+    await mockPreview(page, fleet.self.base);
+    await page.route(`${fleet.self.base}/api/omp-models`, (route) => route.fulfill({
+        json: { available: true, sha: SHA_1, enabledModels: ['anthropic/claude-opus-5-5', 'openai-codex/*'], disabledProviders: [] },
+    }));
+    await page.route(`${fleet.self.base}/api/omp-models/apply-status`, (route) => route.fulfill({
+        json: {
+            state: 'done',
+            opId: 'op-bare-timeout',
+            startedAt: Date.now() - 200,
+            finishedAt: Date.now(),
+            base: SHA_1,
+            result: {
+                status: 200,
+                body: {
+                    opId: 'op-bare-timeout',
+                    sha: SHA_1,
+                    unchanged: false,
+                    allHostsFailed: false,
+                    restartRequired: true,
+                    hosts: { beelink: 'ok', 'jacobs-macbook-air': 'timed out' },
+                },
+            },
+        },
+    }));
+    await page.evaluate(() => fixtureApp.features.ompModelsController.open());
+    await (0, fixtures_js_1.expect)(page.locator('.omp-host-row[data-host="jacobs-macbook-air"]')).toHaveAttribute('data-status-kind', 'error');
+    await (0, fixtures_js_1.expect)(page.locator('.omp-host-row[data-host="jacobs-macbook-air"]')).not.toContainText('offline');
+    const results = await page.evaluate(() => {
+        const browserApi = window.PiDishBrowser;
+        const classify = browserApi.classifyOmpHostResult;
+        return {
+            // Non-transport / bare timeout errors on Mac MUST be 'error'
+            bareTimedOut: classify('jacobs-macbook-air', 'timed out', false),
+            deployTimedOut: classify('jacobs-macbook-air', 'deploy timed out after 30s', false),
+            bareConnTimedOut: classify('jacobs-macbook-air', 'Connection timed out', false),
+            chezmoiError: classify('jacobs-macbook-air', 'chezmoi apply failed: permission denied', false),
+            // Transport-specific errors on Mac MUST be 'warn'
+            sshConnect: classify('jacobs-macbook-air', 'ssh: connect to host jacobs-macbook-air port 22: Operation timed out', false),
+            bannerTimeout: classify('jacobs-macbook-air', 'Connection timed out during banner exchange', false),
+            connectTimeout: classify('jacobs-macbook-air', 'Connection timed out during connect', false),
+            noRoute: classify('jacobs-macbook-air', 'No route to host', false),
+            resolveHost: classify('jacobs-macbook-air', 'ssh: Could not resolve hostname jacobs-macbook-air: Name or service not known', false),
+            connRefused: classify('jacobs-macbook-air', 'Connection refused', false),
+            netUnreach: classify('jacobs-macbook-air', 'Network is unreachable', false),
+            // Non-Mac host or allHostsFailed MUST be 'error'
+            otherHostRefused: classify('beelink', 'Connection refused', false),
+            macAllFailed: classify('jacobs-macbook-air', 'Connection refused', true),
+        };
+    });
+    (0, fixtures_js_1.expect)(results).toEqual({
+        bareTimedOut: 'error',
+        deployTimedOut: 'error',
+        bareConnTimedOut: 'error',
+        chezmoiError: 'error',
+        sshConnect: 'warn',
+        bannerTimeout: 'warn',
+        connectTimeout: 'warn',
+        noRoute: 'warn',
+        resolveHost: 'warn',
+        connRefused: 'warn',
+        netUnreach: 'warn',
+        otherHostRefused: 'error',
+        macAllFailed: 'error',
+    });
 });
