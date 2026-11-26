@@ -26,7 +26,7 @@ export { createNewSessionPreferences, createNewSessionConfigPreview, decodeHarne
 
 export { createHarnessSettings } from './harness-settings';
 export { decodeHarnessConfig, decodeHarnessAgents } from './harness-settings-data';
-export { createOmpModels, decodeOmpModelsState, decodeOmpModelsPreview, decodeOmpModelsDryRun, decodeOmpModelsApply, classifyOmpHostResult } from './omp-models';
+export { createOmpModels, decodeOmpModelsState, decodeOmpModelsPreview, decodeOmpModelsDryRun, decodeOmpModelsApply, decodeOmpModelsApplyStatus, classifyOmpHostResult } from './omp-models';
 
 export { createSessionSpawns, decodeSpawnId, decodeSpawnStatus, sessionSpawnKey } from './session-spawns';
 

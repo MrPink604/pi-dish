@@ -1,4 +1,5 @@
 import type { ClientRequest, IncomingMessage, OutgoingHttpHeaders } from 'http';
+import path = require('path');
 import type { Socket } from 'net';
 import type { Duplex } from 'stream';
 import hostIdentity = require('./host-identity');
@@ -54,16 +55,42 @@ export function namesCuRoute(reqPath: string): boolean {
   return /^\/cu(?:\/|$)/.test(decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase());
 }
 
-/** Matches `/omp-models` routes, which are strictly local-host only (never proxied to peers). */
-export function namesOmpModelsRoute(reqPath: string): boolean {
-  let decoded = reqPath;
+const DOT_SEGMENT_RE = /(?:^|[\\/])\.\.?(?:[\\/]|$)/;
+const ENCODED_DOT_OR_SEP_RE = /%(?:2e|2f|5c)/i;
+
+/**
+ * Classifies a `/hosts/:name/` or `/hosts/:name/api` path against local-only `/omp-models` routes:
+ * - `'reject_400'` when the path contains dot segments or encoded `%2e`/`%2f`/`%5c`
+ *   (any case) and matches `omp-models` after decoding and normalisation (or fails decoding);
+ * - `'block_501'` when the decoded, normalised path targets `/omp-models`;
+ * - `'ok'` otherwise.
+ */
+export function inspectOmpModelsRelayPath(rawPath: string): 'ok' | 'reject_400' | 'block_501' {
+  const pathname = rawPath.split('?')[0];
+  let suspicious = DOT_SEGMENT_RE.test(pathname) || ENCODED_DOT_OR_SEP_RE.test(pathname);
+  let decoded = pathname;
   for (let round = 0; round < 3; round++) {
     let next: string;
-    try { next = decodeURIComponent(decoded); } catch { return true; }
+    try { next = decodeURIComponent(decoded); } catch { return 'reject_400'; }
     if (next === decoded) break;
+    if (DOT_SEGMENT_RE.test(next) || ENCODED_DOT_OR_SEP_RE.test(next)) suspicious = true;
     decoded = next;
   }
-  return /^\/omp-models(?:\/|$)/.test(decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase());
+  const slashed = decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  const normRoot = path.posix.normalize(slashed.startsWith('/') ? slashed : `/${slashed}`).toLowerCase();
+  const normApi = path.posix.normalize(`/api/${slashed.replace(/^\/+/, '')}`).toLowerCase();
+  const matches = /^\/(?:api\/)?omp-models(?:\/|$)/.test(normRoot)
+    || /^\/(?:api\/)?omp-models(?:\/|$)/.test(normApi)
+    || /^\/hosts\/[^/]+\/(?:api\/)?omp-models(?:\/|$)/.test(normRoot);
+  if (matches) {
+    return suspicious ? 'reject_400' : 'block_501';
+  }
+  return 'ok';
+}
+
+/** Matches `/omp-models` routes, which are strictly local-host only (never proxied to peers). */
+export function namesOmpModelsRoute(reqPath: string): boolean {
+  return inspectOmpModelsRelayPath(reqPath) !== 'ok';
 }
 
 const HUB_CU_READ_HEADERS: readonly string[] = [
@@ -401,7 +428,15 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       return res.status(403).json({ error: 'page forms are answered through /api/page-forms on this host, not the /hosts proxy' });
     }
     // OMP model allow-list management is local-host only (no peer proxying).
-    if (namesOmpModelsRoute(req.path)) {
+    const ompDecision = [
+      inspectOmpModelsRelayPath(req.originalUrl || ''),
+      inspectOmpModelsRelayPath(req.url),
+      inspectOmpModelsRelayPath(req.path),
+    ];
+    if (ompDecision.includes('reject_400')) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+    if (ompDecision.includes('block_501')) {
       return res.status(501).json({ available: false, error: 'unavailable', message: 'OMP model allow-list management is only available on the local host.' });
     }
     // Computer-use routes use strict header allowlists, ingress CSRF checks,

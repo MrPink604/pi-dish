@@ -17,6 +17,14 @@ export declare function namesPageForms(path: string): boolean;
  * or Spaces route allowlist.
  */
 export declare function namesCuRoute(reqPath: string): boolean;
+/**
+ * Classifies a `/hosts/:name/` or `/hosts/:name/api` path against local-only `/omp-models` routes:
+ * - `'reject_400'` when the path contains dot segments or encoded `%2e`/`%2f`/`%5c`
+ *   (any case) and matches `omp-models` after decoding and normalisation (or fails decoding);
+ * - `'block_501'` when the decoded, normalised path targets `/omp-models`;
+ * - `'ok'` otherwise.
+ */
+export declare function inspectOmpModelsRelayPath(rawPath: string): 'ok' | 'reject_400' | 'block_501';
 /** Matches `/omp-models` routes, which are strictly local-host only (never proxied to peers). */
 export declare function namesOmpModelsRoute(reqPath: string): boolean;
 /** Strict hub->guest header allowlist for CU control-plane GET/SSE requests. */

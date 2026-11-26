@@ -1,6 +1,6 @@
 import type { Page, Route } from '@playwright/test';
 import { record as isRecord } from '../../lib/helper-values.js';
-import { test, expect } from './fixtures.js';
+import { test, expect, requiredRoute } from './fixtures.js';
 
 const SHA_1 = '1111111111111111111111111111111111111111';
 const SHA_2 = '2222222222222222222222222222222222222222';
@@ -31,6 +31,12 @@ async function enableLocalCapability(page: Page, selfBase: string, enabled: bool
     }
     await route.fulfill({ response });
   });
+}
+
+async function mockIdleApplyStatus(page: Page, selfBase: string) {
+  await page.route(`${selfBase}/api/omp-models/apply-status`, (route: Route) => route.fulfill({
+    json: { state: 'idle' },
+  }));
 }
 
 async function mockPreview(page: Page, selfBase: string) {
@@ -70,6 +76,7 @@ for (const viewport of [
   test(`OMP model allow-list edit, live preview, review diff, and apply with Mac offline warning (${viewport.name})`, async ({ page, fleet }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await enableLocalCapability(page, fleet.self.base, true);
+    await mockIdleApplyStatus(page, fleet.self.base);
     await mockPreview(page, fleet.self.base);
 
     let currentSha = SHA_1;
@@ -111,43 +118,36 @@ for (const viewport of [
       });
     });
 
-    // Open via global Settings modal
     await page.evaluate(() => fixtureApp.features.displayPreferences.open());
     await expect(page.locator('#settingsOpenOmpModels')).toBeVisible();
     await page.locator('#settingsOpenOmpModels').click();
     await expect(page.locator('#ompModelsModal')).toBeVisible();
 
-    // Pinned startup model + read-only disabledProviders + live count
     await expect(page.locator('#ompModelsStartupPattern')).toHaveText('anthropic/claude-opus-5-5');
     await expect(page.locator('.omp-model-row.pinned .omp-model-pinned-badge')).toContainText('Startup model');
     await expect(page.locator('.omp-model-row.pinned .omp-row-remove')).toHaveCount(0);
     await expect(page.locator('#ompModelsDisabledProviders')).toContainText('openrouter');
     await expect(page.locator('#ompModelsMatchCount')).toHaveText('Matches 3 models');
 
-    // Add pattern -> live preview updates
     await page.locator('#ompModelsAddInput').fill('deepseek/*');
     await page.locator('#ompModelsAddBtn').click();
     await expect(page.locator('#ompModelsList .omp-model-row')).toHaveCount(3);
     await expect(page.locator('#ompModelsMatchCount')).toHaveText('Matches 4 models');
 
-    // Test single row match count
     await page.locator('.omp-model-row[data-index="2"] [data-omp-action="test-row"]').click();
     await expect(page.locator('.omp-model-row[data-index="2"] .omp-row-match')).toHaveText('1 match');
 
-    // Edit & reorder non-pinned rows; entry 1 cannot move above pinned entry 0
     await expect(page.locator('.omp-model-row[data-index="1"] [data-omp-action="move-up"]')).toBeDisabled();
     await page.locator('.omp-model-row[data-index="2"] [data-omp-action="move-up"]').click();
     await expect(page.locator('.omp-model-row[data-index="1"] .omp-model-input')).toHaveValue('deepseek/*');
     await page.locator('.omp-model-row[data-index="1"] [data-omp-action="move-down"]').click();
     await expect(page.locator('.omp-model-row[data-index="2"] .omp-model-input')).toHaveValue('deepseek/*');
 
-    // Review shows diff and enables Apply
     await expect(page.locator('#ompModelsApply')).toBeDisabled();
     await page.locator('#ompModelsReview').click();
     await expect(page.locator('#ompModelsDiff')).toContainText('+  - deepseek/*');
     await expect(page.locator('#ompModelsApply')).toBeEnabled();
 
-    // Phone layout check: zero horizontal page overflow and modal fits within viewport
     if (viewport.name === 'phone') {
       const layout = await page.evaluate(() => {
         const modal = document.querySelector('#ompModelsModal .omp-models-modal');
@@ -162,7 +162,6 @@ for (const viewport of [
       expect(layout.modalWidth).toBeLessThanOrEqual(layout.viewportWidth);
     }
 
-    // Apply shows per-host results (Mac offline as warning, not error) + restart note
     await page.locator('#ompModelsApply').click();
     await expect(page.locator('#ompModelsRestartNote')).toContainText('Running OMP sessions need a restart');
     await expect(page.locator('.omp-host-row[data-host="beelink"]')).toHaveAttribute('data-status-kind', 'ok');
@@ -173,19 +172,36 @@ for (const viewport of [
   });
 }
 
-test('policy (exit 2), conflict (exit 3 keeping edits), locked (exit 1 retry), all-hosts-failed (exit 4), and unavailable (501)', async ({ page, fleet }) => {
+test('policy (exit 2), conflict (exit 3 + failed reload Retry keeps draft), locked (exit 1), Mac non-connectivity failure, unknown outcome, and 501', async ({ page, fleet }) => {
   await enableLocalCapability(page, fleet.self.base, true);
+  await mockIdleApplyStatus(page, fleet.self.base);
   await mockPreview(page, fleet.self.base);
 
   let serverSha = SHA_1;
   let serverList = ['anthropic/claude-opus-5-5', 'openai-codex/*'];
+  let getCount = 0;
+  let failNextConflictGet = false;
+  let heldGet: Route | null = null;
+  let holdNextGet = false;
   let dryRunMode: 'policy' | 'ok' = 'policy';
-  let applyMode: 'conflict' | 'locked' | 'all-failed' | 'ok' = 'conflict';
+  let applyMode: 'conflict' | 'locked' | 'mac-auth-fail' | 'unknown' = 'conflict';
   let applyAttempts = 0;
 
-  await page.route(`${fleet.self.base}/api/omp-models`, (route: Route) => route.fulfill({
-    json: { available: true, sha: serverSha, enabledModels: serverList, disabledProviders: ['openrouter'] },
-  }));
+  await page.route(`${fleet.self.base}/api/omp-models`, (route: Route) => {
+    getCount++;
+    if (holdNextGet) {
+      holdNextGet = false;
+      heldGet = route;
+      return;
+    }
+    if (failNextConflictGet) {
+      failNextConflictGet = false;
+      return route.fulfill({ status: 502, json: { error: 'fetch', message: 'temporary git fetch failure' } });
+    }
+    return route.fulfill({
+      json: { available: true, sha: serverSha, enabledModels: serverList, disabledProviders: ['openrouter'] },
+    });
+  });
   await page.route(`${fleet.self.base}/api/omp-models/dry-run`, (route: Route) => {
     if (dryRunMode === 'policy') {
       return route.fulfill({
@@ -206,29 +222,37 @@ test('policy (exit 2), conflict (exit 3 keeping edits), locked (exit 1 retry), a
     if (applyMode === 'conflict') {
       serverSha = SHA_2;
       serverList = ['anthropic/claude-opus-5-5', 'zai/*'];
+      failNextConflictGet = true;
       applyMode = 'locked';
       return route.fulfill({ status: 409, json: { error: 'conflict', sha: SHA_2, exitCode: 3 } });
     }
     if (applyMode === 'locked') {
-      applyMode = 'all-failed';
+      applyMode = 'mac-auth-fail';
       return route.fulfill({ status: 423, json: { error: 'locked', retryable: true, exitCode: 1, message: 'another omp-models set holds lock' } });
     }
-    if (applyMode === 'all-failed') {
+    if (applyMode === 'mac-auth-fail') {
       serverSha = SHA_3;
-      applyMode = 'ok';
+      applyMode = 'unknown';
+      // Non-connectivity error on jacobs-macbook-air must classify as error, NOT offline warning
       return route.fulfill({
-        status: 502,
         json: {
-          error: 'all_hosts_failed',
-          committed: true,
-          allHostsFailed: true,
-          exitCode: 4,
           sha: SHA_3,
-          hosts: { beelink: 'disk full', 'jacobs-macbook-air': 'offline' },
+          unchanged: false,
+          allHostsFailed: false,
+          restartRequired: true,
+          hosts: { beelink: 'ok', 'jacobs-macbook-air': 'Permission denied (publickey)' },
         },
       });
     }
-    return route.fulfill({ json: { sha: SHA_3, unchanged: true, hosts: {}, allHostsFailed: false, restartRequired: false } });
+    return route.fulfill({
+      status: 502,
+      json: {
+        error: 'unknown_outcome',
+        unknownOutcome: true,
+        retryable: false,
+        message: 'Unknown outcome: reload the list and check the fleet-config log.',
+      },
+    });
   });
 
   // Open from Harness Settings -> Models tab callout for OMP
@@ -254,23 +278,43 @@ test('policy (exit 2), conflict (exit 3 keeping edits), locked (exit 1 retry), a
   await page.locator('#ompModelsReview').click();
   await expect(page.locator('#ompModelsApply')).toBeEnabled();
 
-  // Exit 3 conflict: shows changed elsewhere, reloads SHA_2, keeps user's draft edits!
+  // Exit 3 conflict whose reload fails first -> Retry must keep draft AND disable controls while GET is in flight!
   await page.locator('#ompModelsApply').click();
-  await expect(page.locator('.omp-models-banner')).toContainText('changed elsewhere');
-  await expect(page.locator('#ompModelsSha')).toContainText(SHA_2.slice(0, 7));
+  await expect(page.locator('.omp-models-banner')).toContainText('temporary git fetch failure');
+  await expect(page.locator('.omp-banner-retry')).toHaveAttribute('data-omp-retry', 'reload-keep-draft');
   await expect(page.locator('.omp-model-row[data-index="2"] .omp-model-input')).toHaveValue('deepseek/*');
 
-  // Review again against SHA_2, then Apply hits exit 1 locked -> Retry button retries apply -> hits exit 4 all-hosts-failed
+  holdNextGet = true;
+  await page.locator('.omp-banner-retry').click();
+  await expect.poll(() => !!heldGet).toBe(true);
+  await expect(page.locator('.omp-model-row[data-index="2"] .omp-model-input')).toBeDisabled();
+  await expect(page.locator('#ompModelsReload')).toBeDisabled();
+  await requiredRoute(heldGet).fulfill({
+    json: { available: true, sha: serverSha, enabledModels: serverList, disabledProviders: ['openrouter'] },
+  });
+  await expect(page.locator('.omp-model-row[data-index="2"] .omp-model-input')).toBeEnabled();
+  await expect(page.locator('.omp-model-row[data-index="2"] .omp-model-input')).toHaveValue('deepseek/*');
+  await expect(page.locator('#ompModelsSha')).toContainText(SHA_2.slice(0, 7));
+  await expect(page.locator('.omp-models-banner')).not.toContainText('temporary git fetch failure');
+  await expect(page.locator('.omp-models-banner')).toContainText('kept your edits');
+  await expect(page.locator('.omp-banner-retry')).toHaveCount(0);
+
+  // Review again against SHA_2, Apply hits locked -> Retry hits Mac non-connectivity failure -> classified as 'error' (not 'warn')
   await page.locator('#ompModelsReview').click();
   await page.locator('#ompModelsApply').click();
   await expect(page.locator('.omp-models-banner')).toContainText('holds lock');
-  await expect(page.locator('.omp-banner-retry')).toBeVisible();
   const attemptsBeforeRetry = applyAttempts;
   await page.locator('.omp-banner-retry').click();
   expect(applyAttempts).toBe(attemptsBeforeRetry + 1);
-  await expect(page.locator('#ompModelsApplyResult')).toContainText('deployment failed on every host');
   await expect(page.locator('.omp-host-row[data-host="jacobs-macbook-air"]')).toHaveAttribute('data-status-kind', 'error');
-  await expect(page.locator('#ompModelsSha')).toContainText(SHA_3.slice(0, 7));
+
+  // Unknown outcome on apply shows guidance with NO retry button
+  await page.locator('#ompModelsAddInput').fill('zai/*');
+  await page.locator('#ompModelsAddBtn').click();
+  await page.locator('#ompModelsReview').click();
+  await page.locator('#ompModelsApply').click();
+  await expect(page.locator('.omp-models-banner')).toContainText('Unknown outcome: reload the list and check the fleet-config log.');
+  await expect(page.locator('.omp-banner-retry')).toHaveCount(0);
 
   // Missing helper (501) reports unavailable cleanly
   await page.unroute(`${fleet.self.base}/api/omp-models`);
@@ -281,39 +325,142 @@ test('policy (exit 2), conflict (exit 3 keeping edits), locked (exit 1 retry), a
   await page.locator('#ompModelsReload').click();
   await expect(page.locator('#ompModelsUnavailable')).toContainText('unavailable on this host');
   await expect(page.locator('#ompModelsFooter')).toBeHidden();
+  expect(getCount).toBeGreaterThanOrEqual(3);
 });
 
-test('HTML/JS and CSS version skew never break Settings or OMP allow-list editor', async ({ page, fleet }) => {
+test('closing modal during an in-flight 202 Apply preserves the result on reopen via apply-status, and stale previews never publish after edits', async ({ page, fleet }) => {
+  await enableLocalCapability(page, fleet.self.base, true);
+
+  let heldPreview: Route | null = null;
+  let previewCount = 0;
+  await page.route(`${fleet.self.base}/api/omp-models/preview`, (route: Route) => {
+    previewCount++;
+    if (previewCount === 1) {
+      heldPreview = route;
+      return;
+    }
+    return route.fulfill({
+      json: { total: 4, truncated: false, startupModel: null, models: [] },
+    });
+  });
+
+  let applyStatusPayload: Record<string, unknown> = { state: 'idle' };
+  let currentSha = SHA_1;
+  let currentList = ['anthropic/claude-opus-5-5', 'openai-codex/*'];
+  await page.route(`${fleet.self.base}/api/omp-models`, (route: Route) => route.fulfill({
+    json: { available: true, sha: currentSha, enabledModels: currentList, disabledProviders: ['openrouter'] },
+  }));
+  await page.route(`${fleet.self.base}/api/omp-models/apply-status`, (route: Route) => route.fulfill({
+    json: applyStatusPayload,
+  }));
+  await page.route(`${fleet.self.base}/api/omp-models/dry-run`, (route: Route) => route.fulfill({
+    json: { dryRun: true, sha: currentSha, changed: true, diff: '+  - deepseek/*\n' },
+  }));
+  await page.route(`${fleet.self.base}/api/omp-models/apply`, (route: Route) => {
+    applyStatusPayload = { state: 'running', startedAt: Date.now(), base: currentSha };
+    return route.fulfill({ status: 202, json: applyStatusPayload });
+  });
+
+  await page.evaluate(() => fixtureApp.features.ompModelsController.open());
+  await expect.poll(() => !!heldPreview).toBe(true);
+
+  // Edit the draft BEFORE the first preview finishes (within the debounce window)
+  await page.locator('#ompModelsAddInput').fill('deepseek/*');
+  await page.locator('#ompModelsAddBtn').click();
+
+  // First preview finishes late with a stale count (999) -> MUST be ignored, never published!
+  await requiredRoute(heldPreview).fulfill({
+    json: { total: 999, truncated: false, startupModel: null, models: [] },
+  });
+  await expect(page.locator('#ompModelsMatchCount')).not.toContainText('999');
+  await expect(page.locator('#ompModelsMatchCount')).toHaveText('Matches 4 models');
+
+  // Review -> Apply returns 202 running -> close modal with Escape
+  await page.locator('#ompModelsReview').click();
+  await page.locator('#ompModelsApply').click();
+  await expect(page.locator('#ompModelsApply')).toHaveText('Applying…');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#ompModelsModal')).toBeHidden();
+
+  // Server finishes apply while modal is closed
+  currentSha = SHA_2;
+  currentList = ['anthropic/claude-opus-5-5', 'openai-codex/*', 'deepseek/*'];
+  applyStatusPayload = {
+    state: 'done',
+    startedAt: Date.now() - 500,
+    finishedAt: Date.now(),
+    base: SHA_1,
+    result: {
+      status: 200,
+      body: {
+        sha: SHA_2,
+        unchanged: false,
+        allHostsFailed: false,
+        restartRequired: true,
+        hosts: { beelink: 'ok', 'jacobs-macbook-air': 'Connection timed out' },
+      },
+    },
+  };
+
+  // Reopen modal -> immediately displays the completed result from apply-status!
+  await page.evaluate(() => fixtureApp.features.ompModelsController.open());
+  await expect(page.locator('#ompModelsRestartNote')).toContainText('Running OMP sessions need a restart');
+  await expect(page.locator('.omp-host-row[data-host="beelink"]')).toHaveAttribute('data-status-kind', 'ok');
+  await expect(page.locator('.omp-host-row[data-host="jacobs-macbook-air"]')).toHaveAttribute('data-status-kind', 'warn');
+});
+
+test('HTML/JS and old CSS version skew at 390x844 keeps Review reachable with 46 rows and zero page errors', async ({ page, fleet }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   const pageErrors: string[] = [];
   page.on('pageerror', err => pageErrors.push(err.message));
   await enableLocalCapability(page, fleet.self.base, false);
+  await mockIdleApplyStatus(page, fleet.self.base);
 
   // Settings modal shows "Unavailable on this host" when capability is absent
   await page.evaluate(() => fixtureApp.features.displayPreferences.open());
   await expect(page.locator('#settingsOmpModels')).toContainText('Unavailable on this host');
   await page.evaluate(() => fixtureApp.features.displayPreferences.close());
 
-  // Simulate old cached HTML (no pre-existing #ompModelsModal) + old cached CSS (strip .omp-models-* rules)
+  // Simulate old cached HTML (no pre-existing #ompModelsModal) + old cached CSS (strip ALL new OMP rules) with 46 rows!
   await enableLocalCapability(page, fleet.self.base, true);
   await mockPreview(page, fleet.self.base);
+  const fortySix = [
+    'anthropic/claude-opus-5-5',
+    ...Array.from({ length: 45 }, (_, i) => `provider-${i}/model-*`),
+  ];
   await page.route(`${fleet.self.base}/api/omp-models`, (route: Route) => route.fulfill({
-    json: { available: true, sha: SHA_1, enabledModels: ['anthropic/claude-opus-5-5'], disabledProviders: [] },
+    json: { available: true, sha: SHA_1, enabledModels: fortySix, disabledProviders: ['openrouter'] },
   }));
+  await page.route(`${fleet.self.base}/api/omp-models/dry-run`, (route: Route) => route.fulfill({
+    json: { dryRun: true, sha: SHA_1, changed: true, diff: '+  - deepseek/*\n' },
+  }));
+
   await page.evaluate(() => {
     document.getElementById('ompModelsModal')?.remove();
     for (const sheet of Array.from(document.styleSheets)) {
       let rules: CSSRuleList;
       try { rules = sheet.cssRules; } catch { continue; }
       for (let i = rules.length - 1; i >= 0; i--) {
-        if (/omp-models|omp-model|hs-omp-allowlist/.test(rules[i].cssText)) sheet.deleteRule(i);
+        if (/omp-models|omp-model|hs-omp-allowlist|omp-row|omp-diff|omp-host|omp-banner|omp-disabled|omp-preview|omp-match|omp-policy|omp-restart/.test(rules[i].cssText)) {
+          sheet.deleteRule(i);
+        }
       }
     }
   });
+
   await page.evaluate(() => fixtureApp.features.displayPreferences.open());
   await expect(page.locator('#settingsOpenOmpModels')).toBeVisible();
   await page.locator('#settingsOpenOmpModels').click();
   await expect(page.locator('#ompModelsModal')).toBeVisible();
-  await expect(page.locator('#ompModelsStartupPattern')).toHaveText('anthropic/claude-opus-5-5');
+  await expect(page.locator('#ompModelsList .omp-model-row')).toHaveCount(46);
+
+  // Review button MUST be inside the 390x844 viewport and clickable even without any new CSS rules!
+  const reviewBox = await page.locator('#ompModelsReview').boundingBox();
+  expect(reviewBox).not.toBeNull();
+  expect(reviewBox!.y + reviewBox!.height).toBeLessThanOrEqual(844);
+  expect(reviewBox!.x + reviewBox!.width).toBeLessThanOrEqual(390);
+  await page.locator('#ompModelsReview').click();
+  await expect(page.locator('#ompModelsDiff')).toContainText('+  - deepseek/*');
   expect(pageErrors).toEqual([]);
 });
 

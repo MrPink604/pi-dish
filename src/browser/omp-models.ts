@@ -2,11 +2,17 @@ import { errorMessage, readJson, type ApiRequest } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
 
+const SHA_RE = /^[0-9a-f]{40}$/;
 const PREVIEW_DEBOUNCE_MS = 400;
 const PREVIEW_LIMIT = 50;
-const SET_FETCH_TIMEOUT_MS = 430_000;
+const DRY_RUN_FETCH_TIMEOUT_MS = 430_000;
+const APPLY_SUBMIT_FETCH_TIMEOUT_MS = 30_000;
+const APPLY_POLL_MS = 1_000;
+const APPLY_STATUS_FETCH_TIMEOUT_MS = 10_000;
 const PREVIEW_FETCH_TIMEOUT_MS = 25_000;
+const UNKNOWN_OUTCOME_MESSAGE = 'Unknown outcome: reload the list and check the fleet-config log.';
 const OFFLINE_WARNING_HOSTS = new Set(['jacobs-macbook-air']);
+const CONNECTIVITY_ERROR_RE = /\b(ssh\s+connect|unreachable|timed?\s*out|connection\s+refused|could\s+not\s+resolve\s+hostname|no\s+route\s+to\s+host|host\s+is\s+down|network\s+is\s+down|connection\s+closed|connection\s+reset)\b/i;
 
 export interface OmpModelsState {
   readonly available: boolean;
@@ -47,11 +53,22 @@ export interface OmpModelsApplyResult {
   readonly message: string;
 }
 
+export type OmpModelsApplyStatus =
+  | { readonly state: 'idle' }
+  | { readonly state: 'running'; readonly startedAt: number | null; readonly base: string }
+  | {
+      readonly state: 'done';
+      readonly startedAt: number | null;
+      readonly finishedAt: number | null;
+      readonly base: string;
+      readonly result: { readonly status: number; readonly body: unknown };
+    };
+
 export type OmpHostStatusKind = 'ok' | 'warn' | 'error';
 
 export function classifyOmpHostResult(host: string, status: string, allHostsFailed: boolean): OmpHostStatusKind {
   if (status === 'ok') return 'ok';
-  if (!allHostsFailed && OFFLINE_WARNING_HOSTS.has(host)) return 'warn';
+  if (!allHostsFailed && OFFLINE_WARNING_HOSTS.has(host) && CONNECTIVITY_ERROR_RE.test(status)) return 'warn';
   return 'error';
 }
 
@@ -70,11 +87,12 @@ function decodePreviewModel(value: unknown): OmpPreviewModel | null {
   return { provider, id, name, selector, current: value.current === true };
 }
 
-function decodeHostsMap(value: unknown): Record<string, string> {
+function decodeStrictHostsMap(value: unknown): Record<string, string> | null {
+  if (!record(value)) return null;
   const result: Record<string, string> = Object.create(null);
-  if (!record(value)) return result;
   for (const [host, status] of Object.entries(value)) {
-    if (typeof status === 'string') result[host] = status;
+    if (typeof status !== 'string') return null;
+    result[host] = status;
   }
   return result;
 }
@@ -84,7 +102,7 @@ export function decodeOmpModelsState(value: unknown): OmpModelsState {
   const sha = typeof value.sha === 'string' ? value.sha : '';
   const enabledModels = stringList(value.enabledModels);
   const disabledProviders = stringList(value.disabledProviders);
-  if (!sha || !enabledModels || !disabledProviders) throw new Error('Invalid OMP allow-list payload');
+  if (!SHA_RE.test(sha) || !enabledModels || !disabledProviders) throw new Error('Invalid OMP allow-list payload');
   return { available: value.available !== false, sha, enabledModels, disabledProviders };
 }
 
@@ -106,26 +124,106 @@ export function decodeOmpModelsPreview(value: unknown): OmpModelsPreview {
 
 export function decodeOmpModelsDryRun(value: unknown): OmpModelsDryRun {
   if (!record(value)) throw new Error('Invalid dry-run response');
+  const sha = typeof value.sha === 'string' ? value.sha : '';
+  if (!SHA_RE.test(sha) || typeof value.changed !== 'boolean') {
+    throw new Error('Invalid dry-run response: missing sha or changed flag');
+  }
+  const diff = value.diff;
+  if (value.changed) {
+    if (typeof diff !== 'string' || !diff.length) throw new Error('Invalid dry-run response: missing diff');
+  } else if (diff !== undefined && typeof diff !== 'string') {
+    throw new Error('Invalid dry-run response: diff must be a string');
+  }
   return {
     dryRun: true,
-    sha: typeof value.sha === 'string' ? value.sha : '',
-    changed: value.changed === true,
-    diff: typeof value.diff === 'string' ? value.diff : '',
+    sha,
+    changed: value.changed,
+    diff: typeof diff === 'string' ? diff : '',
   };
 }
 
 export function decodeOmpModelsApply(value: unknown): OmpModelsApplyResult {
   if (!record(value)) throw new Error('Invalid apply response');
-  const unchanged = value.unchanged === true;
+  const sha = typeof value.sha === 'string' ? value.sha : '';
+  if (!SHA_RE.test(sha)) throw new Error('Invalid apply response: missing sha');
   const allHostsFailed = value.allHostsFailed === true;
+  if (value.unchanged === true) {
+    const hosts = value.hosts === undefined ? Object.create(null) as Record<string, string> : decodeStrictHostsMap(value.hosts);
+    if (hosts === null) throw new Error('Invalid apply response: invalid hosts');
+    return {
+      sha,
+      unchanged: true,
+      hosts,
+      allHostsFailed: false,
+      committed: true,
+      restartRequired: false,
+      message: typeof value.message === 'string' ? value.message : '',
+    };
+  }
+  if (value.unchanged !== undefined && value.unchanged !== false) {
+    throw new Error('Invalid apply response: invalid unchanged flag');
+  }
+  const hosts = decodeStrictHostsMap(value.hosts);
+  if (hosts === null) throw new Error('Invalid apply response: missing hosts');
   return {
-    sha: typeof value.sha === 'string' ? value.sha : '',
-    unchanged,
-    hosts: decodeHostsMap(value.hosts),
+    sha,
+    unchanged: false,
+    hosts,
     allHostsFailed,
     committed: value.committed === true || !allHostsFailed,
-    restartRequired: value.restartRequired === true || (!unchanged && !allHostsFailed),
+    restartRequired: value.restartRequired === true || !allHostsFailed,
     message: typeof value.message === 'string' ? value.message : '',
+  };
+}
+
+export function decodeOmpModelsApplyStatus(value: unknown): OmpModelsApplyStatus {
+  if (!record(value)) throw new Error('Invalid apply-status response');
+  if (value.state === 'idle') return { state: 'idle' };
+  const startedAt = typeof value.startedAt === 'number' && Number.isFinite(value.startedAt) ? value.startedAt : null;
+  const base = typeof value.base === 'string' ? value.base : '';
+  if (value.state === 'running') {
+    return { state: 'running', startedAt, base };
+  }
+  if (value.state === 'done' && record(value.result) && typeof value.result.status === 'number') {
+    const finishedAt = typeof value.finishedAt === 'number' && Number.isFinite(value.finishedAt) ? value.finishedAt : null;
+    return {
+      state: 'done',
+      startedAt,
+      finishedAt,
+      base,
+      result: { status: value.result.status, body: value.result.body },
+    };
+  }
+  throw new Error('Invalid apply-status payload');
+}
+
+/** Composes a caller cancellation signal with a timeout without dropping either signal. */
+function composeSignalWithTimeout(cancelSignal: AbortSignal, timeoutMs: number): {
+  readonly signal: AbortSignal;
+  readonly timedOut: () => boolean;
+  readonly cleanup: () => void;
+} {
+  let didTimeout = false;
+  const composed = new AbortController();
+  const onCancel = () => {
+    if (!composed.signal.aborted) composed.abort(cancelSignal.reason);
+  };
+  if (cancelSignal.aborted) {
+    composed.abort(cancelSignal.reason);
+    return { signal: composed.signal, timedOut: () => false, cleanup: () => {} };
+  }
+  cancelSignal.addEventListener('abort', onCancel, { once: true });
+  const timer = setTimeout(() => {
+    didTimeout = true;
+    if (!composed.signal.aborted) composed.abort(new Error('Request timed out'));
+  }, timeoutMs);
+  return {
+    signal: composed.signal,
+    timedOut: () => didTimeout,
+    cleanup: () => {
+      clearTimeout(timer);
+      cancelSignal.removeEventListener('abort', onCancel);
+    },
   };
 }
 
@@ -133,7 +231,7 @@ interface BannerState {
   readonly kind: 'policy' | 'conflict' | 'locked' | 'error' | 'info';
   readonly message: string;
   readonly reasons?: readonly string[];
-  readonly retryAction?: 'load' | 'review' | 'apply';
+  readonly retryAction?: 'load' | 'reload-keep-draft' | 'review' | 'apply';
 }
 
 interface PreviewState {
@@ -191,9 +289,11 @@ export function createOmpModels(options: {
   localAvailable?: () => boolean | null;
   beforeOpen?: () => void;
   previewDebounceMs?: number;
+  applyPollMs?: number;
 }): OmpModelsController {
   const { document } = options;
   const previewDebounceMs = options.previewDebounceMs ?? PREVIEW_DEBOUNCE_MS;
+  const applyPollMs = options.applyPollMs ?? APPLY_POLL_MS;
   const lifetime = new AbortController();
 
   let disposed = false;
@@ -203,6 +303,7 @@ export function createOmpModels(options: {
   let previewTimer: ReturnType<typeof setTimeout> | null = null;
   let previewAbort: AbortController | null = null;
   const rowPreviewAborts = new Map<number, AbortController>();
+  let applyPollTimer: ReturnType<typeof setTimeout> | null = null;
 
   let loadState: 'idle' | 'loading' | 'unavailable' | 'error' | 'ready' = 'idle';
   let unavailableMessage = 'OMP model allow-list management is unavailable on this host.';
@@ -217,6 +318,9 @@ export function createOmpModels(options: {
   let applyResult: OmpModelsApplyResult | null = null;
   let banner: BannerState | null = null;
   let busyAction: 'review' | 'apply' | 'reload' | null = null;
+  let pendingApplySnapshot: readonly string[] | null = null;
+  let lastApplyFinishedAt: number | null = null;
+  let dismissedApplyFinishedAt: number | null = null;
 
   function isOpen(): boolean {
     return !disposed && !!modal && modal.style.display === 'flex';
@@ -226,6 +330,13 @@ export function createOmpModels(options: {
     if (previewTimer !== null) {
       clearTimeout(previewTimer);
       previewTimer = null;
+    }
+  }
+
+  function clearApplyPollTimer(): void {
+    if (applyPollTimer !== null) {
+      clearTimeout(applyPollTimer);
+      applyPollTimer = null;
     }
   }
 
@@ -240,6 +351,11 @@ export function createOmpModels(options: {
     rowPreviewAborts.clear();
   }
 
+  function dismissPreviousApply(): void {
+    if (lastApplyFinishedAt !== null) dismissedApplyFinishedAt = lastApplyFinishedAt;
+    if (applyResult) applyResult = null;
+  }
+
   function ensureModal(): HTMLElement {
     const existing = modal ?? document.getElementById('ompModelsModal');
     if (existing instanceof HTMLElement) {
@@ -250,8 +366,9 @@ export function createOmpModels(options: {
     overlay.className = 'modal-overlay';
     overlay.id = 'ompModelsModal';
     overlay.style.display = 'none';
-    overlay.innerHTML = `<div class="modal omp-models-modal" role="dialog" aria-modal="true" aria-labelledby="ompModelsTitle">
-      <div class="modal-header">
+    // Inline structural fallbacks guarantee the modal scrolls and keeps Review reachable at 390x844 even with old cached CSS.
+    overlay.innerHTML = `<div class="modal omp-models-modal" role="dialog" aria-modal="true" aria-labelledby="ompModelsTitle" style="display:flex;flex-direction:column;max-height:90dvh;max-width:100vw">
+      <div class="modal-header" style="flex-shrink:0">
         <div class="omp-models-title-wrap">
           <h3 id="ompModelsTitle">OMP model allow-list</h3>
           <span class="omp-models-sha" id="ompModelsSha"></span>
@@ -261,8 +378,8 @@ export function createOmpModels(options: {
           <button type="button" class="btn-icon" id="ompModelsClose" title="Close (Esc)" aria-label="Close">✕</button>
         </div>
       </div>
-      <div class="omp-models-body" id="ompModelsBody"></div>
-      <div class="modal-footer omp-models-footer" id="ompModelsFooter">
+      <div class="omp-models-body" id="ompModelsBody" style="flex:1 1 auto;min-height:0;max-height:calc(90dvh - 140px);overflow-y:auto;overflow-x:hidden"></div>
+      <div class="modal-footer omp-models-footer" id="ompModelsFooter" style="flex-shrink:0">
         <span class="omp-models-footer-status" id="ompModelsFooterStatus"></span>
         <div class="omp-models-footer-actions">
           <button type="button" class="btn-small" id="ompModelsReset">Reset</button>
@@ -273,10 +390,13 @@ export function createOmpModels(options: {
     </div>`;
     document.body.append(overlay);
     overlay.addEventListener('click', event => {
-      if (event.target === overlay && busyAction !== 'apply') close();
+      if (event.target === overlay) close();
     }, { signal: lifetime.signal });
     overlay.querySelector('#ompModelsClose')?.addEventListener('click', () => close(), { signal: lifetime.signal });
-    overlay.querySelector('#ompModelsReload')?.addEventListener('click', () => { void reloadFresh(false); }, { signal: lifetime.signal });
+    overlay.querySelector('#ompModelsReload')?.addEventListener('click', () => {
+      dismissPreviousApply();
+      void reloadFresh(false);
+    }, { signal: lifetime.signal });
     overlay.querySelector('#ompModelsReset')?.addEventListener('click', () => { resetDraft(); }, { signal: lifetime.signal });
     overlay.querySelector('#ompModelsReview')?.addEventListener('click', () => { void runDryRun(); }, { signal: lifetime.signal });
     overlay.querySelector('#ompModelsApply')?.addEventListener('click', () => { void runApply(); }, { signal: lifetime.signal });
@@ -303,7 +423,7 @@ export function createOmpModels(options: {
 
   function invalidateReview(): void {
     if (review) review = null;
-    if (applyResult) applyResult = null;
+    dismissPreviousApply();
   }
 
   function renderBannerHtml(): string {
@@ -545,7 +665,7 @@ export function createOmpModels(options: {
     applyBtn.textContent = busyAction === 'apply' ? 'Applying…' : 'Apply';
 
     if (busyAction === 'apply') {
-      statusEl.textContent = 'Applying and deploying to fleet hosts (this may wait on the fleet lock)…';
+      statusEl.textContent = 'Applying and deploying to fleet hosts (closing will not cancel or lose the result)…';
     } else if (busyAction === 'review') {
       statusEl.textContent = 'Checking policy and building diff…';
     } else if (busyAction === 'reload') {
@@ -559,8 +679,14 @@ export function createOmpModels(options: {
     }
   }
 
+  /** Bumps the preview generation and cancels any in-flight preview so older responses cannot land on a newer draft. */
   function schedulePreview(immediate = false): void {
     clearPreviewTimer();
+    previewSequence++;
+    if (previewAbort) {
+      previewAbort.abort();
+      previewAbort = null;
+    }
     if (loadState !== 'ready' || !isOpen()) return;
     const run = () => { void runWholePreview(); };
     if (immediate) {
@@ -582,13 +708,13 @@ export function createOmpModels(options: {
     const snapshot = [...draft];
     preview = { loading: true, result: preview.result, error: null };
     updatePreviewDomOnly();
+    const requestSignal = composeSignalWithTimeout(controller.signal, PREVIEW_FETCH_TIMEOUT_MS);
     try {
       const response = await options.request(null, '/api/omp-models/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabledModels: snapshot, query: '', limit: PREVIEW_LIMIT }),
-        signal: controller.signal,
-        timeoutMs: PREVIEW_FETCH_TIMEOUT_MS,
+        signal: requestSignal.signal,
       });
       const data = await readJson(response);
       if (seq !== previewSequence || openSeq !== openSequence || !isOpen()) return;
@@ -605,9 +731,10 @@ export function createOmpModels(options: {
       updatePreviewDomOnly();
     } catch (error) {
       if (controller.signal.aborted || seq !== previewSequence || openSeq !== openSequence || !isOpen()) return;
-      preview = { loading: false, result: null, error: errorMessage(error) };
+      preview = { loading: false, result: null, error: requestSignal.timedOut() ? 'Preview timed out' : errorMessage(error) };
       updatePreviewDomOnly();
     } finally {
+      requestSignal.cleanup();
       if (previewAbort === controller) previewAbort = null;
     }
   }
@@ -622,13 +749,13 @@ export function createOmpModels(options: {
     rowPreviewAborts.set(index, controller);
     rowPreviews.set(index, { loading: true });
     updateRowPreviewDomOnly(index);
+    const requestSignal = composeSignalWithTimeout(controller.signal, PREVIEW_FETCH_TIMEOUT_MS);
     try {
       const response = await options.request(null, '/api/omp-models/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabledModels: [pattern], query: '', limit: 1 }),
-        signal: controller.signal,
-        timeoutMs: PREVIEW_FETCH_TIMEOUT_MS,
+        signal: requestSignal.signal,
       });
       const data = await readJson(response);
       if (controller.signal.aborted || openSeq !== openSequence || !isOpen() || draft[index] !== pattern) return;
@@ -642,15 +769,198 @@ export function createOmpModels(options: {
       updateRowPreviewDomOnly(index);
     } catch (error) {
       if (controller.signal.aborted || openSeq !== openSequence || !isOpen()) return;
-      rowPreviews.set(index, { error: errorMessage(error) });
+      rowPreviews.set(index, { error: requestSignal.timedOut() ? 'Timed out' : errorMessage(error) });
       updateRowPreviewDomOnly(index);
     } finally {
+      requestSignal.cleanup();
       if (rowPreviewAborts.get(index) === controller) rowPreviewAborts.delete(index);
     }
   }
 
-  async function reloadFresh(keepDraft: boolean): Promise<boolean> {
+  function applyOutcomeToUi(
+    status: number,
+    data: unknown,
+    snapshot: readonly string[] | null,
+    finishedAt: number | null,
+    fromReopen: boolean,
+  ): boolean {
+    if (finishedAt !== null) lastApplyFinishedAt = finishedAt;
+    if (status >= 200 && status < 300) {
+      try {
+        const decoded = decodeOmpModelsApply(data);
+        if (decoded.sha) baseSha = decoded.sha;
+        if (snapshot) savedModels = [...snapshot];
+        review = null;
+        banner = null;
+        applyResult = decoded;
+        return false;
+      } catch {
+        banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+        return false;
+      }
+    }
+    if (!record(data)) {
+      banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+      return false;
+    }
+    if (status === 501 || data.error === 'unavailable') {
+      loadState = 'unavailable';
+      unavailableMessage = typeof data.message === 'string' && data.message
+        ? data.message
+        : 'OMP model allow-list management is unavailable on this host.';
+      return false;
+    }
+    if (status === 422 || data.error === 'policy') {
+      const reasons = stringList(data.reasons) || [];
+      banner = {
+        kind: 'policy',
+        message: typeof data.message === 'string' && data.message ? data.message : 'Policy rejected changes.',
+        reasons,
+      };
+      return false;
+    }
+    if (status === 409 && data.error === 'conflict') {
+      if (fromReopen) {
+        banner = {
+          kind: 'conflict',
+          message: 'Previous apply hit a conflict because the allow-list changed elsewhere.',
+        };
+        return false;
+      }
+      const latestSha = typeof data.sha === 'string' && data.sha ? data.sha : null;
+      void handleConflict(latestSha);
+      return true;
+    }
+    if (status === 423 || data.error === 'locked') {
+      banner = {
+        kind: 'locked',
+        message: typeof data.message === 'string' && data.message ? data.message : 'Another omp-models update holds the lock.',
+        retryAction: !fromReopen && hasPendingReview() ? 'apply' : undefined,
+      };
+      return false;
+    }
+    if (data.allHostsFailed === true) {
+      try {
+        const decoded = decodeOmpModelsApply(data);
+        if (decoded.sha) baseSha = decoded.sha;
+        if (snapshot) savedModels = [...snapshot];
+        review = null;
+        banner = null;
+        applyResult = decoded;
+        return false;
+      } catch {
+        banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+        return false;
+      }
+    }
+    if (data.unknownOutcome === true || data.error === 'unknown_outcome' || data.error === 'invalid_output') {
+      banner = {
+        kind: 'error',
+        message: typeof data.message === 'string' && data.message ? data.message : UNKNOWN_OUTCOME_MESSAGE,
+      };
+      return false;
+    }
+    // Once apply has been started on the helper, never present generic errors as retryable.
+    banner = {
+      kind: 'error',
+      message: typeof data.message === 'string' && data.message
+        ? data.message
+        : typeof data.error === 'string' && data.error
+          ? data.error
+          : UNKNOWN_OUTCOME_MESSAGE,
+    };
+    return false;
+  }
+
+  function scheduleApplyStatusPoll(openSeq: number): void {
+    clearApplyPollTimer();
+    if (openSeq !== openSequence || !isOpen() || busyAction !== 'apply') return;
+    applyPollTimer = setTimeout(() => {
+      applyPollTimer = null;
+      void pollApplyStatusOnce(openSeq);
+    }, applyPollMs);
+  }
+
+  async function pollApplyStatusOnce(openSeq: number): Promise<void> {
+    if (openSeq !== openSequence || !isOpen()) return;
+    try {
+      const response = await options.request(null, '/api/omp-models/apply-status', { timeoutMs: APPLY_STATUS_FETCH_TIMEOUT_MS });
+      const data = await readJson(response);
+      if (openSeq !== openSequence || !isOpen()) return;
+      if (response.status === 501 || (record(data) && data.error === 'unavailable')) {
+        busyAction = null;
+        loadState = 'unavailable';
+        unavailableMessage = record(data) && typeof data.message === 'string' && data.message
+          ? data.message
+          : 'OMP model allow-list management is unavailable on this host.';
+        renderBody();
+        return;
+      }
+      if (!response.ok) {
+        busyAction = null;
+        pendingApplySnapshot = null;
+        banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+        renderBody();
+        return;
+      }
+      const status = decodeOmpModelsApplyStatus(data);
+      if (status.state === 'running') {
+        scheduleApplyStatusPoll(openSeq);
+        return;
+      }
+      busyAction = null;
+      const snapshot = pendingApplySnapshot;
+      pendingApplySnapshot = null;
+      if (status.state === 'done') {
+        const delegated = applyOutcomeToUi(status.result.status, status.result.body, snapshot, status.finishedAt, snapshot === null);
+        if (!delegated) {
+          renderBody();
+          // If an apply started in an earlier modal open succeeded, refresh the displayed list while preserving the result panel.
+          if (snapshot === null && status.result.status >= 200 && status.result.status < 300) {
+            void refreshAfterExternalApply(openSeq);
+          }
+        }
+        return;
+      }
+      banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+      renderBody();
+    } catch {
+      if (openSeq !== openSequence || !isOpen()) return;
+      busyAction = null;
+      pendingApplySnapshot = null;
+      banner = { kind: 'error', message: UNKNOWN_OUTCOME_MESSAGE };
+      renderBody();
+    }
+  }
+
+  async function refreshAfterExternalApply(openSeq: number): Promise<void> {
+    try {
+      const response = await options.request(null, '/api/omp-models', { timeoutMs: 65_000 });
+      const data = await readJson(response);
+      if (openSeq !== openSequence || !isOpen() || !response.ok) return;
+      const state = decodeOmpModelsState(data);
+      baseSha = state.sha;
+      savedModels = [...state.enabledModels];
+      disabledProviders = [...state.disabledProviders];
+      draft = [...state.enabledModels];
+      renderBody();
+      schedulePreview(true);
+    } catch { /* keep the apply result visible */ }
+  }
+
+  async function fetchApplyStatusForOpen(): Promise<OmpModelsApplyStatus | null> {
+    try {
+      const response = await options.request(null, '/api/omp-models/apply-status', { timeoutMs: APPLY_STATUS_FETCH_TIMEOUT_MS });
+      if (!response.ok) return null;
+      return decodeOmpModelsApplyStatus(await readJson(response));
+    } catch {
+      return null;
+    }
+  }
+
+  async function reloadFresh(keepDraft: boolean, checkApplyStatus = false): Promise<boolean> {
     const openSeq = openSequence;
+    busyAction = 'reload';
     if (!keepDraft) {
       loadState = 'loading';
       banner = null;
@@ -658,13 +968,14 @@ export function createOmpModels(options: {
       applyResult = null;
       rowPreviews.clear();
       preview = { loading: false, result: null, error: null };
-      renderBody();
-    } else {
-      busyAction = 'reload';
-      syncFooter();
     }
+    // Disable editing and reload controls immediately while GET is in flight.
+    renderBody();
     try {
-      const response = await options.request(null, '/api/omp-models', { timeoutMs: 65_000 });
+      const [response, applyStatus] = await Promise.all([
+        options.request(null, '/api/omp-models', { timeoutMs: 65_000 }),
+        checkApplyStatus ? fetchApplyStatusForOpen() : Promise.resolve(null),
+      ]);
       const data = await readJson(response);
       if (openSeq !== openSequence || !isOpen()) return false;
       if (response.status === 501 || (record(data) && data.error === 'unavailable')) {
@@ -683,7 +994,7 @@ export function createOmpModels(options: {
             ? data.error
             : `HTTP ${response.status}`;
         if (!keepDraft) loadState = 'error';
-        banner = { kind: 'error', message: msg, retryAction: 'load' };
+        banner = { kind: 'error', message: msg, retryAction: keepDraft ? 'reload-keep-draft' : 'load' };
         busyAction = null;
         renderBody();
         return false;
@@ -697,13 +1008,42 @@ export function createOmpModels(options: {
       }
       loadState = 'ready';
       busyAction = null;
+      if (keepDraft && banner?.retryAction === 'reload-keep-draft') {
+        banner = {
+          kind: 'conflict',
+          message: `Allow-list changed elsewhere. Reloaded base ${shortSha(baseSha)} and kept your edits — review and apply again.`,
+        };
+      }
+
+      if (applyStatus?.state === 'running') {
+        busyAction = 'apply';
+        banner = {
+          kind: 'info',
+          message: 'An apply is currently running on this host. Waiting for deployment results…',
+        };
+        renderBody();
+        scheduleApplyStatusPoll(openSeq);
+        return true;
+      }
+      if (applyStatus?.state === 'done' && (applyStatus.finishedAt === null || applyStatus.finishedAt !== dismissedApplyFinishedAt)) {
+        const delegated = applyOutcomeToUi(applyStatus.result.status, applyStatus.result.body, null, applyStatus.finishedAt, true);
+        if (!delegated) {
+          renderBody();
+          if (applyStatus.result.status >= 200 && applyStatus.result.status < 300 && baseSha !== state.sha) {
+            void refreshAfterExternalApply(openSeq);
+          } else {
+            schedulePreview(true);
+          }
+        }
+        return true;
+      }
       renderBody();
       schedulePreview(true);
       return true;
     } catch (error) {
       if (openSeq !== openSequence || !isOpen()) return false;
       if (!keepDraft) loadState = 'error';
-      banner = { kind: 'error', message: errorMessage(error), retryAction: 'load' };
+      banner = { kind: 'error', message: errorMessage(error), retryAction: keepDraft ? 'reload-keep-draft' : 'load' };
       busyAction = null;
       renderBody();
       return false;
@@ -713,12 +1053,11 @@ export function createOmpModels(options: {
   async function handleConflict(latestSha: string | null): Promise<void> {
     const openSeq = openSequence;
     invalidateReview();
-    if (latestSha) baseSha = latestSha;
+    if (latestSha && SHA_RE.test(latestSha)) baseSha = latestSha;
     banner = {
       kind: 'conflict',
       message: 'Allow-list changed elsewhere. Reloading the latest base while keeping your edits so you can review and reapply…',
     };
-    renderBody();
     const ok = await reloadFresh(true);
     if (!ok || openSeq !== openSequence || !isOpen()) return;
     banner = {
@@ -728,9 +1067,9 @@ export function createOmpModels(options: {
     renderBody();
   }
 
-  function handleMutationError(action: 'review' | 'apply', response: Response, data: unknown): boolean {
+  function handleDryRunError(response: Response, data: unknown): boolean {
     if (!record(data)) {
-      banner = { kind: 'error', message: `Request failed (HTTP ${response.status}).`, retryAction: action };
+      banner = { kind: 'error', message: `Request failed (HTTP ${response.status}).`, retryAction: 'review' };
       return false;
     }
     if (response.status === 501 || data.error === 'unavailable') {
@@ -758,22 +1097,11 @@ export function createOmpModels(options: {
       banner = {
         kind: 'locked',
         message: typeof data.message === 'string' && data.message ? data.message : 'Another omp-models update holds the lock.',
-        retryAction: action,
+        retryAction: 'review',
       };
       return false;
     }
-    if (action === 'apply' && data.allHostsFailed === true) {
-      const decoded = decodeOmpModelsApply(data);
-      if (decoded.sha) {
-        baseSha = decoded.sha;
-        savedModels = [...draft];
-      }
-      review = null;
-      applyResult = decoded;
-      banner = null;
-      return false;
-    }
-    const retryable = data.retryable === true || response.status === 504;
+    const retryable = data.retryable === true || response.status === 504 || response.status === 429;
     banner = {
       kind: 'error',
       message: typeof data.message === 'string' && data.message
@@ -781,7 +1109,7 @@ export function createOmpModels(options: {
         : typeof data.error === 'string' && data.error
           ? data.error
           : `Request failed (HTTP ${response.status}).`,
-      retryAction: retryable ? action : undefined,
+      retryAction: retryable ? 'review' : undefined,
     };
     return false;
   }
@@ -791,28 +1119,28 @@ export function createOmpModels(options: {
     const openSeq = openSequence;
     const snapshot = [...draft];
     const targetSha = baseSha;
+    dismissPreviousApply();
     busyAction = 'review';
     banner = null;
-    applyResult = null;
     renderBody();
     try {
       const response = await options.request(null, '/api/omp-models/dry-run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ base: targetSha, enabledModels: snapshot }),
-        timeoutMs: SET_FETCH_TIMEOUT_MS,
+        timeoutMs: DRY_RUN_FETCH_TIMEOUT_MS,
       });
       const data = await readJson(response);
       if (openSeq !== openSequence || !isOpen()) return;
       busyAction = null;
       if (!response.ok) {
         review = null;
-        if (!handleMutationError('review', response, data)) renderBody();
+        if (!handleDryRunError(response, data)) renderBody();
         return;
       }
       const decoded = decodeOmpModelsDryRun(data);
-      review = { baseSha: decoded.sha || targetSha, snapshot, result: decoded };
-      if (decoded.sha) baseSha = decoded.sha;
+      review = { baseSha: decoded.sha, snapshot, result: decoded };
+      baseSha = decoded.sha;
       renderBody();
     } catch (error) {
       if (openSeq !== openSequence || !isOpen()) return;
@@ -828,35 +1156,44 @@ export function createOmpModels(options: {
     const openSeq = openSequence;
     const snapshot = [...draft];
     const targetSha = baseSha;
+    dismissPreviousApply();
     busyAction = 'apply';
+    pendingApplySnapshot = snapshot;
     banner = null;
-    applyResult = null;
     renderBody();
     try {
       const response = await options.request(null, '/api/omp-models/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ base: targetSha, enabledModels: snapshot }),
-        timeoutMs: SET_FETCH_TIMEOUT_MS,
+        timeoutMs: APPLY_SUBMIT_FETCH_TIMEOUT_MS,
       });
       const data = await readJson(response);
       if (openSeq !== openSequence || !isOpen()) return;
-      busyAction = null;
-      if (!response.ok) {
-        if (!handleMutationError('apply', response, data)) renderBody();
+      if (response.status === 202 || (record(data) && data.state === 'running' && (response.status === 200 || response.status === 409))) {
+        banner = {
+          kind: 'info',
+          message: response.status === 409
+            ? 'Another apply is already running on this host. Waiting for deployment results…'
+            : 'Applying and deploying to fleet hosts…',
+        };
+        renderBody();
+        scheduleApplyStatusPoll(openSeq);
         return;
       }
-      const decoded = decodeOmpModelsApply(data);
-      if (decoded.sha) baseSha = decoded.sha;
-      savedModels = [...snapshot];
-      review = null;
-      applyResult = decoded;
-      renderBody();
-    } catch (error) {
-      if (openSeq !== openSequence || !isOpen()) return;
       busyAction = null;
-      banner = { kind: 'error', message: errorMessage(error), retryAction: 'apply' };
+      pendingApplySnapshot = null;
+      const delegated = applyOutcomeToUi(response.status, data, snapshot, null, false);
+      if (!delegated) renderBody();
+    } catch {
+      if (openSeq !== openSequence || !isOpen()) return;
+      // Once apply was submitted, never show a Retry button; poll apply-status to discover the true server state.
+      banner = {
+        kind: 'info',
+        message: 'Apply request interrupted — checking server apply status…',
+      };
       renderBody();
+      scheduleApplyStatusPoll(openSeq);
     }
   }
 
@@ -895,6 +1232,7 @@ export function createOmpModels(options: {
     if (action === 'retry') {
       const kind = target.dataset.ompRetry;
       if (kind === 'load') void reloadFresh(false);
+      else if (kind === 'reload-keep-draft') void reloadFresh(true);
       else if (kind === 'review') void runDryRun();
       else if (kind === 'apply') void runApply();
       return;
@@ -968,17 +1306,21 @@ export function createOmpModels(options: {
     const overlay = ensureModal();
     openSequence++;
     abortPreviews();
+    clearApplyPollTimer();
     busyAction = null;
+    pendingApplySnapshot = null;
     matchesOpen = false;
     overlay.style.display = 'flex';
-    await reloadFresh(false);
+    await reloadFresh(false, true);
   }
 
   function close(): void {
     if (disposed) return;
     openSequence++;
     abortPreviews();
+    clearApplyPollTimer();
     busyAction = null;
+    pendingApplySnapshot = null;
     if (modal) modal.style.display = 'none';
   }
 

@@ -775,6 +775,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/models', featureHandlers.models);
   app.put('/api/models/enabled', featureHandlers.updateEnabledModels);
   app.get('/api/omp-models', ompModelsHandlers.get);
+  app.get('/api/omp-models/apply-status', ompModelsHandlers.applyStatus);
   app.post('/api/omp-models/preview', accessHandlers.ompModelsMutationGuard, ompModelsHandlers.preview);
   app.post('/api/omp-models/dry-run', accessHandlers.ompModelsMutationGuard, ompModelsHandlers.dryRun);
   app.post('/api/omp-models/apply', accessHandlers.ompModelsMutationGuard, ompModelsHandlers.apply);

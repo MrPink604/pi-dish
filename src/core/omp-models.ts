@@ -20,7 +20,9 @@ const MAX_ENTRY_LENGTH = 500;
 const MAX_QUERY_LENGTH = 200;
 const DEFAULT_PREVIEW_LIMIT = 50;
 const MAX_PREVIEW_LIMIT = 100;
-const MAX_PREVIEW_CONCURRENCY = 2;
+const DEFAULT_MAX_PREVIEW_CONCURRENCY = 2;
+const DEFAULT_MAX_PREVIEW_QUEUE = 4;
+const DEFAULT_MAX_HELPER_CONCURRENCY = 2;
 const MAX_HELPER_BUFFER = 4 * 1024 * 1024;
 const MAX_PREVIEW_LINE_BUFFER = 4 * 1024 * 1024;
 const MAX_PREVIEW_STDERR = 64 * 1024;
@@ -28,9 +30,10 @@ const SIGKILL_GRACE_MS = 500;
 
 export const DEFAULT_GET_TIMEOUT_MS = 60_000;
 export const DEFAULT_DRY_RUN_TIMEOUT_MS = 360_000;
-export const DEFAULT_APPLY_TIMEOUT_MS = 420_000;
 export const DEFAULT_PREVIEW_TIMEOUT_MS = 15_000;
-const HTTP_SET_SOCKET_TIMEOUT_MS = 450_000;
+export const DEFAULT_APPLY_WAIT_MS = 1_500;
+const HTTP_DRY_RUN_SOCKET_TIMEOUT_MS = 450_000;
+const UNKNOWN_APPLY_OUTCOME_MESSAGE = 'Unknown outcome: reload the list and check the fleet-config log.';
 
 export interface OmpPreviewModel {
   provider: string;
@@ -52,19 +55,33 @@ export interface OmpModelsHttpReply {
   body: Record<string, unknown>;
 }
 
+export type OmpModelsApplyStatus =
+  | { readonly state: 'idle' }
+  | { readonly state: 'running'; readonly startedAt: number; readonly base: string }
+  | {
+      readonly state: 'done';
+      readonly startedAt: number;
+      readonly finishedAt: number;
+      readonly base: string;
+      readonly result: OmpModelsHttpReply;
+    };
+
 export interface OmpModelsServiceOptions {
   /** Override the `fleet` helper path (defaults to `~/.local/bin/fleet`). */
   fleetBin?: string;
   /** Override the state/tmp root for mode-0600 temp files (defaults to `~/.pi/dish/tmp`). */
   tmpDir?: string;
-  /** Override helper timeouts (ms). */
+  /** Override helper timeouts (ms) for read/dry-run only; running applies are never killed on deadline. */
   getTimeoutMs?: number;
   dryRunTimeoutMs?: number;
-  applyTimeoutMs?: number;
+  /** How long POST /apply waits for completion before returning 202 {state:"running"} (ms). */
+  applyWaitMs?: number;
   /** Override `omp --mode rpc` preview timeout (ms). */
   previewTimeoutMs?: number;
-  /** Override max concurrent `omp --mode rpc` preview children. */
+  /** Override process bounds (defaults: 2 preview running, 4 preview queued, 2 get/dryRun running). */
   maxPreviewConcurrency?: number;
+  maxPreviewQueue?: number;
+  maxHelperConcurrency?: number;
 }
 
 export interface OmpModelsService {
@@ -72,7 +89,8 @@ export interface OmpModelsService {
   get(signal?: AbortSignal): Promise<OmpModelsHttpReply>;
   preview(input: { enabledModels: string[]; query?: string; limit?: number }, signal?: AbortSignal): Promise<OmpModelsHttpReply>;
   dryRun(input: { base: string; enabledModels: string[] }, signal?: AbortSignal): Promise<OmpModelsHttpReply>;
-  apply(input: { base: string; enabledModels: string[] }, signal?: AbortSignal): Promise<OmpModelsHttpReply>;
+  apply(input: { base: string; enabledModels: string[] }): Promise<OmpModelsHttpReply>;
+  applyStatus(): OmpModelsHttpReply;
   dispose(): void;
 }
 
@@ -82,6 +100,7 @@ export interface OmpModelsHandlers {
   preview: Handler;
   dryRun: Handler;
   apply: Handler;
+  applyStatus: Handler;
   dispose(): void;
 }
 
@@ -98,7 +117,7 @@ function envTimeout(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 50 ? parsed : fallback;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function resolveFleetBin(override?: string): string {
@@ -110,6 +129,16 @@ function resolveFleetBin(override?: string): string {
 
 function resolveTmpDir(override?: string): string {
   return override || path.join(dishDir(), 'tmp');
+}
+
+/** Minimal trusted environment for `fleet omp-models` so git resolves user identity and tools while excluding all ambient/override vars. */
+export function minimalFleetHelperEnv(): NodeJS.ProcessEnv {
+  const home = os.homedir();
+  return {
+    HOME: home,
+    PATH: `${path.join(home, '.local', 'bin')}:/usr/local/bin:/usr/bin:/bin`,
+    LANG: 'C.UTF-8',
+  };
 }
 
 function isExecutable(file: string): boolean {
@@ -128,6 +157,19 @@ function unavailableReply(): OmpModelsHttpReply {
       available: false,
       error: 'unavailable',
       message: 'OMP model allow-list management is unavailable on this host.',
+    },
+  };
+}
+
+function unknownApplyOutcomeReply(errorCode: 'unknown_outcome' | 'invalid_output', exitCode: number | null): OmpModelsHttpReply {
+  return {
+    status: 502,
+    body: {
+      error: errorCode,
+      unknownOutcome: true,
+      retryable: false,
+      exitCode,
+      message: UNKNOWN_APPLY_OUTCOME_MESSAGE,
     },
   };
 }
@@ -152,11 +194,12 @@ function normalizeStringArray(value: unknown): string[] | null {
   return [...value];
 }
 
-function normalizeHostsRecord(value: unknown): Record<string, string> {
+function validateHostsRecord(value: unknown): Record<string, string> | null {
+  if (!isRecord(value)) return null;
   const result: Record<string, string> = {};
-  if (!isRecord(value)) return result;
   for (const [host, status] of Object.entries(value)) {
-    if (typeof status === 'string') result[host] = status;
+    if (typeof status !== 'string') return null;
+    result[host] = status;
   }
   return result;
 }
@@ -197,10 +240,15 @@ function validateBaseSha(value: unknown): string | null {
 }
 
 export function createOmpModelsService(options: OmpModelsServiceOptions = {}): OmpModelsService {
-  const activeChildren = new Set<ChildProcess>();
-  const maxConcurrency = Math.max(1, options.maxPreviewConcurrency ?? MAX_PREVIEW_CONCURRENCY);
+  const activeTransientChildren = new Set<ChildProcess>();
+  const maxPreviewConcurrency = Math.max(1, options.maxPreviewConcurrency ?? DEFAULT_MAX_PREVIEW_CONCURRENCY);
+  const maxPreviewQueue = Math.max(0, options.maxPreviewQueue ?? DEFAULT_MAX_PREVIEW_QUEUE);
+  const maxHelperConcurrency = Math.max(1, options.maxHelperConcurrency ?? DEFAULT_MAX_HELPER_CONCURRENCY);
+
   let runningPreviews = 0;
   const previewWaiters: { resume(): void; cancel(): void }[] = [];
+  let runningHelpers = 0;
+  let applyState: OmpModelsApplyStatus = { state: 'idle' };
 
   function fleetBin(): string {
     return resolveFleetBin(options.fleetBin);
@@ -210,17 +258,18 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
     return isExecutable(fleetBin());
   }
 
+  /** Creates a mode-0600 temp file under pi-dish's tmp dir and guarantees unlink across the entire lifetime (write failures included). */
   async function withTempFile<T>(prefix: string, suffix: string, content: string, run: (filePath: string) => Promise<T>): Promise<T> {
     const dir = resolveTmpDir(options.tmpDir);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = path.join(dir, `${prefix}-${process.pid}-${crypto.randomUUID()}${suffix}`);
     const fd = fs.openSync(file, 'wx', 0o600);
     try {
-      fs.writeFileSync(fd, content, 'utf8');
-    } finally {
-      fs.closeSync(fd);
-    }
-    try {
+      try {
+        fs.writeFileSync(fd, content, 'utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
       return await run(file);
     } finally {
       try { fs.unlinkSync(file); } catch {}
@@ -228,39 +277,56 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
   }
 
   interface HelperExecResult {
-    kind: 'exited' | 'timeout' | 'unavailable' | 'aborted' | 'spawn_error';
+    kind: 'exited' | 'timeout' | 'unavailable' | 'aborted' | 'spawn_error' | 'killed';
     exitCode: number | null;
     stdout: string;
     stderr: string;
     message?: string;
   }
 
-  function runFleetHelper(args: readonly string[], timeoutMs: number, signal?: AbortSignal): Promise<HelperExecResult> {
+  function runFleetHelper(
+    args: readonly string[],
+    { timeoutMs, signal, trackTransient, onClose }: {
+      timeoutMs: number | null;
+      signal?: AbortSignal;
+      trackTransient: boolean;
+      onClose?: () => void;
+    },
+  ): Promise<HelperExecResult> {
     const bin = fleetBin();
     if (!isExecutable(bin)) {
+      onClose?.();
       return Promise.resolve({ kind: 'unavailable', exitCode: null, stdout: '', stderr: '' });
     }
     if (signal?.aborted) {
+      onClose?.();
       return Promise.resolve({ kind: 'aborted', exitCode: null, stdout: '', stderr: '' });
     }
     return new Promise<HelperExecResult>(resolve => {
       let settled = false;
+      let closed = false;
       let timedOut = false;
       let aborted = false;
+      const markClosed = () => {
+        if (closed) return;
+        closed = true;
+        onClose?.();
+      };
       const done = (result: HelperExecResult) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer !== null) clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
         resolve(result);
       };
-      // Run with an empty environment and an argv array — never a shell.
+      // Minimal trusted env and argv array — never a shell.
       const child = execFile(bin, ['omp-models', ...args], {
-        env: {},
+        env: minimalFleetHelperEnv(),
         maxBuffer: MAX_HELPER_BUFFER,
         encoding: 'utf8',
       }, (error, stdout, stderr) => {
-        activeChildren.delete(child);
+        if (trackTransient) activeTransientChildren.delete(child);
+        markClosed();
         const out = typeof stdout === 'string' ? stdout : String(stdout || '');
         const err = typeof stderr === 'string' ? stderr : String(stderr || '');
         if (aborted) return done({ kind: 'aborted', exitCode: null, stdout: out, stderr: err });
@@ -276,20 +342,25 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
         if (typeof child.exitCode === 'number') {
           return done({ kind: 'exited', exitCode: child.exitCode, stdout: out, stderr: err });
         }
+        if (child.signalCode) {
+          return done({ kind: 'killed', exitCode: null, stdout: out, stderr: err, message: `terminated by ${child.signalCode}` });
+        }
         return done({ kind: 'spawn_error', exitCode: null, stdout: out, stderr: err, message: error.message });
       });
-      activeChildren.add(child);
+      if (trackTransient) activeTransientChildren.add(child);
+      child.once('close', markClosed);
+      child.stdin?.on('error', () => {});
       child.stdin?.end();
       const onAbort = () => {
         aborted = true;
         killChildReliably(child);
       };
       signal?.addEventListener('abort', onAbort, { once: true });
-      const timer = setTimeout(() => {
+      const timer = timeoutMs !== null ? setTimeout(() => {
         timedOut = true;
         killChildReliably(child);
-      }, timeoutMs);
-      timer.unref();
+      }, timeoutMs) : null;
+      timer?.unref();
     });
   }
 
@@ -306,12 +377,15 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
         status: 504,
         body: {
           error: 'timeout',
-          retryable: true,
+          retryable: mode !== 'apply',
           message: 'fleet omp-models timed out.',
         },
       };
     }
-    if (result.kind === 'spawn_error') {
+    if (result.kind === 'killed' || result.kind === 'spawn_error') {
+      if (mode === 'apply') {
+        return unknownApplyOutcomeReply('unknown_outcome', result.exitCode);
+      }
       return {
         status: 502,
         body: {
@@ -329,6 +403,9 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
     try {
       parsed = JSON.parse(raw);
     } catch {
+      if (mode === 'apply') {
+        return unknownApplyOutcomeReply('unknown_outcome', exitCode);
+      }
       return {
         status: 502,
         body: {
@@ -339,6 +416,9 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
       };
     }
     if (!isRecord(parsed)) {
+      if (mode === 'apply') {
+        return unknownApplyOutcomeReply('invalid_output', exitCode);
+      }
       return {
         status: 502,
         body: {
@@ -353,13 +433,13 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
         const sha = text(parsed.sha);
         const enabledModels = normalizeStringArray(parsed.enabledModels);
         const disabledProviders = normalizeStringArray(parsed.disabledProviders);
-        if (!sha || !enabledModels || !disabledProviders) {
+        if (!SHA_RE.test(sha) || !enabledModels || !disabledProviders) {
           return {
             status: 502,
             body: {
               error: 'invalid_output',
               exitCode: 0,
-              message: 'fleet omp-models get output is missing sha, enabledModels, or disabledProviders.',
+              message: 'fleet omp-models get output is missing valid sha, enabledModels, or disabledProviders.',
             },
           };
         }
@@ -369,25 +449,83 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
         };
       }
       if (mode === 'dryRun') {
+        const sha = text(parsed.sha);
+        if (!SHA_RE.test(sha) || typeof parsed.changed !== 'boolean') {
+          return {
+            status: 502,
+            body: {
+              error: 'invalid_output',
+              exitCode: 0,
+              message: 'fleet omp-models dry-run output is missing valid sha or changed flag.',
+            },
+          };
+        }
+        const diff = parsed.diff;
+        if (parsed.changed) {
+          if (typeof diff !== 'string' || !diff.length) {
+            return {
+              status: 502,
+              body: {
+                error: 'invalid_output',
+                exitCode: 0,
+                message: 'fleet omp-models dry-run output reported changes without a diff.',
+              },
+            };
+          }
+        } else if (diff !== undefined && typeof diff !== 'string') {
+          return {
+            status: 502,
+            body: {
+              error: 'invalid_output',
+              exitCode: 0,
+              message: 'fleet omp-models dry-run diff must be a string.',
+            },
+          };
+        }
         return {
           status: 200,
           body: {
             dryRun: true,
-            sha: text(parsed.sha),
-            changed: parsed.changed === true,
-            diff: text(parsed.diff),
+            sha,
+            changed: parsed.changed,
+            diff: typeof diff === 'string' ? diff : '',
           },
         };
       }
-      const unchanged = parsed.unchanged === true;
+      // mode === 'apply': requires valid sha and either unchanged:true or a valid hosts record.
+      const sha = text(parsed.sha);
+      if (!SHA_RE.test(sha)) {
+        return unknownApplyOutcomeReply('invalid_output', 0);
+      }
+      if (parsed.unchanged === true) {
+        const hosts = parsed.hosts === undefined ? {} : validateHostsRecord(parsed.hosts);
+        if (hosts === null) return unknownApplyOutcomeReply('invalid_output', 0);
+        return {
+          status: 200,
+          body: {
+            sha,
+            unchanged: true,
+            hosts,
+            allHostsFailed: false,
+            restartRequired: false,
+          },
+        };
+      }
+      if (parsed.unchanged !== undefined && parsed.unchanged !== false) {
+        return unknownApplyOutcomeReply('invalid_output', 0);
+      }
+      const hosts = validateHostsRecord(parsed.hosts);
+      if (hosts === null) {
+        return unknownApplyOutcomeReply('invalid_output', 0);
+      }
       return {
         status: 200,
         body: {
-          sha: text(parsed.sha),
-          unchanged,
-          hosts: normalizeHostsRecord(parsed.hosts),
+          sha,
+          unchanged: false,
+          hosts,
           allHostsFailed: false,
-          restartRequired: !unchanged,
+          restartRequired: true,
         },
       };
     }
@@ -402,7 +540,7 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
       }
       return {
         status: 502,
-        body: { error: code, exitCode: 1, message },
+        body: { error: code, retryable: false, exitCode: 1, message },
       };
     }
     if (exitCode === 2) {
@@ -418,26 +556,33 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
       };
     }
     if (exitCode === 3) {
+      const sha = text(parsed.sha);
       return {
         status: 409,
         body: {
           error: 'conflict',
-          sha: text(parsed.sha) || null,
+          sha: SHA_RE.test(sha) ? sha : null,
           exitCode: 3,
           message: text(parsed.message) || 'The allow-list changed elsewhere.',
         },
       };
     }
     if (exitCode === 4) {
+      const sha = text(parsed.sha);
+      const hosts = validateHostsRecord(parsed.hosts);
+      if (!SHA_RE.test(sha) || hosts === null) {
+        return unknownApplyOutcomeReply('invalid_output', 4);
+      }
       return {
         status: 502,
         body: {
           error: 'all_hosts_failed',
           committed: true,
           allHostsFailed: true,
+          retryable: false,
           exitCode: 4,
-          sha: text(parsed.sha),
-          hosts: normalizeHostsRecord(parsed.hosts),
+          sha,
+          hosts,
           message: 'Committed to fleet-config, but deployment failed on every host.',
         },
       };
@@ -452,6 +597,9 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
         },
       };
     }
+    if (mode === 'apply') {
+      return unknownApplyOutcomeReply('unknown_outcome', exitCode);
+    }
     return {
       status: 502,
       body: {
@@ -462,13 +610,25 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
     };
   }
 
-  async function acquirePreviewSlot(signal?: AbortSignal): Promise<boolean> {
-    if (signal?.aborted) return false;
-    if (runningPreviews < maxConcurrency) {
+  function acquireHelperSlot(): (() => void) | null {
+    if (runningHelpers >= maxHelperConcurrency) return null;
+    runningHelpers++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      runningHelpers = Math.max(0, runningHelpers - 1);
+    };
+  }
+
+  async function acquirePreviewSlot(signal?: AbortSignal): Promise<'acquired' | 'aborted' | 'full'> {
+    if (signal?.aborted) return 'aborted';
+    if (runningPreviews < maxPreviewConcurrency) {
       runningPreviews++;
-      return true;
+      return 'acquired';
     }
-    return new Promise<boolean>(resolve => {
+    if (previewWaiters.length >= maxPreviewQueue) return 'full';
+    return new Promise<'acquired' | 'aborted'>(resolve => {
       let done = false;
       const waiter = {
         resume() {
@@ -476,13 +636,13 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
           done = true;
           signal?.removeEventListener('abort', onAbort);
           runningPreviews++;
-          resolve(true);
+          resolve('acquired');
         },
         cancel() {
           if (done) return;
           done = true;
           signal?.removeEventListener('abort', onAbort);
-          resolve(false);
+          resolve('aborted');
         },
       };
       const onAbort = () => {
@@ -497,7 +657,7 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
 
   function releasePreviewSlot(): void {
     runningPreviews = Math.max(0, runningPreviews - 1);
-    while (runningPreviews < maxConcurrency && previewWaiters.length > 0) {
+    while (runningPreviews < maxPreviewConcurrency && previewWaiters.length > 0) {
       const next = previewWaiters.shift()!;
       next.resume();
     }
@@ -523,10 +683,23 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
         body: { error: 'omp_unavailable', message: 'omp is not installed on this host.' },
       };
     }
-    const acquired = await acquirePreviewSlot(signal);
-    if (!acquired) {
+    const slot = await acquirePreviewSlot(signal);
+    if (slot === 'full') {
+      return {
+        status: 429,
+        body: { error: 'too_many_requests', retryable: true, message: 'Too many model preview requests in flight; try again shortly.' },
+      };
+    }
+    if (slot === 'aborted') {
       return { status: 499, body: { error: 'aborted', message: 'Preview aborted.' } };
     }
+    let slotReleased = false;
+    const releaseSlotOnce = () => {
+      if (slotReleased) return;
+      slotReleased = true;
+      releasePreviewSlot();
+    };
+    let childSpawned = false;
     try {
       const spec = harnessLaunchSpec(descriptor);
       const env: NodeJS.ProcessEnv = { ...process.env, ...spec.env, OMP_SKIP_SETUP: '1' };
@@ -557,12 +730,19 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
           '--no-session',
           '--no-extensions',
           '--no-lsp',
+          '--no-tools',
           '--config', overlayPath,
         ], {
           env,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        activeChildren.add(child);
+        childSpawned = true;
+        activeTransientChildren.add(child);
+
+        // Attach stdin error handler before any writes so EPIPE settles only this preview.
+        child.stdin.on('error', (stdinError: Error) => {
+          finish({ status: 502, body: { error: 'preview_failed', message: `OMP preview stdin error: ${stdinError.message}` } });
+        });
 
         const onAbort = () => {
           aborted = true;
@@ -645,12 +825,15 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
         });
 
         child.on('error', (error: Error) => {
-          activeChildren.delete(child);
+          activeTransientChildren.delete(child);
+          if (child.pid === undefined) releaseSlotOnce();
           finish({ status: 502, body: { error: 'preview_failed', message: error.message } });
         });
 
+        // Hold the concurrency slot until the OS process actually closes.
         child.on('close', (code, sig) => {
-          activeChildren.delete(child);
+          activeTransientChildren.delete(child);
+          releaseSlotOnce();
           if (settled) return;
           if (aborted) {
             finish({ status: 499, body: { error: 'aborted', message: 'Preview aborted.' } });
@@ -660,8 +843,6 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
             finish({ status: 504, body: { error: 'timeout', retryable: true, message: 'OMP model preview timed out.' } });
             return;
           }
-          // When no configured model matches the candidate enabledModels overlay,
-          // omp exits 1 with a clear stderr message before emitting ready.
           if (/No model available matching enabledModels/i.test(stderrBuf)) {
             finish({
               status: 200,
@@ -678,17 +859,36 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
           });
         });
       }));
-    } finally {
-      releasePreviewSlot();
+    } catch (error) {
+      if (!childSpawned) releaseSlotOnce();
+      throw error;
     }
   }
 
   return {
     available,
     async get(signal) {
+      if (!available()) return unavailableReply();
+      const release = acquireHelperSlot();
+      if (!release) {
+        return {
+          status: 429,
+          body: { error: 'too_many_requests', retryable: true, message: 'Too many fleet helper requests in flight; try again shortly.' },
+        };
+      }
       const timeoutMs = options.getTimeoutMs ?? envTimeout('PI_DISH_OMP_MODELS_TIMEOUT_MS', DEFAULT_GET_TIMEOUT_MS);
-      const result = await runFleetHelper(['get', '--json'], timeoutMs, signal);
-      return decodeHelperReply('get', result);
+      try {
+        const result = await runFleetHelper(['get', '--json'], {
+          timeoutMs,
+          signal,
+          trackTransient: true,
+          onClose: release,
+        });
+        return decodeHelperReply('get', result);
+      } catch (error) {
+        release();
+        throw error;
+      }
     },
     preview({ enabledModels, query = '', limit = DEFAULT_PREVIEW_LIMIT }, signal) {
       const clampedLimit = Math.min(MAX_PREVIEW_LIMIT, Math.max(1, Math.round(limit)));
@@ -696,24 +896,112 @@ export function createOmpModelsService(options: OmpModelsServiceOptions = {}): O
     },
     async dryRun({ base, enabledModels }, signal) {
       if (!available()) return unavailableReply();
+      const release = acquireHelperSlot();
+      if (!release) {
+        return {
+          status: 429,
+          body: { error: 'too_many_requests', retryable: true, message: 'Too many fleet helper requests in flight; try again shortly.' },
+        };
+      }
       const timeoutMs = options.dryRunTimeoutMs ?? envTimeout('PI_DISH_OMP_MODELS_TIMEOUT_MS', DEFAULT_DRY_RUN_TIMEOUT_MS);
-      return withTempFile('omp-models-list', '.json', JSON.stringify(enabledModels), async filePath => {
-        const result = await runFleetHelper(['set', '--base', base, '--file', filePath, '--dry-run'], timeoutMs, signal);
-        return decodeHelperReply('dryRun', result);
-      });
+      let helperStarted = false;
+      try {
+        return await withTempFile('omp-models-list', '.json', JSON.stringify(enabledModels), async filePath => {
+          helperStarted = true;
+          const result = await runFleetHelper(['set', '--base', base, '--file', filePath, '--dry-run'], {
+            timeoutMs,
+            signal,
+            trackTransient: true,
+            onClose: release,
+          });
+          return decodeHelperReply('dryRun', result);
+        });
+      } catch (error) {
+        if (!helperStarted) release();
+        throw error;
+      }
     },
-    async apply({ base, enabledModels }, signal) {
+    async apply({ base, enabledModels }) {
       if (!available()) return unavailableReply();
-      const timeoutMs = options.applyTimeoutMs ?? envTimeout('PI_DISH_OMP_MODELS_TIMEOUT_MS', DEFAULT_APPLY_TIMEOUT_MS);
-      return withTempFile('omp-models-list', '.json', JSON.stringify(enabledModels), async filePath => {
-        const result = await runFleetHelper(['set', '--base', base, '--file', filePath], timeoutMs, signal);
-        return decodeHelperReply('apply', result);
+      if (applyState.state === 'running') {
+        return {
+          status: 409,
+          body: {
+            error: 'apply_in_progress',
+            state: 'running',
+            startedAt: applyState.startedAt,
+            base: applyState.base,
+            message: 'Another apply is already in progress.',
+          },
+        };
+      }
+      const startedAt = Date.now();
+      applyState = { state: 'running', startedAt, base };
+
+      // Single-flight background execution: never kill a running `set` on an HTTP deadline.
+      const task = (async (): Promise<OmpModelsHttpReply> => {
+        try {
+          return await withTempFile('omp-models-list', '.json', JSON.stringify(enabledModels), async filePath => {
+            const result = await runFleetHelper(['set', '--base', base, '--file', filePath], {
+              timeoutMs: null,
+              trackTransient: false,
+            });
+            return decodeHelperReply('apply', result);
+          });
+        } catch {
+          return unknownApplyOutcomeReply('unknown_outcome', null);
+        }
+      })().then(reply => {
+        applyState = { state: 'done', startedAt, finishedAt: Date.now(), base, result: reply };
+        return reply;
       });
+
+      const waitMs = options.applyWaitMs ?? envTimeout('PI_DISH_OMP_MODELS_APPLY_WAIT_MS', DEFAULT_APPLY_WAIT_MS);
+      if (waitMs <= 0) {
+        return { status: 202, body: { state: 'running', startedAt, base } };
+      }
+      let waitTimer: NodeJS.Timeout | null = null;
+      const settled = await Promise.race([
+        task.then(reply => ({ done: true as const, reply })),
+        new Promise<{ done: false }>(resolve => {
+          waitTimer = setTimeout(() => resolve({ done: false }), waitMs);
+          waitTimer.unref();
+        }),
+      ]);
+      if (waitTimer !== null) clearTimeout(waitTimer);
+      if (settled.done) return settled.reply;
+      return { status: 202, body: { state: 'running', startedAt, base } };
+    },
+    applyStatus() {
+      if (!available()) return unavailableReply();
+      if (applyState.state === 'idle') {
+        return { status: 200, body: { state: 'idle' } };
+      }
+      if (applyState.state === 'running') {
+        return {
+          status: 200,
+          body: {
+            state: 'running',
+            startedAt: applyState.startedAt,
+            base: applyState.base,
+          },
+        };
+      }
+      return {
+        status: 200,
+        body: {
+          state: 'done',
+          startedAt: applyState.startedAt,
+          finishedAt: applyState.finishedAt,
+          base: applyState.base,
+          result: applyState.result,
+        },
+      };
     },
     dispose() {
       for (const waiter of previewWaiters.splice(0)) waiter.cancel();
-      for (const child of [...activeChildren]) killChildReliably(child);
-      activeChildren.clear();
+      for (const child of [...activeTransientChildren]) killChildReliably(child);
+      activeTransientChildren.clear();
     },
   };
 }
@@ -763,8 +1051,8 @@ export function createOmpModelsHandlers(service: OmpModelsService = createOmpMod
   };
 
   const dryRun: Handler = async (req, res) => {
-    req.setTimeout(HTTP_SET_SOCKET_TIMEOUT_MS);
-    res.setTimeout(HTTP_SET_SOCKET_TIMEOUT_MS);
+    req.setTimeout(HTTP_DRY_RUN_SOCKET_TIMEOUT_MS);
+    res.setTimeout(HTTP_DRY_RUN_SOCKET_TIMEOUT_MS);
     const body = requestBody(req);
     const base = validateBaseSha(body.base);
     if (!base) return sendReply(res, { status: 400, body: { error: 'base must be a 40-character hexadecimal git commit SHA' } });
@@ -779,20 +1067,20 @@ export function createOmpModelsHandlers(service: OmpModelsService = createOmpMod
   };
 
   const apply: Handler = async (req, res) => {
-    req.setTimeout(HTTP_SET_SOCKET_TIMEOUT_MS);
-    res.setTimeout(HTTP_SET_SOCKET_TIMEOUT_MS);
     const body = requestBody(req);
     const base = validateBaseSha(body.base);
     if (!base) return sendReply(res, { status: 400, body: { error: 'base must be a 40-character hexadecimal git commit SHA' } });
     const validated = validateEnabledModelsInput(body.enabledModels);
     if ('error' in validated) return sendReply(res, { status: 400, body: { error: validated.error } });
-    // Apply must not abort the helper once committed/deploying just because a mobile client blips;
-    // wait for the helper (or its timeout) so deploys finish cleanly.
     try {
       sendReply(res, await service.apply({ base, enabledModels: validated.entries }));
     } catch (error) {
       sendReply(res, { status: 500, body: { error: 'internal', message: errorMessage(error) } });
     }
+  };
+
+  const applyStatus: Handler = (_req, res) => {
+    sendReply(res, service.applyStatus());
   };
 
   return {
@@ -801,6 +1089,7 @@ export function createOmpModelsHandlers(service: OmpModelsService = createOmpMod
     preview,
     dryRun,
     apply,
+    applyStatus,
     dispose: () => service.dispose(),
   };
 }
