@@ -458,6 +458,110 @@ test('text selection, lightbox, modal, GLB viewer, and multi-touch are not hijac
   expect((await drawerState(page)).open).toBe(false);
 });
 
+test('first slop-sized horizontal touchmove is claimed before the drag lock so native scrolling cannot take it', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  await setMobileViewport(page);
+
+  // Chrome dispatches only the first touchmove past its slop as cancelable; an
+  // unconsumed small first move (dx 8 < LOCK_PX) used to hand the gesture to scrolling.
+  const prevented = await page.evaluate(() => {
+    const target = document.elementFromPoint(10, 400) ?? document.body;
+    const touchAt = (x: number, y: number) => new Touch({ identifier: 7, target, clientX: x, clientY: y });
+    const fire = (type: string, touches: Touch[], changed: Touch[]) => {
+      const event = new TouchEvent(type, { bubbles: true, cancelable: true, touches, targetTouches: touches, changedTouches: changed });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const start = touchAt(10, 400);
+    fire('touchstart', [start], [start]);
+    const firstMove = touchAt(18, 401);
+    const result = fire('touchmove', [firstMove], [firstMove]);
+    const end = touchAt(18, 401);
+    fire('touchend', [], [end]);
+    return result;
+  });
+  expect(prevented).toBe(true);
+  expect((await drawerState(page)).open).toBe(false);
+});
+
+test('a drawer-list scroll that starts with a short leftward drift is not claimed', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  await setMobileViewport(page);
+
+  await page.locator('.header-menu-btn').click();
+  await expect.poll(() => page.evaluate(() =>
+    fixtureElement(document.getElementById('sidebar'), '#sidebar').getBoundingClientRect().left)).toBe(0);
+
+  // Claiming this first cancelable move would leave the list unable to scroll
+  // once the finger turns vertical.
+  const prevented = await page.evaluate(() => {
+    const list = fixtureElement(document.getElementById('sessionList'), '#sessionList');
+    for (let i = 0; i < 35; i++) {
+      const item = document.createElement('div');
+      item.className = 'session-item';
+      item.textContent = `Populated session row ${i}`;
+      list.append(item);
+    }
+    const target = document.elementFromPoint(150, 400) ?? list;
+    const touchAt = (x: number, y: number) => new Touch({ identifier: 9, target, clientX: x, clientY: y });
+    const fire = (type: string, touches: Touch[], changed: Touch[]) => {
+      const event = new TouchEvent(type, { bubbles: true, cancelable: true, touches, targetTouches: touches, changedTouches: changed });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const start = touchAt(150, 400);
+    fire('touchstart', [start], [start]);
+    const firstMove = touchAt(144, 398);
+    const result = fire('touchmove', [firstMove], [firstMove]);
+    const end = touchAt(144, 398);
+    fire('touchend', [], [end]);
+    return result;
+  });
+  expect(prevented).toBe(false);
+  expect((await drawerState(page)).open).toBe(true);
+});
+
+test('a resting palm or thumb elsewhere on the screen does not block the edge swipe', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  await setMobileViewport(page);
+
+  const palm = { x: 300, y: 760, id: 9 };
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    // Palm already down before the edge swipe starts.
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [palm] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [palm, { x: 10, y: 400, id: 1 }] });
+    for (const x of [30, 70, 130, 180]) {
+      await page.waitForTimeout(12);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [palm, { x, y: 401, id: 1 }] });
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [palm] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally {
+    await cdp.detach();
+  }
+  expect((await drawerState(page)).open).toBe(true);
+
+  await page.evaluate(() => fixtureApp.features.sidebarQuery.close());
+  await setMobileViewport(page);
+
+  const cdp2 = await page.context().newCDPSession(page);
+  try {
+    // A stray touch landing mid-swipe stays ignored while it rests still.
+    await cdp2.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 10, y: 400, id: 1 }] });
+    await cdp2.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 10, y: 400, id: 1 }, palm] });
+    for (const x of [30, 70, 130, 180]) {
+      await page.waitForTimeout(12);
+      await cdp2.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: 401, id: 1 }, palm] });
+    }
+    await cdp2.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [palm] });
+    await cdp2.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally {
+    await cdp2.detach();
+  }
+  expect((await drawerState(page)).open).toBe(true);
+});
+
 test('hamburger buttons keep opening and closing identically across empty state and session header', async ({ page, fleet }) => {
   await setMobileViewport(page);
 

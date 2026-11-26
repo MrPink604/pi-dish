@@ -7,6 +7,17 @@
  * per-gesture touchmove listener only while an eligible single-touch gesture
  * is in flight, so ordinary scrolling pays zero non-passive listener cost.
  *
+ * Chrome withholds touchmoves inside its touch slop and lets only the first
+ * dispatched one decide: if it is not consumed, native scrolling starts and every
+ * later touchmove becomes non-cancelable. A horizontal-dominant first move of an
+ * edge-open swipe is therefore claimed (preventDefault) at CLAIM_PX, before the
+ * LOCK_PX drag lock. Close swipes start over the scrollable drawer list, so they
+ * claim only at the lock.
+ *
+ * Only the tracked touch matters: other stationary touches (a palm or a thumb
+ * resting on the screen) are ignored, but if one of them moves before the lock
+ * the gesture is treated as a multi-finger gesture and abandoned.
+ *
  * iOS Safari tabs reserve the leftmost bezel (~0–15px) for browser back-swipe
  * and send touchcancel if Safari claims it; standalone PWAs do not. Keeping
  * touchstart passive preserves Safari's browser gesture while the 24px edge
@@ -32,6 +43,7 @@ export interface DrawerSwipeController {
 const DRAWER_MEDIA = '(max-width: 768px)';
 const REDUCED_MOTION_MEDIA = '(prefers-reduced-motion: reduce)';
 const EDGE_ZONE_PX = 24;
+const CLAIM_PX = 4;
 const LOCK_PX = 10;
 const LOCK_SLOPE = 1.5;
 const COMMIT_DISTANCE_PX = 50;
@@ -88,11 +100,13 @@ interface Sample {
 interface ActiveGesture {
   mode: 'open' | 'close';
   touchId: number;
+  otherTouches: Map<number, { x: number; y: number }>;
   target: Element | null;
   startX: number;
   startY: number;
   drawerWidth: number;
   reducedMotion: boolean;
+  claimed: boolean;
   locked: boolean;
   samples: Sample[];
   events: AbortController;
@@ -176,6 +190,20 @@ function computeVelocity(samples: readonly Sample[], endX: number, endT: number)
   const dt = refEnd.t - anchor.t;
   if (dt <= 0) return 0;
   return (refEnd.x - anchor.x) / dt;
+}
+
+function otherTouchMoved(gesture: ActiveGesture, list: TouchList): boolean {
+  for (let i = 0; i < list.length; i++) {
+    const touch = list.item(i);
+    if (!touch || touch.identifier === gesture.touchId) continue;
+    const start = gesture.otherTouches.get(touch.identifier);
+    if (!start) {
+      gesture.otherTouches.set(touch.identifier, { x: touch.clientX, y: touch.clientY });
+      continue;
+    }
+    if (Math.abs(touch.clientX - start.x) >= LOCK_PX || Math.abs(touch.clientY - start.y) >= LOCK_PX) return true;
+  }
+  return false;
 }
 
 export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeController {
@@ -273,12 +301,16 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
     if (disposed || !active || !win) return;
     // Once the browser claims the touch sequence for native scrolling, touchmove
     // is no longer cancelable; abort immediately so the drawer never steals it.
-    if (!event.cancelable || event.touches.length !== 1 || !isDrawerLayout()) {
+    if (!event.cancelable || !isDrawerLayout()) {
       cancelGesture();
       return;
     }
     const touch = findTouch(event.touches, active.touchId);
     if (!touch) {
+      cancelGesture();
+      return;
+    }
+    if (!active.locked && otherTouchMoved(active, event.touches)) {
       cancelGesture();
       return;
     }
@@ -304,11 +336,20 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
       }
       recordSample(active, touch.clientX, t);
       const directionalDx = active.mode === 'open' ? dx : -dx;
-      if (directionalDx < LOCK_PX || absDx <= absDy * LOCK_SLOPE) return;
-      if (active.target && canScrollHorizontally(active.target, active.mode, win)) {
-        cancelGesture();
-        return;
+      const horizontal = absDx > absDy * LOCK_SLOPE;
+      if (!active.claimed) {
+        // Only the edge-open swipe claims early; claiming a close swipe early would
+        // swallow drawer-list scrolls that begin with a slight leftward drift.
+        const claimPx = active.mode === 'open' ? CLAIM_PX : LOCK_PX;
+        if (directionalDx < claimPx || !horizontal) return;
+        if (active.target && canScrollHorizontally(active.target, active.mode, win)) {
+          cancelGesture();
+          return;
+        }
+        active.claimed = true;
       }
+      event.preventDefault();
+      if (directionalDx < LOCK_PX || !horizontal) return;
       active.locked = true;
     } else {
       recordSample(active, touch.clientX, t);
@@ -370,15 +411,24 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
 
   function onTouchStart(event: TouchEvent) {
     if (disposed || !win) return;
-    if (event.touches.length !== 1) {
-      cancelGesture();
+    if (active && !findTouch(event.touches, active.touchId)) cancelGesture();
+    if (active) {
+      if (!active.locked) {
+        for (let i = 0; i < event.changedTouches.length; i++) {
+          const extra = event.changedTouches.item(i);
+          if (extra && extra.identifier !== active.touchId) {
+            active.otherTouches.set(extra.identifier, { x: extra.clientX, y: extra.clientY });
+          }
+        }
+      }
       return;
     }
+    if (event.changedTouches.length !== 1) return;
     if (!isDrawerLayout() || isZoomed()) return;
     const sidebar = getSidebar();
     if (!sidebar) return;
 
-    const touch = event.touches.item(0);
+    const touch = event.changedTouches.item(0);
     if (!touch) return;
     const target = elementFromTarget(event.target);
     const isOpen = sidebar.classList.contains('open');
@@ -408,17 +458,23 @@ export function createDrawerSwipe(options: DrawerSwipeOptions): DrawerSwipeContr
       mode = 'close';
     }
 
-    cancelGesture();
+    const otherTouches = new Map<number, { x: number; y: number }>();
+    for (let i = 0; i < event.touches.length; i++) {
+      const other = event.touches.item(i);
+      if (other && other.identifier !== touch.identifier) otherTouches.set(other.identifier, { x: other.clientX, y: other.clientY });
+    }
     const events = new AbortController();
     const t = now();
     active = {
       mode,
       touchId: touch.identifier,
+      otherTouches,
       target,
       startX: touch.clientX,
       startY: touch.clientY,
       drawerWidth: measureDrawerWidth(sidebar),
       reducedMotion: prefersReducedMotion(),
+      claimed: false,
       locked: false,
       samples: [{ x: touch.clientX, t }],
       events,
