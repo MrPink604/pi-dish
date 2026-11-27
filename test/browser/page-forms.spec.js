@@ -350,7 +350,7 @@ const OSBG_SPEC = {
     const late = (0, fixtures_js_1.requiredRoute)(await oldReceipt.received);
     await notes.fill('newest answers');
     await form.locator('button[type="submit"]').click();
-    (0, fixtures_js_1.requiredRoute)(await submitHeld.received);
+    const heldPost = (0, fixtures_js_1.requiredRoute)(await submitHeld.received);
     const newId = await storedPending();
     (0, fixtures_js_1.expect)(newId).toMatch(/^[0-9a-f]{32}$/);
     const answered = tab.waitForResponse('**/receipts/oldver-000001');
@@ -358,9 +358,11 @@ const OSBG_SPEC = {
     await (await answered).finished();
     await tab.evaluate(() => new Promise(resolve => { setTimeout(resolve, 0); }));
     (0, fixtures_js_1.expect)(await storedPending(), 'the late receipt cleared only its own id').toBe(newId);
-    // The held submit never left this tab: the next view reconciles it under its id and sends it once.
-    await tab.unroute(formPost);
+    // The held submit never left this tab: abort it before unrouting so the next
+    // view reconciles it under its id and sends it once.
     const before = prompts().length;
+    await heldPost.abort();
+    await tab.unroute(formPost);
     await tab.reload();
     await (0, fixtures_js_1.expect)(status).toHaveText(/^Submitted .+ \(revision 3\) — delivered to the agent$/);
     (0, fixtures_js_1.expect)(prompts()).toHaveLength(before + 1);
