@@ -268,7 +268,7 @@ impl Vault {
         }
         let document = Zeroizing::new(self.run(&["get", "item", item]).await.map_err(|error| lookup_refusal(item, error))?);
         let summary: BwSummary = serde_json::from_slice(&document).map_err(|e| Refusal::plain(format!("unexpected bw output: {e}")))?;
-        let folders = if summary.folder_id.as_deref().is_some_and(|id| !id.trim().is_empty()) {
+        let folders = if summary.folder_id.as_deref().is_some_and(|id| !id.is_empty()) {
             self.folders().await.map_err(Refusal::plain)?
         } else {
             Vec::new()
@@ -279,7 +279,7 @@ impl Vault {
     /// The requested fields of a prepared item, after approval.
     pub async fn release(&self, prepared: &Prepared, fields: &[String]) -> Result<CredentialData, String> {
         let totp = if fields.iter().any(|field| field == "totp") {
-            self.run(&["get", "totp", &prepared.id]).await.ok().map(|code| String::from_utf8_lossy(&code).trim().to_string())
+            self.run(&["get", "totp", &prepared.totp_id]).await.ok().map(|code| String::from_utf8_lossy(&code).trim().to_string())
         } else {
             None
         };
@@ -347,15 +347,43 @@ fn missing_fields(name: &str, item: &BwSummary, fields: &[String]) -> Option<Str
 
 pub const SEARCH_LIMIT: usize = 100;
 pub const MAX_ITEM_URIS: usize = 64;
+const MAX_ITEM_ID_UTF16: usize = 128;
+const MAX_FOLDER_ID_UTF16: usize = 128;
+const MAX_FOLDER_NAME_UTF16: usize = 256;
 const MAX_URI_CHARS: usize = 2048;
 
 pub struct Prepared {
-    pub id: String,
+    /// Bitwarden item id from `bw get item` when bridge-acceptable; `None` if
+    /// absent or invalid (never falls back to the requester's query).
+    pub item_id: Option<String>,
+    /// Target passed to `bw get totp` on release (Bitwarden id, else lookup key).
+    totp_id: String,
     pub name: String,
     pub folder: Option<String>,
     pub folder_id: Option<String>,
     pub uris: Vec<String>,
     document: Zeroizing<Vec<u8>>,
+}
+
+fn is_js_trim_char(c: char) -> bool {
+    c.is_whitespace() || c == '\u{feff}'
+}
+
+fn is_c0_or_del(c: char) -> bool {
+    matches!(c, '\u{0000}'..='\u{001f}' | '\u{007f}')
+}
+
+/// Returns `Some(s)` (preserving exact outer whitespace) only when pi-dish's
+/// bridge `exactCleanString` would accept it: non-empty after trimming
+/// whitespace/U+FEFF, at most `max_utf16` UTF-16 units, and free of C0/DEL.
+fn bridge_text(s: &str, max_utf16: usize) -> Option<String> {
+    if s.trim_matches(is_js_trim_char).is_empty()
+        || s.encode_utf16().count() > max_utf16
+        || s.chars().any(is_c0_or_del)
+    {
+        return None;
+    }
+    Some(s.to_string())
 }
 
 /// Stored login URIs for bridge origin matching: clean, non-blank, capped at [`MAX_ITEM_URIS`].
@@ -368,7 +396,7 @@ fn item_uris(summary: &BwSummary) -> Vec<String> {
         .flatten()
         .filter_map(|entry| entry.uri.as_deref())
         .filter(|uri| !uri.chars().any(char::is_control))
-        .map(str::trim)
+        .map(|uri| uri.trim_matches(is_js_trim_char))
         .filter(|uri| !uri.is_empty() && uri.encode_utf16().count() <= MAX_URI_CHARS)
         .take(MAX_ITEM_URIS)
         .map(str::to_string)
@@ -383,23 +411,24 @@ fn prepare_summary(
     fields: &[String],
     document: Zeroizing<Vec<u8>>,
 ) -> Result<Prepared, Refusal> {
-    let folder_id = summary.folder_id.as_deref().filter(|id| !id.trim().is_empty()).map(str::to_string);
-    let matched_folder = folder_id.as_deref().and_then(|fid| folders.iter().find(|entry| entry.id.as_deref() == Some(fid)));
+    let raw_folder_id = summary.folder_id.as_deref().filter(|id| !id.is_empty());
+    let matched_folder = raw_folder_id.and_then(|fid| folders.iter().find(|entry| entry.id.as_deref() == Some(fid)));
     if matched_folder.and_then(|entry| entry.name.as_deref()) == Some(deny_folder) {
         // Search hides these items; the requester sees a missing item.
         return Err(Refusal { log: format!("the item is in the \"{deny_folder}\" folder"), requester: no_item(item) });
     }
+    let folder_id = raw_folder_id.and_then(|id| bridge_text(id, MAX_FOLDER_ID_UTF16));
     let folder = matched_folder
         .and_then(|entry| entry.name.as_deref())
-        .filter(|name| !name.trim().is_empty())
-        .map(str::to_string);
+        .and_then(|name| bridge_text(name, MAX_FOLDER_NAME_UTF16));
     let name = summary.name.clone().unwrap_or_else(|| item.to_string());
     if let Some(error) = missing_fields(&name, &summary, fields) {
         return Err(Refusal::plain(error));
     }
     let uris = item_uris(&summary);
-    let id = summary.id.filter(|id| !id.trim().is_empty()).unwrap_or_else(|| item.to_string());
-    Ok(Prepared { id, name, folder, folder_id, uris, document })
+    let item_id = summary.id.as_deref().and_then(|id| bridge_text(id, MAX_ITEM_ID_UTF16));
+    let totp_id = summary.id.filter(|id| !id.is_empty()).unwrap_or_else(|| item.to_string());
+    Ok(Prepared { item_id, totp_id, name, folder, folder_id, uris, document })
 }
 
 #[derive(Deserialize)]
@@ -668,9 +697,11 @@ esac
               {"uri":null},
               {"uri":""},
               {"uri":"   "},
+              {"uri":"\uFEFF"},
+              {"uri":" \uFEFF "},
               {"uri":"https://bad.example/\n"},
               {"uri":"https://bad.example/a\nb"},
-              {"uri":"  https://portal.acme.com/login  "},
+              {"uri":"\uFEFF  https://portal.acme.com/login  \uFEFF"},
               {"uri":"https://status.acme.com"}
             ]
           }
@@ -678,7 +709,7 @@ esac
         let summary: BwSummary = serde_json::from_str(raw).expect("summary JSON");
         let prepared = prepare_summary("Acme Portal", summary, &folders, "no-agents", &fields(&["username", "password"]), Zeroizing::new(raw.as_bytes().to_vec()))
             .expect("prepared");
-        assert_eq!(prepared.id, "item-uuid-1");
+        assert_eq!(prepared.item_id.as_deref(), Some("item-uuid-1"));
         assert_eq!(prepared.name, "Acme Portal");
         assert_eq!(prepared.folder_id.as_deref(), Some("f-cu"));
         assert_eq!(prepared.folder.as_deref(), Some("cu-sandbox"));
@@ -726,6 +757,67 @@ esac
         assert_eq!(prepared_capped.uris.last().map(String::as_str), Some("https://site-63.example/login"));
     }
 
+    #[test]
+    fn prepare_summary_drops_non_bridge_folder_values_while_keeping_valid_folder_id() {
+        let long_name = "a".repeat(300);
+        let wide_name = "😀".repeat(129); // 258 UTF-16 code units > 256
+        let long_folder_id = "f".repeat(129);
+        let folders = vec![
+            BwFolder { id: Some("f-long".to_string()), name: Some(long_name) },
+            BwFolder { id: Some("f-tab".to_string()), name: Some("cu\tsandbox".to_string()) },
+            BwFolder { id: Some("f-del".to_string()), name: Some("cu\x7fsandbox".to_string()) },
+            BwFolder { id: Some("f-bom".to_string()), name: Some(" \u{feff} ".to_string()) },
+            BwFolder { id: Some("f-wide".to_string()), name: Some(wide_name) },
+            BwFolder { id: Some(long_folder_id.clone()), name: Some("cu-sandbox".to_string()) },
+        ];
+
+        for fid in ["f-long", "f-tab", "f-del", "f-bom", "f-wide"] {
+            let summary: BwSummary = serde_json::from_value(serde_json::json!({
+                "id": "item-1",
+                "name": "Acme",
+                "folderId": fid,
+                "type": 2,
+                "notes": "x",
+            }))
+            .expect("summary");
+            let prepared = prepare_summary("Acme", summary, &folders, "no-agents", &fields(&["notes"]), Zeroizing::new(Vec::new())).expect("prepared");
+            assert_eq!(prepared.folder_id.as_deref(), Some(fid), "folder_id kept for {fid}");
+            assert_eq!(prepared.folder, None, "folder dropped for {fid}");
+        }
+
+        let overlong_id_summary: BwSummary = serde_json::from_value(serde_json::json!({
+            "id": "item-1",
+            "name": "Acme",
+            "folderId": long_folder_id,
+            "type": 2,
+            "notes": "x",
+        }))
+        .expect("summary");
+        let prepared = prepare_summary("Acme", overlong_id_summary, &folders, "no-agents", &fields(&["notes"]), Zeroizing::new(Vec::new())).expect("prepared");
+        assert_eq!(prepared.folder_id, None);
+        assert_eq!(prepared.folder.as_deref(), Some("cu-sandbox"));
+    }
+
+    #[test]
+    fn prepare_summary_item_id_comes_only_from_summary_id() {
+        let missing_id: BwSummary = serde_json::from_str(r#"{"name":"Acme","type":2,"notes":"x"}"#).expect("summary");
+        let prepared = prepare_summary("requester-query-item", missing_id, &[], "no-agents", &fields(&["notes"]), Zeroizing::new(Vec::new())).expect("prepared");
+        assert_eq!(prepared.item_id, None);
+        assert_eq!(prepared.totp_id, "requester-query-item");
+
+        for bad_id in ["", "   ", "\u{feff}", "bad\tid", &"x".repeat(129)] {
+            let summary: BwSummary = serde_json::from_value(serde_json::json!({
+                "id": bad_id,
+                "name": "Acme",
+                "type": 2,
+                "notes": "x",
+            }))
+            .expect("summary");
+            let prepared = prepare_summary("requester-query-item", summary, &[], "no-agents", &fields(&["notes"]), Zeroizing::new(Vec::new())).expect("prepared");
+            assert_eq!(prepared.item_id, None, "expected None item_id for {bad_id:?}");
+        }
+    }
+
     #[tokio::test]
     async fn prepare_resolves_folder_via_bw_and_skips_folders_when_unfoldered() {
         use std::os::unix::fs::PermissionsExt;
@@ -745,13 +837,13 @@ esac
         let vault = Vault::new(bw.to_string_lossy().into_owned(), "no-agents".to_string(), "agent-created".to_string(), Some(SecretString::from("key")));
 
         let p1 = vault.prepare("item-1", &fields(&["password"])).await.expect("foldered item");
-        assert_eq!(p1.id, "item-1");
+        assert_eq!(p1.item_id.as_deref(), Some("item-1"));
         assert_eq!(p1.folder_id.as_deref(), Some("f-cu"));
         assert_eq!(p1.folder.as_deref(), Some("cu-sandbox"));
         assert_eq!(p1.uris, vec!["https://portal.acme.com/login"]);
 
         let p2 = vault.prepare("item-2", &fields(&["notes"])).await.expect("unfoldered item");
-        assert_eq!(p2.id, "item-2");
+        assert_eq!(p2.item_id.as_deref(), Some("item-2"));
         assert_eq!(p2.folder_id, None);
         assert_eq!(p2.folder, None);
         assert!(p2.uris.is_empty());

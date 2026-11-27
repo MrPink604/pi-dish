@@ -361,7 +361,7 @@ async fn handle_request(
         id: &id,
         action: "release",
         device: Device { name: device.clone(), fingerprint },
-        item_id: Some(&prepared.id),
+        item_id: prepared.item_id.as_deref(),
         item: &prepared.name,
         fields: &request.fields,
         folder_id: prepared.folder_id.as_deref(),

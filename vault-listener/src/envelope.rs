@@ -148,14 +148,92 @@ pub fn check_query(query: &CredentialQuery) -> Option<Result<Envelope, String>> 
     query.search_string().trim().strip_prefix(CHECK_PREFIX).map(decode_wire)
 }
 
-/// A bounded single-line origin, `None` when absent or blank.
+fn is_forbidden_origin_host_char(c: char) -> bool {
+    c.is_whitespace()
+        || c == '\u{feff}'
+        || matches!(
+            c,
+            '\u{0000}'..='\u{001f}'
+                | '\u{007f}'
+                | '/'
+                | '\\'
+                | '?'
+                | '#'
+                | '@'
+                | '*'
+                | '%'
+                | '<'
+                | '>'
+                | '^'
+                | '|'
+                | '['
+                | ']'
+                | ':'
+        )
+}
+
+fn is_valid_port(port: &str) -> bool {
+    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok()
+}
+
+/// Validates a bare `http(s)://host[:port]` origin (no path, query, fragment, `@`, or `*`).
+fn is_bare_http_origin(text: &str) -> bool {
+    let Some(after_scheme) = text
+        .get(..8)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("https://"))
+        .and_then(|_| text.get(8..))
+        .or_else(|| text.get(..7).filter(|prefix| prefix.eq_ignore_ascii_case("http://")).and_then(|_| text.get(7..)))
+    else {
+        return false;
+    };
+    if after_scheme.is_empty()
+        || after_scheme.chars().any(|c| {
+            c.is_whitespace() || c == '\u{feff}' || matches!(c, '/' | '\\' | '?' | '#' | '@' | '*')
+        })
+    {
+        return false;
+    }
+    if let Some(bracketed) = after_scheme.strip_prefix('[') {
+        let Some((ipv6_host, rest)) = bracketed.split_once(']') else {
+            return false;
+        };
+        if ipv6_host.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        return match rest {
+            "" => true,
+            _ => rest.strip_prefix(':').is_some_and(is_valid_port),
+        };
+    }
+    let (host, port) = match after_scheme.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (after_scheme, None),
+    };
+    if host.is_empty()
+        || host.starts_with('.')
+        || host.contains("..")
+        || host.trim_matches('.').is_empty()
+        || host.chars().any(is_forbidden_origin_host_char)
+    {
+        return false;
+    }
+    port.is_none_or(is_valid_port)
+}
+
+/// A bounded bare `http(s)://host[:port]` origin, `None` when absent or blank.
 fn decode_origin(value: Option<String>) -> Result<Option<String>, String> {
     let Some(raw) = value else { return Ok(None) };
     if raw.len() > MAX_ORIGIN_BYTES || raw.chars().any(char::is_control) {
         return Err(format!("origin must be one line of at most {MAX_ORIGIN_BYTES} bytes"));
     }
-    let text = raw.trim().to_string();
-    Ok((!text.is_empty()).then_some(text))
+    let text = raw.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if !is_bare_http_origin(text) {
+        return Err("origin must be a bare http(s)://host[:port] with no path, query, fragment, @ or *".to_string());
+    }
+    Ok(Some(text.to_string()))
 }
 
 fn decode_wire(encoded: &str) -> Result<Envelope, String> {
@@ -281,11 +359,19 @@ mod tests {
 
     #[test]
     fn decodes_envelope_with_and_without_origin() {
-        let with_origin = decode(&domain(r#"{"item":"acme","fields":["password"],"origin":"https://portal.acme.com"}"#)).expect("valid origin");
-        assert_eq!(with_origin.origin.as_deref(), Some("https://portal.acme.com"));
-
-        let trimmed = decode(&domain(r#"{"item":"acme","fields":["password"],"origin":"  https://portal.acme.com:8443  "}"#)).expect("trimmed origin");
-        assert_eq!(trimmed.origin.as_deref(), Some("https://portal.acme.com:8443"));
+        for (raw, expected) in [
+            ("https://portal.acme.com", "https://portal.acme.com"),
+            ("http://portal.acme.com", "http://portal.acme.com"),
+            ("HTTPS://PORTAL.Acme.com:443", "HTTPS://PORTAL.Acme.com:443"),
+            ("  \u{feff}https://portal.acme.com:8443\u{feff}  ", "https://portal.acme.com:8443"),
+            ("http://127.0.0.1:3333", "http://127.0.0.1:3333"),
+            ("https://[::1]:8443", "https://[::1]:8443"),
+            ("https://[2001:db8::1]", "https://[2001:db8::1]"),
+        ] {
+            let payload = serde_json::json!({ "item": "acme", "fields": ["password"], "origin": raw }).to_string();
+            let decoded = decode(&domain(&payload)).expect("valid bare origin");
+            assert_eq!(decoded.origin.as_deref(), Some(expected), "{raw:?}");
+        }
 
         let max_origin = format!("https://{}", "a".repeat(MAX_ORIGIN_BYTES - "https://".len()));
         assert_eq!(max_origin.len(), MAX_ORIGIN_BYTES);
@@ -297,6 +383,7 @@ mod tests {
             r#"{"item":"acme","fields":["password"],"origin":null}"#,
             r#"{"item":"acme","fields":["password"],"origin":""}"#,
             r#"{"item":"acme","fields":["password"],"origin":"   "}"#,
+            r#"{"item":"acme","fields":["password"],"origin":" \uFEFF "}"#,
         ] {
             assert_eq!(decode(&domain(absent)).expect("absent origin").origin, None, "{absent}");
         }
@@ -315,7 +402,7 @@ mod tests {
     fn rejects_bad_origins() {
         let too_long_ascii = format!("https://{}", "a".repeat(MAX_ORIGIN_BYTES + 1 - "https://".len()));
         assert_eq!(too_long_ascii.len(), MAX_ORIGIN_BYTES + 1);
-        let too_long_utf8 = "é".repeat(MAX_ORIGIN_BYTES / 2 + 1);
+        let too_long_utf8 = format!("https://{}", "é".repeat(MAX_ORIGIN_BYTES / 2));
         assert!(too_long_utf8.chars().count() <= MAX_ORIGIN_BYTES);
         assert!(too_long_utf8.len() > MAX_ORIGIN_BYTES);
 
@@ -335,11 +422,47 @@ mod tests {
             assert!(decode(&domain(&payload)).is_err(), "expected error for {bad:?}");
         }
 
+        for non_bare in [
+            "portal.acme.com",
+            "ftp://portal.acme.com",
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "https://",
+            "http://",
+            "https://:443",
+            "https://portal.acme.com/",
+            "https://portal.acme.com/login",
+            "https://portal.acme.com\\login",
+            "https://portal.acme.com?next=/home",
+            "https://portal.acme.com#section",
+            "https://user@portal.acme.com",
+            "https://@portal.acme.com",
+            "https://user:pass@portal.acme.com",
+            "https://*.acme.com",
+            "https://%2a.acme.com",
+            "https://%2A.acme.com",
+            "https://portal.acme.com:",
+            "https://portal.acme.com:abc",
+            "https://portal.acme.com:99999",
+            "https://portal.acme.com:+443",
+            "https://a:b:c",
+            "https://portal.acme.com evil",
+            "https://.",
+            "https://..acme.com",
+            "https://[]",
+            "https://[::1",
+            "https://[not-ipv6]",
+        ] {
+            let payload = serde_json::json!({ "item": "acme", "fields": ["password"], "origin": non_bare }).to_string();
+            let err = decode(&domain(&payload)).err().unwrap_or_else(|| panic!("expected error for {non_bare:?}"));
+            assert!(err.contains("http(s)://host[:port]"), "unexpected error for {non_bare:?}: {err}");
+        }
+
         assert!(decode(&domain(r#"{"item":"acme","fields":["password"],"origin":123}"#)).is_err());
 
         let bad_check = CredentialQuery::Domain(format!(
             "{CHECK_PREFIX}{}",
-            URL_SAFE_NO_PAD.encode(r#"{"item":"acme","fields":["password"],"origin":"https://a.com\n"}"#)
+            URL_SAFE_NO_PAD.encode(r#"{"item":"acme","fields":["password"],"origin":"https://portal.acme.com/login"}"#)
         ));
         assert!(check_query(&bad_check).expect("check probe").is_err());
     }
