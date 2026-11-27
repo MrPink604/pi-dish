@@ -10,10 +10,11 @@ function buildOverview(expiresAt: number, session?: { ref: string; host: string 
     pending: [
       {
         id: 'vault-req-cu-1',
-        device: { name: 'cu-sandbox-proxy', fingerprint: 'cc'.repeat(16) },
+        device: { name: 'cu-sandbox-proxy', fingerprint: 'cc'.repeat(32) },
         action: 'release',
         itemId: 'bw-acme-1',
         item: 'Acme Portal',
+        folderId: 'folder-cu-1',
         folder: 'cu-sandbox',
         fields: ['username', 'password'],
         origin: 'https://portal.acme.com',
@@ -27,7 +28,7 @@ function buildOverview(expiresAt: number, session?: { ref: string; host: string 
       },
       {
         id: 'vault-req-legacy-1',
-        device: { name: 'desktop', fingerprint: 'ab'.repeat(16) },
+        device: { name: 'desktop', fingerprint: 'ab'.repeat(32) },
         action: 'release',
         item: 'fleet-sudo-desktop',
         folder: null,
@@ -43,7 +44,7 @@ function buildOverview(expiresAt: number, session?: { ref: string; host: string 
       },
       {
         id: 'vault-req-mismatch-1',
-        device: { name: 'desktop', fingerprint: 'ab'.repeat(16) },
+        device: { name: 'desktop', fingerprint: 'ab'.repeat(32) },
         action: 'release',
         item: 'Unrestricted Origin Test',
         folder: null,

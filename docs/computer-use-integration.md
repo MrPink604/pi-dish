@@ -222,20 +222,26 @@ Evaluating the three candidate origins:
 
 **Why it works cleanly without breaking `beelink` `pi-dish`'s "never sees secrets" invariant:**
 
-1. **Per-device vault policy in `vault-listener` (`vault-listener/src/` + `src/core/vault-approvals.ts`):**
-   - Add per-device policy rules in `vault-listener` (e.g., `~/.pi/dish/vault/policies.json`, keyed by paired device name):
+1. **Per-device vault policy (`src/core/vault-approvals.ts` + `vault-listener/src/`):**
+   - Configure per-device policy rules in `~/.pi/dish/vault/policies.json`, keyed under `"devices"` by each paired device's 64-character lowercase hex fingerprint (32-byte identity; `pi-dish` persists enrolled fingerprints atomically to `~/.pi/dish/vault/enrolled.json` `0600` on every valid load so a missing or malformed `policies.json` fails closed for enrolled devices without breaking unlisted legacy devices):
      ```json
      {
-       "cu-sandbox-proxy": {
-         "allowFolder": "cu-sandbox",
-         "allowFields": ["username", "password", "totp", "uri"],
-         "allowCreate": false,
-         "allowWindow": false
+       "devices": {
+         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": {
+           "name": "cu-sandbox-proxy",
+           "allowFolder": "cu-sandbox",
+           "allowFolderId": "00000000-0000-4000-8000-000000000001",
+           "allowedFields": ["username", "password", "totp", "uri"],
+           "allowCreate": false,
+           "allowWindow": false,
+           "requireOriginMatch": true
+         }
        }
      }
      ```
-   - **Allow-list folder (`allowFolder: "cu-sandbox"`):** For this device, `search`, `check`, and `prepare` ONLY see items inside the `cu-sandbox` Bitwarden folder. Bank logins, `fleet-sudo-*`, SSH keys, and personal accounts outside that folder do not exist to `cu-sandbox` — eliminating unapproved catalog enumeration.
-   - **No 15-minute window (`allowWindow: false`):** `vault-listener` passes `allowWindow: false` on `/api/vault/bridge/requests`; `src/core/vault-approvals.ts` hides/refuses `approve-window` (`400`) for that request, guaranteeing a **fresh per-use phone tap** for every fill.
+   - **Required listener bridge metadata:** Until `vault-listener` is updated to send `folderId` (or exact untrimmed `folder`), `origin`, and `itemUris` on `POST /api/vault/bridge/requests`, restricted releases governed by `allowFolderId`/`allowFolder` or `requireOriginMatch` are refused before any push (fail closed). When `allowFolderId` is set in policy, enforcement matches `folderId` strictly and `folder` is display-only; otherwise `allowFolder` compares exact folder names without trimming.
+   - **Allow-list folder (`allowFolder` / `allowFolderId`):** For this device, `search`, `check`, and `prepare` ONLY see items inside the `cu-sandbox` Bitwarden folder. Bank logins, `fleet-sudo-*`, SSH keys, and personal accounts outside that folder do not exist to `cu-sandbox` — eliminating unapproved catalog enumeration.
+   - **No 15-minute window (`allowWindow: false`):** Enforced server-side in `src/core/vault-approvals.ts` (grants bypassed; `approve-window` hidden and refused with `400`, and full policy re-evaluated at approval time), guaranteeing a **fresh per-use phone tap** for every fill.
    - **Verified origin on the approval card:** Extend the vault envelope and `VaultRequest` with an optional `targetOrigin` (e.g., `https://portal.example.com`) and `uriMatch` (`matched` | `mismatch` | `no-uri`). The phone push and card display:
      `cu-sandbox wants "Acme Portal" (username, password) on https://portal.acme.com [URI matched] — sign in to check appointment`.
    - On `beelink`, pair a dedicated `aac` identity named `cu-sandbox-proxy` stored in an isolated `XDG_CONFIG_HOME=~/.pi/dish/cu-aac` (`0700`), completely separate from `beelink`'s own `aac` pairing.

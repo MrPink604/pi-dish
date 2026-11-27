@@ -10,8 +10,10 @@ export declare const LISTENER_STALE_MS: number;
 export declare const MAX_REQUEST_LIFETIME_MS: number;
 export declare const RECENT_LIMIT = 20;
 export declare const VAULT_POLICY_FILE = "policies.json";
+export declare const VAULT_ENROLLED_FILE = "enrolled.json";
 export declare const VAULT_AUDIT_FILE = "vault-audit.ndjson";
 export declare const VAULT_AUDIT_MAX_BYTES: number;
+export declare const VAULT_AUDIT_READ_MAX_BYTES: number;
 export interface VaultDevice {
     readonly name: string;
     readonly fingerprint: string;
@@ -31,6 +33,7 @@ export type VaultAuditActor = 'listener' | 'policy' | 'grant' | 'operator' | 'ti
 export interface VaultDevicePolicy {
     readonly name?: string;
     readonly allowFolder?: string;
+    readonly allowFolderId?: string;
     readonly allowedFields?: readonly VaultField[];
     readonly allowWindow?: boolean;
     readonly allowCreate?: boolean;
@@ -46,6 +49,7 @@ export interface VaultAuditEntry {
     readonly itemId: string | null;
     readonly itemName: string;
     readonly fields: readonly VaultField[];
+    readonly folderId: string | null;
     readonly folder: string | null;
     readonly origin: string | null;
     readonly originMatch: VaultOriginMatch;
@@ -58,6 +62,7 @@ export interface VaultAuditQuery {
     readonly limit?: number;
     readonly device?: string;
     readonly decision?: string;
+    readonly maxBytes?: number;
 }
 export interface VaultRequest {
     readonly id: string;
@@ -69,7 +74,9 @@ export interface VaultRequest {
     readonly item: string;
     /** The requested fields, or for `create` the fields the new login will have. */
     readonly fields: readonly VaultField[];
-    /** The item's folder (for `release` when reported by the listener) or destination folder (for `create`). */
+    /** The item's Bitwarden folder id when reported by the listener; enforced by id when present in policy. */
+    readonly folderId: string | null;
+    /** The item's folder name (display when folderId is enforced; exact untrimmed match otherwise) or destination folder (for `create`). */
     readonly folder: string | null;
     /** Optional target origin (`scheme://host[:port]`) for origin-checked requests. */
     readonly origin: string | null;
@@ -96,6 +103,7 @@ export interface VaultRequest {
 export interface VaultGrant {
     readonly id: string;
     readonly device: VaultDevice;
+    readonly itemId: string | null;
     readonly item: string;
     readonly fields: readonly VaultField[];
     readonly sessionRef: string | null;
@@ -131,6 +139,7 @@ export interface VaultApprovalPorts {
     notify(request: VaultRequest): void;
     now?(): number;
     policyFile?(): string;
+    enrolledFile?(): string;
     auditFile?(): string;
     auditMaxBytes?: number;
 }
@@ -146,12 +155,12 @@ export interface VaultApprovals {
 }
 /** Unique field names: built-ins in canonical order, then custom fields as requested; null when empty or invalid. */
 export declare function decodeFields(value: unknown): VaultField[] | null;
-/** Parses a bare `http(s)://host[:port]` origin (no path, query, hash, or userinfo). */
+/** Parses a bare `http(s)://host[:port]` origin (no path, query, hash, userinfo, or wildcard authority). */
 export declare function parseOrigin(raw: string): {
     readonly origin: string;
     readonly https: boolean;
 } | null;
-/** Extracts the exact `https:` origin of a stored Bitwarden URI; non-https, userinfo, or unparseable URIs yield null. */
+/** Extracts the exact `https:` origin of a stored Bitwarden URI; non-https, any userinfo (including empty `@`), wildcard authorities, or unparseable URIs yield null. */
 export declare function httpsOriginOfUri(raw: string): string | null;
 /** Exact scheme+host+port (`https` only) match between a parsed request origin and an item's stored URIs. */
 export declare function evaluateOriginMatch(origin: {
@@ -160,17 +169,49 @@ export declare function evaluateOriginMatch(origin: {
 } | null, itemUris: readonly string[]): VaultOriginMatch;
 export type VaultPolicyLoadResult = {
     readonly ok: true;
+    readonly missing: boolean;
     readonly policies: ReadonlyMap<string, VaultDevicePolicy>;
 } | {
     readonly ok: false;
     readonly error: string;
 };
+export type VaultEnrolledLoadResult = {
+    readonly state: 'ok';
+    readonly fingerprints: ReadonlySet<string>;
+} | {
+    readonly state: 'missing';
+} | {
+    readonly state: 'error';
+    readonly error: string;
+};
+export type VaultPolicyResolution = {
+    readonly state: 'policy';
+    readonly policy: VaultDevicePolicy;
+} | {
+    readonly state: 'legacy';
+} | {
+    readonly state: 'refused';
+    readonly policyResult: 'policy_config_error' | 'policy_missing_enrolled';
+    readonly error: string;
+};
+export declare function loadEnrolledFingerprints(file: string): VaultEnrolledLoadResult;
 /**
- * Loads per-device policies from `policies.json`. Missing file (`ENOENT`) means
- * no restrictions (backwards compatible); any parse or schema error fails closed.
+ * Loads per-device policies from `policies.json`. Policy keys must be 64-char
+ * hex fingerprints (32-byte ids), normalized lowercase. On every successful
+ * load of an existing policy file, persists the enrolled fingerprint set to
+ * `enrolled.json` (0600, atomic).
  */
-export declare function loadVaultPolicies(file?: string): VaultPolicyLoadResult;
-/** Reads newest-first audit entries across the rotated `.1` file and active log. */
+export declare function loadVaultPolicies(file?: string, enrolledPath?: string | null): VaultPolicyLoadResult;
+/**
+ * Resolves effective policy authority for one device fingerprint:
+ * - Valid `policies.json`: enforces the device's entry (or legacy if unlisted).
+ * - Missing or malformed `policies.json`: refuses any fingerprint present in
+ *   `enrolled.json` (or already admitted under a policy), while never-enrolled
+ *   devices keep the legacy path.
+ * - Missing `policies.json` + unreadable `enrolled.json`: logs and falls back to legacy.
+ */
+export declare function resolveDevicePolicy(fingerprint: string, policyPath?: string, enrolledPath?: string, knownRestricted?: boolean): VaultPolicyResolution;
+/** Tail-reads newest-first audit entries within a bounded byte budget (~2 MiB default), stopping once `limit` is reached. */
 export declare function readVaultAudit(file?: string, query?: VaultAuditQuery): readonly VaultAuditEntry[];
 /** Notification for a pending request; the reason is the agent's claim, so it follows the facts. */
 export declare function vaultPushPayload(request: VaultRequest): Omit<PushPayload, 'hostId'>;

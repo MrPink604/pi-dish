@@ -4,6 +4,13 @@ import type { Duplex } from 'stream';
 import type { ArtifactKind, FleetArtifactStore } from './fleet-artifacts';
 import { type HostDescriptor, type TransportRequest, type TransportResponse, type TransportHandler } from './access-handlers';
 /**
+ * Matches any `/hosts/:name/api` suffix that a downstream hop could interpret
+ * as a `/api/vault/bridge` route (case-insensitively, after repeated percent
+ * decoding, backslash conversion, duplicate-slash collapse, and dot-segment
+ * normalization). Undecodable paths fail closed as a match.
+ */
+export declare function namesVaultBridgeRoute(rawPath: string): boolean;
+/**
  * Whether a generic-proxy path reaches the owner's page-form routes as any
  * hop could read it: Express matches routes case-insensitively, and a
  * normalizing proxy may decode (repeatedly), turn backslashes into slashes and

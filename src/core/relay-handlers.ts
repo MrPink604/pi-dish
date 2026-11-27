@@ -22,6 +22,29 @@ import { asRecord } from './wire-protocol';
 import { FORM_CLIENT_HEADER, PAGE_FORMS_CAPABILITY, PAGE_FORMS_RELAY_LIMIT, SUBMISSION_ID_RE } from './page-forms';
 
 /**
+ * Matches any `/hosts/:name/api` suffix that a downstream hop could interpret
+ * as a `/api/vault/bridge` route (case-insensitively, after repeated percent
+ * decoding, backslash conversion, duplicate-slash collapse, and dot-segment
+ * normalization). Undecodable paths fail closed as a match.
+ */
+export function namesVaultBridgeRoute(rawPath: string): boolean {
+  const pathname = rawPath.split('?')[0];
+  let decoded = pathname;
+  for (let round = 0; round < 3; round++) {
+    let next: string;
+    try { next = decodeURIComponent(decoded); } catch { return true; }
+    if (next === decoded) break;
+    decoded = next;
+  }
+  const slashed = decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  const normRoot = path.posix.normalize(slashed.startsWith('/') ? slashed : `/${slashed}`).toLowerCase();
+  const normApi = path.posix.normalize(`/api/${slashed.replace(/^\/+/, '')}`).toLowerCase();
+  return /^\/(?:api\/)?vault\/bridge(?:\/|$)/.test(normRoot)
+    || /^\/(?:api\/)?vault\/bridge(?:\/|$)/.test(normApi)
+    || /^\/hosts\/[^/]+\/(?:api\/)?vault\/bridge(?:\/|$)/.test(normRoot);
+}
+
+/**
  * Whether a generic-proxy path reaches the owner's page-form routes as any
  * hop could read it: Express matches routes case-insensitively, and a
  * normalizing proxy may decode (repeatedly), turn backslashes into slashes and
@@ -421,7 +444,9 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     // Bare 404: the fleet map is not a discovery surface.
     if (!remote) return res.status(404).type('text/plain').send('Not found');
     // The vault bridge belongs to the host's own listener; it is never a fleet route.
-    if (/^\/vault\/bridge(?:\/|$)/.test(req.path)) return res.status(404).type('text/plain').send('Not found');
+    if (namesVaultBridgeRoute(req.originalUrl || '') || namesVaultBridgeRoute(req.url) || namesVaultBridgeRoute(req.path)) {
+      return res.status(404).type('text/plain').send('Not found');
+    }
     // Page forms are owner-only: only this host's dedicated relay (behind its
     // same-origin check) may carry them, never the generic API proxy.
     if (namesPageForms(req.path)) {

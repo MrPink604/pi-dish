@@ -72,7 +72,7 @@ test('cards show origin, match badge, policy name, and hide Approve 15 min when 
         pending: [
             {
                 id: 'r-match',
-                device: { name: 'cu-sandbox-proxy', fingerprint: 'cc'.repeat(16) },
+                device: { name: 'cu-sandbox-proxy', fingerprint: 'cc'.repeat(32) },
                 action: 'release',
                 itemId: 'bw-1',
                 item: 'Acme Portal',
@@ -89,7 +89,7 @@ test('cards show origin, match badge, policy name, and hide Approve 15 min when 
             },
             {
                 id: 'r-mismatch',
-                device: { name: 'desktop', fingerprint: 'ab'.repeat(16) },
+                device: { name: 'desktop', fingerprint: 'ab'.repeat(32) },
                 action: 'release',
                 item: 'Other',
                 fields: ['password'],

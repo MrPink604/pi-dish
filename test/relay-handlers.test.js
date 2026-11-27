@@ -395,3 +395,52 @@ test('proxyToRemote clears the upstream socket inactivity timeout once response 
     assert.match(text, /data: alive/);
     assert.equal(noteFailure.mock.callCount(), 0);
 });
+test('namesVaultBridgeRoute blocks case, encoded, slash, and traversal variants, and proxy strips bridge header', async (t) => {
+    for (const blocked of [
+        '/vault/bridge',
+        '/vault/bridge/status',
+        '/VAULT/BRIDGE/status',
+        '/Vault/Bridge/requests',
+        '/vault/%62ridge/requests',
+        '/vault/%2562ridge/requests',
+        '/vault//bridge/status',
+        '/vault\\bridge/status',
+        '/foo/../vault/bridge/status',
+        '/%2e%2e/api/vault/bridge/status',
+        '/hosts/peer/api/VAULT/bridge/status',
+        '/vault/%zz',
+    ]) {
+        assert.equal((0, relay_handlers_1.namesVaultBridgeRoute)(blocked), true, blocked);
+    }
+    for (const allowed of ['/vault', '/vault/audit', '/vault/requests/r1/decision', '/vault/bridge-other']) {
+        assert.equal((0, relay_handlers_1.namesVaultBridgeRoute)(allowed), false, allowed);
+    }
+    let seenBridgeHeader = 'not-called';
+    const peer = http.createServer((req, res) => {
+        seenBridgeHeader = req.headers['x-pi-dish-vault-bridge'];
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+    });
+    const peerPort = await listen(t, peer);
+    const base = await mountRawApi(t, 1000);
+    bindDirectPeer(t, 'vault-peer', peerPort);
+    for (const encodedPath of [
+        '/hosts/vault-peer/api/VAULT/BRIDGE/status',
+        '/hosts/vault-peer/api/vault/%62ridge/status',
+        '/hosts/vault-peer/api/vault//bridge/status',
+        '/hosts/vault-peer/api/foo/../vault/bridge/status',
+    ]) {
+        const blocked = await fetch(`${base}${encodedPath}`, {
+            method: 'POST',
+            headers: { 'X-Pi-Dish-Vault-Bridge': 'local-secret-token' },
+        });
+        assert.equal(blocked.status, 404, encodedPath);
+    }
+    assert.equal(seenBridgeHeader, 'not-called', 'blocked bridge paths never reach peer');
+    // Allowed fleet route strips X-Pi-Dish-Vault-Bridge before forwarding to peer.
+    const ok = await fetch(`${base}/hosts/vault-peer/api/vault`, {
+        headers: { 'X-Pi-Dish-Vault-Bridge': 'local-secret-token' },
+    });
+    assert.equal(ok.status, 200);
+    assert.equal(seenBridgeHeader, undefined, 'vault bridge header must never be forwarded across relay hops');
+});
