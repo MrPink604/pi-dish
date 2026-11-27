@@ -731,7 +731,7 @@ function projectAuditEntryFromUnknown(raw: unknown): VaultAuditEntry | null {
 function appendVaultAudit(file: string, entry: VaultAuditEntry, maxBytes: number): void {
   const line = `${JSON.stringify(projectAuditEntry(entry))}\n`;
   const lineBytes = Buffer.byteLength(line, 'utf8');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let currentSize = 0;
   try {
     currentSize = fs.statSync(file).size;
