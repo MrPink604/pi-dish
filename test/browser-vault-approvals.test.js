@@ -66,3 +66,95 @@ test('the listener line says why an approval would not release anything', () => 
     assert.match(vaultListenerText({ state: 'locked', account: '', stale: false }), /locked/);
     assert.equal(vaultListenerText({ state: 'ready', account: 'me@example.com', stale: false }), 'Vault ready (me@example.com)');
 });
+test('cards show origin, match badge, policy name, and hide Approve 15 min when allowWindow is false', () => {
+    const policyWire = {
+        ...wire,
+        pending: [
+            {
+                id: 'r-match',
+                device: { name: 'cu-sandbox-proxy', fingerprint: 'cc'.repeat(16) },
+                action: 'release',
+                itemId: 'bw-1',
+                item: 'Acme Portal',
+                folder: 'cu-sandbox',
+                fields: ['username', 'password'],
+                origin: 'https://portal.acme.com',
+                originMatch: 'match',
+                allowWindow: false,
+                policyName: 'cu-sandbox<script>',
+                policyResult: 'allowed',
+                reason: 'sign in',
+                session: null,
+                expiresAt: NOW + 90_000,
+            },
+            {
+                id: 'r-mismatch',
+                device: { name: 'desktop', fingerprint: 'ab'.repeat(16) },
+                action: 'release',
+                item: 'Other',
+                fields: ['password'],
+                origin: 'https://evil.example',
+                originMatch: 'mismatch',
+                allowWindow: true,
+                policyName: null,
+                expiresAt: NOW + 90_000,
+            },
+            {
+                id: 'r-legacy',
+                device: { name: 'desktop' },
+                item: 'Legacy Item',
+                fields: ['password'],
+                expiresAt: NOW + 90_000,
+            },
+        ],
+    };
+    const view = decodeVaultOverview(policyWire);
+    assert.equal(view.pending.length, 3);
+    assert.equal(view.pending[0].allowWindow, false);
+    assert.equal(view.pending[0].origin, 'https://portal.acme.com');
+    assert.equal(view.pending[0].originMatch, 'match');
+    assert.equal(view.pending[0].policyName, 'cu-sandbox<script>');
+    assert.equal(view.pending[1].allowWindow, true);
+    assert.equal(view.pending[1].originMatch, 'mismatch');
+    assert.equal(view.pending[2].allowWindow, true);
+    assert.equal(view.pending[2].originMatch, 'no-origin');
+    const restrictedHtml = vaultCardsHtml([view.pending[0]], { ...options, inSession: false });
+    assert.match(restrictedHtml, /https:\/\/portal\.acme\.com/);
+    assert.match(restrictedHtml, /data-vault-origin-match="match">exact match/);
+    assert.match(restrictedHtml, /cu-sandbox&lt;script&gt;/);
+    assert.ok(!restrictedHtml.includes('<script>'));
+    assert.ok(!restrictedHtml.includes('approve-window'), 'window button must be hidden when allowWindow is false');
+    const mismatchHtml = vaultCardsHtml([view.pending[1]], { ...options, inSession: false });
+    assert.match(mismatchHtml, /https:\/\/evil\.example/);
+    assert.match(mismatchHtml, /data-vault-origin-match="mismatch">mismatch/);
+    assert.ok(mismatchHtml.includes('approve-window'));
+    const legacyHtml = vaultCardsHtml([view.pending[2]], { ...options, inSession: false });
+    assert.match(legacyHtml, /data-vault-origin-match="no-origin">no origin/);
+    assert.ok(!legacyHtml.includes('data-vault-policy'));
+    assert.ok(legacyHtml.includes('approve-window'));
+    // Old cached JS contract decoding a new server payload: additive fields must still yield a renderable card.
+    const legacyDecode = (value) => value.pending.flatMap(entry => {
+        if (!entry || typeof entry.id !== 'string' || !entry.id || typeof entry.expiresAt !== 'number' || !Number.isFinite(entry.expiresAt))
+            return [];
+        const device = entry.device && typeof entry.device === 'object' ? entry.device : {};
+        const session = entry.session && typeof entry.session === 'object' ? entry.session : {};
+        return [{
+                id: entry.id,
+                device: typeof device.name === 'string' ? device.name : '',
+                action: entry.action === 'create' ? 'create' : 'release',
+                item: typeof entry.item === 'string' ? entry.item : '',
+                folder: typeof entry.folder === 'string' ? entry.folder : '',
+                fields: Array.isArray(entry.fields) ? entry.fields.filter((f) => typeof f === 'string') : [],
+                reason: typeof entry.reason === 'string' ? entry.reason : '',
+                sessionName: typeof session.name === 'string' ? session.name : '',
+                sessionRef: typeof session.ref === 'string' ? session.ref : '',
+                sessionHost: typeof session.host === 'string' ? session.host : '',
+                expiresAt: entry.expiresAt,
+            }];
+    });
+    const legacyDecoded = legacyDecode(policyWire);
+    assert.equal(legacyDecoded.length, 3);
+    assert.equal(legacyDecoded[0].id, 'r-match');
+    assert.equal(legacyDecoded[0].item, 'Acme Portal');
+    assert.deepEqual(legacyDecoded[0].fields, ['username', 'password']);
+});

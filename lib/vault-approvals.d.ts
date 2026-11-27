@@ -9,6 +9,9 @@ export declare const GRANT_WINDOW_MS: number;
 export declare const LISTENER_STALE_MS: number;
 export declare const MAX_REQUEST_LIFETIME_MS: number;
 export declare const RECENT_LIMIT = 20;
+export declare const VAULT_POLICY_FILE = "policies.json";
+export declare const VAULT_AUDIT_FILE = "vault-audit.ndjson";
+export declare const VAULT_AUDIT_MAX_BYTES: number;
 export interface VaultDevice {
     readonly name: string;
     readonly fingerprint: string;
@@ -22,16 +25,62 @@ export type VaultRequestStatus = 'pending' | 'approved' | 'denied' | 'expired';
 export type VaultDecision = 'approve' | 'approve-window' | 'deny';
 /** `release` hands existing fields to one command; `create` adds one login with a listener-generated password. */
 export type VaultAction = 'release' | 'create';
+export type VaultOriginMatch = 'match' | 'mismatch' | 'no-origin';
+export type VaultAuditEvent = 'request' | 'decision';
+export type VaultAuditActor = 'listener' | 'policy' | 'grant' | 'operator' | 'timeout';
+export interface VaultDevicePolicy {
+    readonly name?: string;
+    readonly allowFolder?: string;
+    readonly allowedFields?: readonly VaultField[];
+    readonly allowWindow?: boolean;
+    readonly allowCreate?: boolean;
+    readonly requireOriginMatch?: boolean;
+}
+export interface VaultAuditEntry {
+    readonly ts: string;
+    readonly event: VaultAuditEvent;
+    readonly requestId: string;
+    readonly action: VaultAction;
+    readonly deviceFingerprint: string;
+    readonly deviceName: string;
+    readonly itemId: string | null;
+    readonly itemName: string;
+    readonly fields: readonly VaultField[];
+    readonly folder: string | null;
+    readonly origin: string | null;
+    readonly originMatch: VaultOriginMatch;
+    readonly decision: string;
+    readonly by: VaultAuditActor;
+    readonly policyResult: string;
+    readonly policyName: string | null;
+}
+export interface VaultAuditQuery {
+    readonly limit?: number;
+    readonly device?: string;
+    readonly decision?: string;
+}
 export interface VaultRequest {
     readonly id: string;
     readonly device: VaultDevice;
     readonly action: VaultAction;
+    /** The existing item's Bitwarden id when reported by the listener; null for old listeners or `create`. */
+    readonly itemId: string | null;
     /** The existing item's name, or the new login's name. */
     readonly item: string;
     /** The requested fields, or for `create` the fields the new login will have. */
     readonly fields: readonly VaultField[];
-    /** The folder a created login lands in; null for `release`. */
+    /** The item's folder (for `release` when reported by the listener) or destination folder (for `create`). */
     readonly folder: string | null;
+    /** Optional target origin (`scheme://host[:port]`) for origin-checked requests. */
+    readonly origin: string | null;
+    /** Whether `origin` matched an `https:` stored URI of the item. */
+    readonly originMatch: VaultOriginMatch;
+    /** False for `create` or when device policy disables 15-minute windows. */
+    readonly allowWindow: boolean;
+    /** Device policy name when a policy entry governs this device; null when unrestricted. */
+    readonly policyName: string | null;
+    /** Policy verdict recorded when the request was admitted (`default` or `allowed`). */
+    readonly policyResult: string;
     /** Requester-claimed; shown as such. */
     readonly reason: string | null;
     /** Requester-claimed; shown as such. */
@@ -50,6 +99,7 @@ export interface VaultGrant {
     readonly item: string;
     readonly fields: readonly VaultField[];
     readonly sessionRef: string | null;
+    readonly origin: string | null;
     readonly createdAt: number;
     readonly expiresAt: number;
 }
@@ -69,7 +119,7 @@ export interface VaultOverview {
 }
 type Failure = {
     readonly ok: false;
-    readonly status: 400 | 404 | 409;
+    readonly status: 400 | 403 | 404 | 409 | 500;
     readonly error: string;
 };
 type Result<T> = {
@@ -77,9 +127,12 @@ type Result<T> = {
     readonly value: T;
 } | Failure;
 export interface VaultApprovalPorts {
-    /** Called once when a request becomes pending (never for grant auto-approvals). */
+    /** Called once when a request becomes pending (never for grant auto-approvals or policy refusals). */
     notify(request: VaultRequest): void;
     now?(): number;
+    policyFile?(): string;
+    auditFile?(): string;
+    auditMaxBytes?: number;
 }
 export interface VaultApprovals {
     overview(): VaultOverview;
@@ -89,9 +142,36 @@ export interface VaultApprovals {
     abandon(id: string): Result<VaultRequest>;
     decide(id: string, decision: unknown): Result<VaultRequest>;
     revokeGrant(id: string): Result<VaultGrant>;
+    audit(query?: VaultAuditQuery): readonly VaultAuditEntry[];
 }
 /** Unique field names: built-ins in canonical order, then custom fields as requested; null when empty or invalid. */
 export declare function decodeFields(value: unknown): VaultField[] | null;
+/** Parses a bare `http(s)://host[:port]` origin (no path, query, hash, or userinfo). */
+export declare function parseOrigin(raw: string): {
+    readonly origin: string;
+    readonly https: boolean;
+} | null;
+/** Extracts the exact `https:` origin of a stored Bitwarden URI; non-https, userinfo, or unparseable URIs yield null. */
+export declare function httpsOriginOfUri(raw: string): string | null;
+/** Exact scheme+host+port (`https` only) match between a parsed request origin and an item's stored URIs. */
+export declare function evaluateOriginMatch(origin: {
+    readonly origin: string;
+    readonly https: boolean;
+} | null, itemUris: readonly string[]): VaultOriginMatch;
+export type VaultPolicyLoadResult = {
+    readonly ok: true;
+    readonly policies: ReadonlyMap<string, VaultDevicePolicy>;
+} | {
+    readonly ok: false;
+    readonly error: string;
+};
+/**
+ * Loads per-device policies from `policies.json`. Missing file (`ENOENT`) means
+ * no restrictions (backwards compatible); any parse or schema error fails closed.
+ */
+export declare function loadVaultPolicies(file?: string): VaultPolicyLoadResult;
+/** Reads newest-first audit entries across the rotated `.1` file and active log. */
+export declare function readVaultAudit(file?: string, query?: VaultAuditQuery): readonly VaultAuditEntry[];
 /** Notification for a pending request; the reason is the agent's claim, so it follows the facts. */
 export declare function vaultPushPayload(request: VaultRequest): Omit<PushPayload, 'hostId'>;
 export declare function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals;
@@ -106,6 +186,7 @@ export interface VaultHandlers {
     bridgeGet: VaultHandler;
     bridgeAbandon: VaultHandler;
     overview: VaultHandler;
+    audit: VaultHandler;
     decide: VaultHandler;
     revokeGrant: VaultHandler;
 }

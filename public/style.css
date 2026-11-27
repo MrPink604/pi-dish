@@ -5503,6 +5503,37 @@ body.sidebar-open .edge-handle:not(.edge-handle-preview) {
 .vault-card dt { color: var(--text-muted); }
 .vault-card dt small { font-size: 10px; }
 .vault-card dd { margin: 0; overflow-wrap: anywhere; }
+.vault-origin-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
+.vault-origin { word-break: break-all; }
+.vault-match, .vault-policy {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.vault-match-exact {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success-bright);
+  border: 1px solid color-mix(in srgb, var(--success) 55%, transparent);
+}
+.vault-match-mismatch {
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  color: var(--error);
+  border: 1px solid color-mix(in srgb, var(--error) 55%, transparent);
+}
+.vault-match-none {
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.vault-policy {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-bright);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
 .vault-link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 .vault-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .vault-actions .vault-approve { background: var(--success); }

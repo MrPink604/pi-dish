@@ -3,8 +3,10 @@ import { resolveSessionRefAmong } from '../core/helper-refs';
 import { finite, record, text } from '../core/helper-values';
 
 export type VaultDecision = 'approve' | 'approve-window' | 'deny';
+export type VaultOriginMatchView = 'match' | 'mismatch' | 'no-origin';
 export interface VaultRequestView {
   readonly id: string; readonly device: string; readonly action: 'release' | 'create'; readonly item: string; readonly folder: string; readonly fields: readonly string[];
+  readonly origin: string; readonly originMatch: VaultOriginMatchView; readonly allowWindow: boolean; readonly policyName: string;
   readonly reason: string; readonly sessionName: string; readonly sessionRef: string; readonly sessionHost: string; readonly expiresAt: number;
 }
 export interface VaultGrantView {
@@ -21,6 +23,11 @@ export interface VaultSessionCandidate { readonly id: string; readonly host?: st
 
 const strings = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
+function decodeOriginMatch(value: unknown, origin: string): VaultOriginMatchView {
+  if (value === 'match' || value === 'mismatch' || value === 'no-origin') return value;
+  return origin ? 'mismatch' : 'no-origin';
+}
+
 export function decodeVaultOverview(value: unknown): VaultOverviewView {
   if (!record(value) || !Array.isArray(value.pending) || !Array.isArray(value.grants)) throw new Error('Invalid vault response');
   const state = record(value.listener) ? value.listener.state : null;
@@ -29,9 +36,14 @@ export function decodeVaultOverview(value: unknown): VaultOverviewView {
   const pending = value.pending.flatMap((entry: unknown) => {
     if (!record(entry) || typeof entry.id !== 'string' || !entry.id || !finite(entry.expiresAt)) return [];
     const session = record(entry.session) ? entry.session : {};
+    const action = entry.action === 'create' ? 'create' : 'release';
+    const origin = text(entry.origin);
+    // Old servers omit allowWindow (default true on release); new servers send explicit false when policy forbids windows.
+    const allowWindow = action !== 'create' && (entry.allowWindow === undefined || entry.allowWindow === true);
     return [{
-      id: entry.id, device: record(entry.device) ? text(entry.device.name) : '', action: entry.action === 'create' ? 'create' : 'release',
+      id: entry.id, device: record(entry.device) ? text(entry.device.name) : '', action,
       item: text(entry.item), folder: text(entry.folder), fields: strings(entry.fields),
+      origin, originMatch: decodeOriginMatch(entry.originMatch, origin), allowWindow, policyName: text(entry.policyName),
       reason: text(entry.reason), sessionName: text(session.name), sessionRef: text(session.ref), sessionHost: text(session.host),
       expiresAt: entry.expiresAt,
     } satisfies VaultRequestView];
@@ -65,7 +77,13 @@ export function vaultListenerText(listener: VaultListenerView | null): string {
   return listener.account ? `Vault ready (${listener.account})` : 'Vault ready';
 }
 
-/** Every agent-supplied string is escaped; session and reason are labelled as the agent's own claims. A create opens no window. */
+function originMatchBadge(match: VaultOriginMatchView): string {
+  if (match === 'match') return '<span class="vault-match vault-match-exact" data-vault-origin-match="match">exact match</span>';
+  if (match === 'mismatch') return '<span class="vault-match vault-match-mismatch" data-vault-origin-match="mismatch">mismatch</span>';
+  return '<span class="vault-match vault-match-none" data-vault-origin-match="no-origin">no origin</span>';
+}
+
+/** Every agent-supplied string is escaped; session and reason are labelled as the agent's own claims. A create or no-window policy opens no window. */
 export function vaultCardsHtml(requests: readonly VaultRequestView[], options: { readonly now: number; readonly busy: ReadonlySet<string>; readonly inSession: boolean }): string {
   return requests.map(request => {
     const disabled = options.busy.has(request.id) ? ' disabled' : '';
@@ -73,18 +91,25 @@ export function vaultCardsHtml(requests: readonly VaultRequestView[], options: {
     const sessionLine = !options.inSession && session
       ? `<dt>Session <small>(reported)</small></dt><dd><button class="vault-link" data-vault-open="${escapeHtml(request.id)}">${escapeHtml(session)} ↗</button></dd>` : '';
     const create = request.action === 'create';
+    const folderLine = request.folder ? `<dt>Folder</dt><dd>${escapeHtml(request.folder)}</dd>` : '';
+    const policyLine = request.policyName ? `<dt>Policy</dt><dd><span class="vault-policy" data-vault-policy="${escapeHtml(request.policyName)}">${escapeHtml(request.policyName)}</span></dd>` : '';
+    const originLine = !create || request.origin
+      ? `<dt>Origin</dt><dd class="vault-origin-row">${request.origin ? `<span class="vault-origin">${escapeHtml(request.origin)}</span>` : ''}${originMatchBadge(request.originMatch)}</dd>` : '';
     return `<article class="vault-card" data-vault-request="${escapeHtml(request.id)}">
       <header><strong>${create ? '➕ Create' : '🔐'} ${escapeHtml(request.item)}</strong><span class="vault-fields">${escapeHtml(request.fields.join(', '))}</span></header>
       <dl>
-        ${create ? `<dt>Folder</dt><dd>${escapeHtml(request.folder)}</dd><dt>Password</dt><dd>generated by the listener</dd>` : ''}
+        ${folderLine}
+        ${create ? '<dt>Password</dt><dd>generated by the listener</dd>' : ''}
         <dt>Device</dt><dd>${escapeHtml(request.device)}</dd>
+        ${policyLine}
+        ${originLine}
         ${sessionLine}
         ${request.reason ? `<dt>Reason <small>(reported)</small></dt><dd>${escapeHtml(request.reason)}</dd>` : ''}
         <dt>Expires</dt><dd>in ${escapeHtml(remaining(request.expiresAt, options.now))}</dd>
       </dl>
       <div class="vault-actions">
         <button class="btn-small vault-approve" data-vault-decision="approve"${disabled}>Approve</button>
-        ${create ? '' : `<button class="btn-small" data-vault-decision="approve-window"${disabled}>Approve 15 min</button>`}
+        ${request.allowWindow ? `<button class="btn-small" data-vault-decision="approve-window"${disabled}>Approve 15 min</button>` : ''}
         <button class="btn-small vault-deny" data-vault-decision="deny"${disabled}>Deny</button>
       </div>
     </article>`;

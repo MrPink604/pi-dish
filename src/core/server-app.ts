@@ -182,6 +182,7 @@ export function startServer(rootDirectory: string): Server {
   });
   app.post('/api/auth/ticket', accessHandlers.ticket);
   app.get('/api/vault', vaultHandlers.overview);
+  app.get('/api/vault/audit', vaultHandlers.audit);
   app.post('/api/vault/requests/:id/decision', vaultHandlers.decide);
   app.delete('/api/vault/grants/:id', vaultHandlers.revokeGrant);
 

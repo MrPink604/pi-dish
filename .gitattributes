@@ -480,6 +480,7 @@ test/browser/thinking-selector.spec.js linguist-generated=true
 test/browser/transcript-tree.spec.js linguist-generated=true
 test/browser/transcript.spec.js linguist-generated=true
 test/browser/usage-view.spec.js linguist-generated=true
+test/browser/vault-approvals.spec.js linguist-generated=true
 test/ci-watcher.test.d.ts linguist-generated=true
 test/ci-watcher.test.js linguist-generated=true
 test/comments-cli.test.d.ts linguist-generated=true

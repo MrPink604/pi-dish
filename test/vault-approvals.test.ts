@@ -16,7 +16,9 @@ import os = require('node:os');
 import path = require('node:path');
 import { record, records } from './test-types.js';
 import {
-  GRANT_WINDOW_MS, LISTENER_STALE_MS, createVaultApprovals, createVaultHandlers, vaultPushPayload,
+  GRANT_WINDOW_MS, LISTENER_STALE_MS, VAULT_AUDIT_FILE, VAULT_POLICY_FILE,
+  createVaultApprovals, createVaultHandlers, evaluateOriginMatch, httpsOriginOfUri,
+  loadVaultPolicies, parseOrigin, readVaultAudit, vaultPushPayload,
 } from '../lib/vault-approvals';
 import type { VaultApprovals, VaultRequest } from '../lib/vault-approvals';
 import type { Request, Response } from 'express';
@@ -29,13 +31,29 @@ process.env.PORT = '0';
 
 const T0 = Date.parse('2026-10-19T00:00:00Z');
 const device = { name: 'desktop', fingerprint: 'ab'.repeat(16) };
+const restrictedDevice = { name: 'cu-sandbox-proxy', fingerprint: 'cc'.repeat(16) };
 const session = { ref: 'desktop/01a0a845', name: 'Htpc provision', host: 'desktop' };
 
-function vault() {
+function vault(options: { policy?: unknown; rawPolicyText?: string; auditMaxBytes?: number } = {}) {
   const clock = { now: T0 };
   const notified: VaultRequest[] = [];
-  const instance = createVaultApprovals({ notify: request => notified.push(request), now: () => clock.now });
-  return { instance, clock, notified };
+  const stateDir = fs.mkdtempSync(path.join(tmpHome, 'case-'));
+  const policyPath = path.join(stateDir, 'vault', VAULT_POLICY_FILE);
+  const auditPath = path.join(stateDir, VAULT_AUDIT_FILE);
+  const writePolicy = (data: unknown) => {
+    fs.mkdirSync(path.dirname(policyPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(policyPath, typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+  };
+  if (options.rawPolicyText !== undefined) writePolicy(options.rawPolicyText);
+  else if (options.policy !== undefined) writePolicy(options.policy);
+  const instance = createVaultApprovals({
+    notify: request => notified.push(request),
+    now: () => clock.now,
+    policyFile: () => policyPath,
+    auditFile: () => auditPath,
+    auditMaxBytes: options.auditMaxBytes,
+  });
+  return { instance, clock, notified, stateDir, policyPath, auditPath, writePolicy };
 }
 
 let nextId = 0;
@@ -202,6 +220,338 @@ test('the bridge refuses a peer that is not loopback even with the token', () =>
   assert.equal(outcome('127.0.0.1', undefined), 403);
 });
 
+test('origin parsing and matching require exact https scheme, host, and port', () => {
+  assert.deepEqual(parseOrigin('https://PORTAL.Acme.com:443'), { origin: 'https://portal.acme.com', https: true });
+  assert.deepEqual(parseOrigin('https://portal.acme.com:8443'), { origin: 'https://portal.acme.com:8443', https: true });
+  assert.deepEqual(parseOrigin('http://portal.acme.com'), { origin: 'http://portal.acme.com', https: false });
+  for (const invalid of [
+    'https://portal.acme.com/login',
+    'https://portal.acme.com/',
+    'https://portal.acme.com?a=1',
+    'https://portal.acme.com#frag',
+    'https://user:pass@portal.acme.com',
+    'javascript:alert(1)',
+    'portal.acme.com',
+    'https://portal.acme.com\\path',
+  ]) {
+    assert.equal(parseOrigin(invalid), null, invalid);
+  }
+  assert.equal(httpsOriginOfUri('https://portal.acme.com/login?next=/home'), 'https://portal.acme.com');
+  assert.equal(httpsOriginOfUri('https://portal.acme.com:8443/app'), 'https://portal.acme.com:8443');
+  assert.equal(httpsOriginOfUri('http://portal.acme.com/login'), null);
+  assert.equal(httpsOriginOfUri('portal.acme.com'), null);
+  assert.equal(httpsOriginOfUri('https://user:pass@portal.acme.com/login'), null);
+
+  const httpsOrigin = parseOrigin('https://portal.acme.com');
+  assert.equal(evaluateOriginMatch(httpsOrigin, ['https://other.example/a', 'https://portal.acme.com:443/login']), 'match');
+  assert.equal(evaluateOriginMatch(httpsOrigin, ['https://sub.portal.acme.com/login']), 'mismatch');
+  assert.equal(evaluateOriginMatch(httpsOrigin, ['https://portal.acme.com:8443/login']), 'mismatch');
+  assert.equal(evaluateOriginMatch(httpsOrigin, ['http://portal.acme.com/login']), 'mismatch');
+  assert.equal(evaluateOriginMatch(httpsOrigin, []), 'mismatch');
+  assert.equal(evaluateOriginMatch(null, ['https://portal.acme.com/login']), 'no-origin');
+});
+
+test('per-device policy enforces allowFolder, allowedFields, allowCreate, and refuses before any push', () => {
+  const { instance, notified, auditPath } = vault({
+    policy: {
+      devices: {
+        // Uppercase hex key in config must match lowercase fingerprint on wire.
+        [restrictedDevice.fingerprint.toUpperCase()]: {
+          name: 'cu-sandbox',
+          allowFolder: 'cu-sandbox',
+          allowedFields: ['username', 'password', 'totp', 'uri'],
+          allowCreate: false,
+          allowWindow: false,
+        },
+      },
+    },
+  });
+
+  // Unlisted device behaves identically to today (old-listener request without folder/origin/itemUris).
+  const unrestricted = created(instance, { device, fields: ['notes'] });
+  assert.equal(unrestricted.allowWindow, true);
+  assert.equal(unrestricted.policyName, null);
+  assert.equal(unrestricted.originMatch, 'no-origin');
+  assert.equal(notified.length, 1);
+
+  // allowCreate: false refuses create before push.
+  const refusedCreate = create(instance, {
+    device: restrictedDevice, action: 'create', item: 'new-login', folder: 'cu-sandbox', fields: ['password'],
+  });
+  assert.equal(refusedCreate.ok, false);
+  if (!refusedCreate.ok) assert.equal(refusedCreate.status, 403);
+
+  // allowFolder refuses missing folder (old listener) and wrong folder before push.
+  const refusedNoFolder = create(instance, { device: restrictedDevice, item: 'Acme', fields: ['password'] });
+  assert.equal(refusedNoFolder.ok, false);
+  if (!refusedNoFolder.ok) assert.equal(refusedNoFolder.status, 403);
+
+  const refusedWrongFolder = create(instance, { device: restrictedDevice, item: 'Acme', folder: 'personal', fields: ['password'] });
+  assert.equal(refusedWrongFolder.ok, false);
+  if (!refusedWrongFolder.ok) assert.equal(refusedWrongFolder.status, 403);
+
+  // allowedFields refuses notes and unlisted custom fields before push.
+  const refusedField = create(instance, { device: restrictedDevice, item: 'Acme', folder: 'cu-sandbox', fields: ['password', 'notes'] });
+  assert.equal(refusedField.ok, false);
+  if (!refusedField.ok) assert.equal(refusedField.status, 403);
+
+  const refusedCustom = create(instance, { device: restrictedDevice, item: 'Acme', folder: 'cu-sandbox', fields: ['field:api-key'] });
+  assert.equal(refusedCustom.ok, false);
+  if (!refusedCustom.ok) assert.equal(refusedCustom.status, 403);
+
+  assert.equal(notified.length, 1, 'refused requests never trigger push');
+  assert.equal(instance.overview().pending.length, 1, 'refused requests never become pending');
+
+  // Matching folder + allowed fields succeeds and carries policy metadata.
+  const allowed = created(instance, {
+    device: restrictedDevice, itemId: 'item-uuid-1', item: 'Acme Portal', folder: 'cu-sandbox', fields: ['username', 'password'],
+  });
+  assert.equal(allowed.policyName, 'cu-sandbox');
+  assert.equal(allowed.allowWindow, false);
+  assert.equal(allowed.itemId, 'item-uuid-1');
+  assert.equal(notified.length, 2);
+
+  const refusedResults = readVaultAudit(auditPath, { device: restrictedDevice.fingerprint, decision: 'refused' })
+    .map(entry => entry.policyResult);
+  assert.deepEqual(refusedResults.sort(), [
+    'denied:create_not_allowed',
+    'denied:field_not_allowed',
+    'denied:field_not_allowed',
+    'denied:folder_not_allowed',
+    'denied:folder_not_allowed',
+  ]);
+});
+
+test('requireOriginMatch refuses missing origin, non-https origin, missing item URIs, and mismatches before push', () => {
+  const { instance, notified, auditPath } = vault({
+    policy: {
+      devices: {
+        [restrictedDevice.fingerprint]: {
+          name: 'cu-fill',
+          allowFolder: 'cu-sandbox',
+          requireOriginMatch: true,
+          allowWindow: false,
+        },
+      },
+    },
+  });
+
+  // Old listener (no origin) is refused before push.
+  const noOrigin = create(instance, {
+    device: restrictedDevice, item: 'Acme', folder: 'cu-sandbox', itemUris: ['https://portal.acme.com/login'],
+  });
+  assert.equal(noOrigin.ok, false);
+  if (!noOrigin.ok) assert.equal(noOrigin.status, 403);
+
+  // HTTP downgrade is refused before push.
+  const httpOrigin = create(instance, {
+    device: restrictedDevice, item: 'Acme', folder: 'cu-sandbox',
+    origin: 'http://portal.acme.com', itemUris: ['http://portal.acme.com/login'],
+  });
+  assert.equal(httpOrigin.ok, false);
+  if (!httpOrigin.ok) assert.equal(httpOrigin.status, 403);
+
+  // Item with no stored URI is refused before push.
+  const noUri = create(instance, {
+    device: restrictedDevice, item: 'Acme', folder: 'cu-sandbox',
+    origin: 'https://portal.acme.com', itemUris: [],
+  });
+  assert.equal(noUri.ok, false);
+  if (!noUri.ok) assert.equal(noUri.status, 403);
+
+  // Subdomain / port / host mismatch are refused before push.
+  for (const itemUris of [
+    ['https://evil.portal.acme.com/login'],
+    ['https://portal.acme.com:8443/login'],
+    ['https://other.example/login'],
+    ['http://portal.acme.com/login'],
+  ]) {
+    const mismatch = create(instance, {
+      device: restrictedDevice, item: 'Acme', folder: 'cu-sandbox', origin: 'https://portal.acme.com', itemUris,
+    });
+    assert.equal(mismatch.ok, false);
+    if (!mismatch.ok) assert.equal(mismatch.status, 403);
+  }
+
+  // Malformed origin (contains path) is rejected with 400 before push.
+  const badOrigin = create(instance, {
+    device: restrictedDevice, item: 'Acme', folder: 'cu-sandbox',
+    origin: 'https://portal.acme.com/login', itemUris: ['https://portal.acme.com/login'],
+  });
+  assert.equal(badOrigin.ok, false);
+  if (!badOrigin.ok) assert.equal(badOrigin.status, 400);
+
+  assert.equal(notified.length, 0, 'no refused request ever rings push');
+
+  // Exact https match succeeds and annotates push payload.
+  const matched = created(instance, {
+    device: restrictedDevice,
+    itemId: 'bw-acme-1',
+    item: 'Acme Portal',
+    folder: 'cu-sandbox',
+    fields: ['username', 'password'],
+    origin: 'https://PORTAL.Acme.com:443',
+    itemUris: ['https://status.acme.com', 'https://portal.acme.com/signin?next=/home'],
+    reason: 'sign in',
+  });
+  assert.equal(matched.origin, 'https://portal.acme.com');
+  assert.equal(matched.originMatch, 'match');
+  assert.equal(notified.length, 1);
+  assert.match(vaultPushPayload(matched).body, /on https:\/\/portal\.acme\.com \[origin matched\]/);
+
+  const auditReasons = readVaultAudit(auditPath, { decision: 'refused' }).map(entry => entry.policyResult);
+  assert.ok(auditReasons.includes('denied:origin_required'));
+  assert.ok(auditReasons.includes('denied:origin_not_https'));
+  assert.ok(auditReasons.includes('denied:item_has_no_uri'));
+  assert.ok(auditReasons.includes('denied:origin_mismatch'));
+});
+
+test('allowWindow: false bypasses existing grants and refuses approve-window server-side', () => {
+  const { instance, notified, writePolicy, auditPath } = vault();
+
+  // First, open a 15-minute grant while the device is unrestricted.
+  const initial = created(instance, { device: restrictedDevice, item: 'Acme Portal', fields: ['password'], folder: 'cu-sandbox' });
+  assert.equal(instance.decide(initial.id, 'approve-window').ok, true);
+  assert.equal(instance.overview().grants.length, 1);
+  assert.equal(created(instance, { device: restrictedDevice, item: 'Acme Portal', fields: ['password'], folder: 'cu-sandbox' }).auto, true);
+
+  // Also leave one pending request open before tightening the policy.
+  const prePolicyPending = created(instance, { device: restrictedDevice, item: 'Other Item', fields: ['password'], folder: 'cu-sandbox' });
+  assert.equal(prePolicyPending.allowWindow, true);
+
+  // Tighten policy to disable windows for this device.
+  writePolicy({
+    devices: {
+      [restrictedDevice.fingerprint]: { name: 'cu-no-window', allowFolder: 'cu-sandbox', allowWindow: false },
+    },
+  });
+
+  // Live overview hides window on the already-pending request and decide() refuses approve-window server-side.
+  const projected = instance.overview().pending.find(entry => entry.id === prePolicyPending.id);
+  assert.equal(projected?.allowWindow, false);
+  const preRefused = instance.decide(prePolicyPending.id, 'approve-window');
+  assert.equal(preRefused.ok, false);
+  if (!preRefused.ok) assert.equal(preRefused.status, 400);
+  assert.equal(prePolicyPending.status, 'pending');
+
+  // New request matching the earlier grant MUST bypass the grant and trigger a fresh push.
+  const notifyBefore = notified.length;
+  const fresh = created(instance, { device: restrictedDevice, item: 'Acme Portal', fields: ['password'], folder: 'cu-sandbox' });
+  assert.equal(fresh.status, 'pending');
+  assert.equal(fresh.auto, false);
+  assert.equal(fresh.allowWindow, false);
+  assert.equal(notified.length, notifyBefore + 1);
+
+  const windowAttempt = instance.decide(fresh.id, 'approve-window');
+  assert.equal(windowAttempt.ok, false);
+  if (!windowAttempt.ok) assert.equal(windowAttempt.status, 400);
+  assert.equal(fresh.status, 'pending');
+  assert.equal(instance.decide(fresh.id, 'approve').ok, true);
+  assert.equal(fresh.status, 'approved');
+  assert.equal(instance.overview().grants.length, 1, 'no new grant created');
+
+  const windowRefusals = readVaultAudit(auditPath, { decision: 'window-refused' });
+  assert.equal(windowRefusals.length, 2);
+  assert.equal(windowRefusals[0].policyResult, 'denied:window_not_allowed');
+});
+
+test('corrupt or malformed policy config fails closed without pushing', () => {
+  for (const bad of [
+    '{ not valid json',
+    '{}',
+    JSON.stringify({ devices: { [device.fingerprint]: { allowFields: ['password'] } } }),
+    JSON.stringify({ devices: { 'not-a-hex-fp': { allowWindow: false } } }),
+    JSON.stringify({ devices: { [device.fingerprint]: { allowWindow: 'false' } } }),
+  ]) {
+    const { instance, notified, auditPath, policyPath } = vault({ rawPolicyText: bad });
+    assert.equal(loadVaultPolicies(policyPath).ok, false, bad);
+    const result = create(instance, { device });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.status, 500);
+    assert.equal(notified.length, 0);
+    const entries = readVaultAudit(auditPath);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].policyResult, 'policy_config_error');
+  }
+});
+
+test('durable audit log is 0600, records every lifecycle event, omits secrets, and rotates cleanly', () => {
+  const { instance, clock, auditPath } = vault({
+    policy: {
+      devices: {
+        [restrictedDevice.fingerprint]: {
+          name: 'cu-sandbox',
+          allowFolder: 'cu-sandbox',
+          allowWindow: false,
+          requireOriginMatch: true,
+        },
+      },
+    },
+  });
+
+  // Deliberately include bogus secret-like keys and sensitive reason text to prove none ever reach disk.
+  const req1 = created(instance, {
+    device: restrictedDevice,
+    itemId: 'item-42',
+    item: 'Acme Portal',
+    folder: 'cu-sandbox',
+    fields: ['username', 'password'],
+    origin: 'https://portal.acme.com',
+    itemUris: ['https://portal.acme.com/login'],
+    reason: 'SECRET_REASON_SHOULD_NOT_BE_LOGGED',
+    password: 'SUPER_SECRET_PASSWORD_123',
+    secret: 'TOP_SECRET_VALUE',
+    totp: '999888',
+  });
+  assert.equal(instance.decide(req1.id, 'approve').ok, true);
+
+  const req2 = created(instance, { device, itemId: 'item-99', item: 'Expiring Item', expiresAt: T0 + 1000 });
+  clock.now = T0 + 1000;
+  assert.equal(instance.requestStatus(req2.id).ok, true);
+
+  const req3 = created(instance, { device, item: 'Abandoned Item', expiresAt: clock.now + 60_000 });
+  assert.equal(instance.abandon(req3.id).ok, true);
+
+  assert.equal(fs.statSync(auditPath).mode & 0o777, 0o600);
+  const raw = fs.readFileSync(auditPath, 'utf8');
+  assert.equal(raw.includes('SUPER_SECRET_PASSWORD_123'), false);
+  assert.equal(raw.includes('TOP_SECRET_VALUE'), false);
+  assert.equal(raw.includes('999888'), false);
+  assert.equal(raw.includes('SECRET_REASON_SHOULD_NOT_BE_LOGGED'), false);
+
+  const lines = raw.trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>);
+  assert.equal(lines.length, 6);
+  assert.deepEqual(lines.map(entry => [entry.event, entry.decision, entry.by, entry.policyResult]), [
+    ['request', 'pending', 'listener', 'allowed'],
+    ['decision', 'approved', 'operator', 'allowed'],
+    ['request', 'pending', 'listener', 'default'],
+    ['decision', 'expired', 'timeout', 'default'],
+    ['request', 'pending', 'listener', 'default'],
+    ['decision', 'abandoned', 'listener', 'default'],
+  ]);
+  assert.equal(lines[0].itemId, 'item-42');
+  assert.equal(lines[0].itemName, 'Acme Portal');
+  assert.equal(lines[0].deviceFingerprint, restrictedDevice.fingerprint);
+  assert.equal(lines[0].deviceName, restrictedDevice.name);
+  assert.equal(lines[0].folder, 'cu-sandbox');
+  assert.equal(lines[0].origin, 'https://portal.acme.com');
+  assert.equal(lines[0].originMatch, 'match');
+  assert.equal(lines[0].policyName, 'cu-sandbox');
+
+  // Verify rotation with a small max-byte cap preserves 0600 on both files and continuous reads.
+  const rotated = vault({ auditMaxBytes: 300 });
+  for (let i = 0; i < 6; i += 1) {
+    const entry = created(rotated.instance, { item: `item-${i}` });
+    rotated.instance.decide(entry.id, 'deny');
+  }
+  assert.equal(fs.existsSync(`${rotated.auditPath}.1`), true);
+  assert.equal(fs.statSync(rotated.auditPath).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(`${rotated.auditPath}.1`).mode & 0o777, 0o600);
+  const allRead = rotated.instance.audit({ limit: 50 });
+  assert.ok(allRead.length >= 2, 'reads entries across rotation boundary');
+  assert.equal(allRead[0].itemName, 'item-5', 'newest-first order');
+});
+
 test.describe('server routes', () => {
   const server: Server = require('../server.js');
   let base = '';
@@ -260,5 +610,77 @@ test.describe('server routes', () => {
     const proxied = await call('POST', '/hosts/peer/api/vault/bridge/status', { state: 'locked', devices: [] }, token);
     assert.equal(proxied.status, 404);
     assert.equal(record((await call('GET', '/hosts/peer/api/vault')).body).listener !== undefined, true, 'the browser routes still proxy');
+  });
+
+  test('policy enforcement, server-side window rejection, and operator audit endpoint work end-to-end', async () => {
+    const policyFile = path.join(tmpHome, '.pi', 'dish', 'vault', VAULT_POLICY_FILE);
+    fs.mkdirSync(path.dirname(policyFile), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(policyFile, JSON.stringify({
+      devices: {
+        [restrictedDevice.fingerprint]: {
+          name: 'cu-sandbox',
+          allowFolder: 'cu-sandbox',
+          allowedFields: ['username', 'password', 'totp', 'uri'],
+          allowWindow: false,
+          allowCreate: false,
+          requireOriginMatch: true,
+        },
+      },
+    }));
+
+    // Refused request (missing origin) returns 403 and never enters pending.
+    const refused = await call('POST', '/api/vault/bridge/requests', {
+      id: 'bridge-policy-refused-1',
+      device: restrictedDevice,
+      itemId: 'bw-1',
+      item: 'Acme Portal',
+      folder: 'cu-sandbox',
+      fields: ['username', 'password'],
+      itemUris: ['https://portal.acme.com/login'],
+      expiresAt: Date.now() + 60_000,
+    }, token);
+    assert.equal(refused.status, 403);
+    assert.equal(records(record((await call('GET', '/api/vault')).body).pending).some(entry => entry.id === 'bridge-policy-refused-1'), false);
+
+    // Valid policy-governed request becomes pending with allowWindow: false and originMatch: match.
+    const admitted = await call('POST', '/api/vault/bridge/requests', {
+      id: 'bridge-policy-ok-1',
+      device: restrictedDevice,
+      itemId: 'bw-1',
+      item: 'Acme Portal',
+      folder: 'cu-sandbox',
+      fields: ['username', 'password'],
+      origin: 'https://portal.acme.com',
+      itemUris: ['https://portal.acme.com/login'],
+      expiresAt: Date.now() + 60_000,
+    }, token);
+    assert.deepEqual(admitted, { status: 201, body: { status: 'pending' } });
+
+    const pending = records(record((await call('GET', '/api/vault')).body).pending)
+      .find(entry => entry.id === 'bridge-policy-ok-1');
+    assert.ok(pending);
+    assert.equal(pending.allowWindow, false);
+    assert.equal(pending.origin, 'https://portal.acme.com');
+    assert.equal(pending.originMatch, 'match');
+    assert.equal(pending.policyName, 'cu-sandbox');
+
+    // Window decision is rejected server-side with 400; single approve succeeds.
+    assert.equal((await call('POST', '/api/vault/requests/bridge-policy-ok-1/decision', { decision: 'approve-window' })).status, 400);
+    assert.equal((await call('POST', '/api/vault/requests/bridge-policy-ok-1/decision', { decision: 'approve' })).status, 200);
+
+    // Durable audit file exists in state dir with 0600 permissions and is readable via /api/vault/audit.
+    const auditFile = path.join(tmpHome, '.pi', 'dish', VAULT_AUDIT_FILE);
+    assert.equal(fs.statSync(auditFile).mode & 0o777, 0o600);
+    const auditRes = await call('GET', `/api/vault/audit?device=${restrictedDevice.fingerprint}&limit=10`);
+    assert.equal(auditRes.status, 200);
+    const entries = records(record(auditRes.body).entries);
+    assert.deepEqual(entries.map(entry => [entry.requestId, entry.decision, entry.policyResult]), [
+      ['bridge-policy-ok-1', 'approved', 'allowed'],
+      ['bridge-policy-ok-1', 'window-refused', 'denied:window_not_allowed'],
+      ['bridge-policy-ok-1', 'pending', 'allowed'],
+      ['bridge-policy-refused-1', 'refused', 'denied:origin_required'],
+    ]);
+    assert.equal((await call('GET', '/api/vault/audit?limit=abc')).status, 400);
+    assert.equal((await call('GET', '/api/vault/audit?device=bad-fp')).status, 400);
   });
 });
