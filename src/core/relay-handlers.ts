@@ -63,19 +63,26 @@ export function namesPageForms(path: string): boolean {
 
 /**
  * Matches any `/hosts/:name/api` suffix that a downstream hop could interpret
- * as a `/api/cu` route (including percent-encoded, mixed-case, or duplicate-slash
- * variants) so CU requests never bypass the hub's header allowlist, CSRF guard,
- * or Spaces route allowlist.
+ * as a `/api/cu` route (case-insensitively, after repeated percent decoding,
+ * backslash conversion, duplicate-slash collapse, and dot-segment normalization)
+ * so CU requests never bypass the hub's header allowlist, CSRF guard, Spaces
+ * route allowlist, or `/api/cu/fill/*` block. Undecodable paths fail closed.
  */
 export function namesCuRoute(reqPath: string): boolean {
-  let decoded = reqPath;
+  const pathname = reqPath.split('?')[0];
+  let decoded = pathname;
   for (let round = 0; round < 3; round++) {
     let next: string;
     try { next = decodeURIComponent(decoded); } catch { return true; }
     if (next === decoded) break;
     decoded = next;
   }
-  return /^\/cu(?:\/|$)/.test(decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase());
+  const slashed = decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  const normRoot = path.posix.normalize(slashed.startsWith('/') ? slashed : `/${slashed}`).toLowerCase();
+  const normApi = path.posix.normalize(`/api/${slashed.replace(/^\/+/, '')}`).toLowerCase();
+  return /^\/(?:api\/)?cu(?:\/|$)/.test(normRoot)
+    || /^\/(?:api\/)?cu(?:\/|$)/.test(normApi)
+    || /^\/hosts\/[^/]+\/(?:api\/)?cu(?:\/|$)/.test(normRoot);
 }
 
 const DOT_SEGMENT_RE = /(?:^|[\\/])\.\.?(?:[\\/]|$)/;
@@ -466,7 +473,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     }
     // Computer-use routes use strict header allowlists, ingress CSRF checks,
     // vendored local viewer assets, and allowlisted Spaces RPC routes.
-    if (namesCuRoute(req.url.split('?')[0]) || namesCuRoute(req.path)) {
+    if (namesCuRoute(req.originalUrl || '') || namesCuRoute(req.url) || namesCuRoute(req.path)) {
       return handleCuRelay(remote, req, res);
     }
     proxyToRemote(remote, req, res, fleetArtifactHook(remote, req));

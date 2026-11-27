@@ -35,6 +35,9 @@ export const DEFAULT_CU_VAULT_FILL_POLL_WAIT_MS = 20_000;
 export const MAX_CU_VAULT_FILL_POLL_WAIT_MS = 25_000;
 export const CU_VAULT_FILL_EXECUTE_TIMEOUT_MS = 50_000;
 export const CU_VAULT_FILL_CANCEL_TIMEOUT_MS = 15_000;
+export const CU_VAULT_FILL_STOP_CANCEL_TIMEOUT_MS = 2_000;
+export const MAX_CU_VAULT_FILL_EXECUTE_ATTEMPTS = 20;
+export const MAX_CU_VAULT_FILL_RETRY_AFTER_MS = 5_000;
 export const CU_VAULT_FILL_ENVELOPE_LABEL = 'cu-broker vault-fill v1';
 export const CU_VAULT_FILL_ENVELOPE_ALG = 'X25519-HKDF-SHA256-ChaCha20Poly1305';
 
@@ -60,7 +63,9 @@ const IDENTITY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const PRINTABLE_ASCII_RE = /^[\x21-\x7e]+$/;
 const PUBLIC_KEY_B64U_RE = /^[A-Za-z0-9_-]{43}$/;
 const SEALED_B64U_RE = /^[A-Za-z0-9_-]{68,21846}$/;
+const AAC_STDOUT_LOG_LINE_RE = /^\d{4}-\d{2}-\d{2}T\S+\s+(?:WARN|INFO)\b/;
 const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+const MAX_ORIGIN_CHARS = 256;
 const MAX_REMOTE_BODY_BYTES = 256 * 1024;
 const MAX_HELPER_BUFFER_BYTES = 64 * 1024;
 const MAX_LOG_STDERR_CHARS = 256;
@@ -116,6 +121,8 @@ export interface CuVaultFillPorts {
   readonly now?: () => number;
   readonly pollErrorBackoffMs?: readonly number[];
   readonly executeRetryBackoffMs?: readonly number[];
+  readonly maxExecuteAttempts?: number;
+  readonly stopCancelTimeoutMs?: number;
   readonly log?: (message: string) => void;
 }
 
@@ -218,14 +225,39 @@ function sanitizeSingleLine(value: string, max: number): string {
   return truncateString(cleaned, max);
 }
 
+/** Extracts a bounded single-line tail from stderr for logging (last non-empty line, capped from the tail). */
+function stderrLogTail(rawStderr: string, max: number = MAX_LOG_STDERR_CHARS): string {
+  const lines = rawStderr.split(/\r?\n/).map(line => line.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (!lines.length) return '';
+  const last = lines[lines.length - 1]!;
+  return last.length > max ? last.slice(-max) : last;
+}
+
+/**
+ * Extracts the sealed base64url envelope from helper stdout.
+ * `aac 0.11.0 --output json run` logs WARN lines via tracing_subscriber to stdout;
+ * allow timestamped WARN/INFO prefix lines only when the final non-empty line is a
+ * valid sealed envelope. Never logs stdout.
+ */
+export function extractSealedFromStdout(stdout: string): string | null {
+  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const candidate = lines[lines.length - 1]!;
+  if (!SEALED_B64U_RE.test(candidate)) return null;
+  if (lines.length > 1 && !lines.slice(0, -1).every(line => AAC_STDOUT_LOG_LINE_RE.test(line))) {
+    return null;
+  }
+  return candidate;
+}
+
 /** Projects a CU vault fill audit record through a strict secret-free allowlist. */
 function projectAuditEntry(entry: CuVaultFillAuditEntry): CuVaultFillAuditEntry {
   return {
     ts: truncateString(entry.ts, 64),
     requestId: truncateString(entry.requestId, 64),
     remote: truncateString(entry.remote, 64),
-    origin: truncateString(entry.origin, 512),
-    topOrigin: entry.topOrigin === null ? null : truncateString(entry.topOrigin, 512),
+    origin: truncateString(entry.origin, MAX_ORIGIN_CHARS),
+    topOrigin: entry.topOrigin === null ? null : truncateString(entry.topOrigin, MAX_ORIGIN_CHARS),
     item: truncateString(entry.item, 256),
     fields: ALLOWED_FIELDS.filter(field => entry.fields.includes(field)),
     outcome: entry.outcome,
@@ -346,10 +378,10 @@ function parsePendingRequest(raw: unknown): ParsedPendingFill | null {
   const requestId = typeof raw.requestId === 'string' ? raw.requestId : '';
   if (!FILL_REQUEST_ID_RE.test(requestId)) return null;
 
-  const rawOrigin = typeof raw.origin === 'string' ? raw.origin.trim() : '';
-  const parsedOrigin = rawOrigin ? parseOrigin(rawOrigin) : null;
+  const rawOrigin = typeof raw.origin === 'string' ? raw.origin : '';
+  const parsedOrigin = rawOrigin && rawOrigin.length <= MAX_ORIGIN_CHARS ? parseOrigin(rawOrigin) : null;
   const rawTopOrigin = typeof raw.topOrigin === 'string' ? raw.topOrigin.trim() : '';
-  const parsedTopOrigin = rawTopOrigin ? parseOrigin(rawTopOrigin) : null;
+  const parsedTopOrigin = rawTopOrigin && rawTopOrigin.length <= MAX_ORIGIN_CHARS ? parseOrigin(rawTopOrigin) : null;
   const topOrigin = parsedTopOrigin?.origin ?? null;
   const item = typeof raw.item === 'string' ? sanitizeSingleLine(raw.item, 200) : '';
   const reason = typeof raw.reason === 'string' ? sanitizeSingleLine(raw.reason, 160) || null : null;
@@ -372,8 +404,9 @@ function parsePendingRequest(raw: unknown): ParsedPendingFill | null {
   const envelope = isRecord(raw.envelope) ? raw.envelope : null;
 
   let invalidCode: string | undefined;
-  if (!parsedOrigin || !parsedOrigin.https) invalidCode = 'invalid_origin';
-  else if (!item) invalidCode = 'invalid_item';
+  if (!parsedOrigin || !parsedOrigin.https || rawOrigin.length > MAX_ORIGIN_CHARS || parsedOrigin.origin !== rawOrigin) {
+    invalidCode = 'invalid_origin';
+  } else if (!item) invalidCode = 'invalid_item';
   else if (!canonicalFields.length || hasUnsupportedField) invalidCode = 'invalid_fields';
   else if (!nonce || nonce.length > 128 || !PRINTABLE_ASCII_RE.test(nonce) || !PUBLIC_KEY_B64U_RE.test(publicKey)) {
     invalidCode = 'invalid_key_material';
@@ -385,7 +418,7 @@ function parsePendingRequest(raw: unknown): ParsedPendingFill | null {
     requestId,
     nonce,
     publicKey,
-    origin: parsedOrigin?.origin ?? rawOrigin,
+    origin: parsedOrigin && parsedOrigin.origin === rawOrigin ? parsedOrigin.origin : sanitizeSingleLine(rawOrigin, MAX_ORIGIN_CHARS),
     topOrigin,
     item: item || '(unknown)',
     fields: canonicalFields,
@@ -409,6 +442,7 @@ function buildMinimalHelperEnv(config: CuVaultFillConfig): NodeJS.ProcessEnv {
     PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
     HOME: os.homedir(),
     XDG_CONFIG_HOME: config.xdgConfigHome,
+    NO_COLOR: '1',
   };
   if (config.explicitXdgConfigHome) {
     env.PI_DISH_VAULT_IDENTITY_HOME = config.xdgConfigHome;
@@ -427,10 +461,15 @@ function isRetryableExecuteReply(reply: CuVaultFillHttpResponse): { retryable: b
     ? Math.trunc(body.retryAfterMs)
     : null;
   if (!code || !CU_VAULT_FILL_RETRYABLE_CODES.has(code)) return { retryable: false, code, retryAfterMs };
-  if (reply.status === 409 && (code === 'transition_pending' || code === 'agent_busy' || code === 'fill_in_progress')) {
+  if (
+    reply.status === 409
+    && (code === 'transition_pending' || code === 'agent_busy' || code === 'fill_in_progress')
+    && body.applied !== true
+    && body.applied !== 'unknown'
+  ) {
     return { retryable: true, code, retryAfterMs };
   }
-  if (reply.status === 503 && code === 'broker_busy' && body.applied !== true && body.applied !== 'unknown') {
+  if (reply.status === 503 && code === 'broker_busy' && body.applied === false) {
     return { retryable: true, code, retryAfterMs };
   }
   return { retryable: false, code, retryAfterMs };
@@ -468,6 +507,8 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
   const now = ports.now ?? Date.now;
   const pollErrorBackoff = ports.pollErrorBackoffMs ?? DEFAULT_POLL_ERROR_BACKOFF_MS;
   const executeRetryBackoff = ports.executeRetryBackoffMs ?? DEFAULT_EXECUTE_RETRY_BACKOFF_MS;
+  const maxExecuteAttempts = Math.max(1, ports.maxExecuteAttempts ?? MAX_CU_VAULT_FILL_EXECUTE_ATTEMPTS);
+  const stopCancelTimeoutMs = Math.max(50, ports.stopCancelTimeoutMs ?? CU_VAULT_FILL_STOP_CANCEL_TIMEOUT_MS);
   const log = ports.log ?? ((message: string) => console.error(`[cu-vault-fill] ${message}`));
 
   const active = new Map<string, ActiveFillState>();
@@ -529,24 +570,35 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
     });
   }
 
-  async function cancelRemote(requestId: string, reason: CuFillCancelReason): Promise<void> {
-    if (stopped) return;
+  async function cancelRemote(
+    requestId: string,
+    reason: CuFillCancelReason,
+    options: { allowWhenStopped?: boolean; timeoutMs?: number } = {},
+  ): Promise<void> {
+    if (stopped && !options.allowWhenStopped) return;
+    const timeoutMs = options.timeoutMs ?? CU_VAULT_FILL_CANCEL_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer.unref();
     try {
       await requestRemote(config.remote, {
         method: 'POST',
         path: '/api/cu/fill/cancel',
         body: { requestId, reason },
-        timeoutMs: CU_VAULT_FILL_CANCEL_TIMEOUT_MS,
+        timeoutMs,
+        signal: controller.signal,
       });
     } catch (error) {
-      log(`cancel ${requestId} (${reason}) failed: ${errorMessage(error)}`);
+      if (!stopped) log(`cancel ${requestId} (${reason}) failed: ${errorMessage(error)}`);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   function runVaultSealer(
     req: ParsedPendingFill,
     state: ActiveFillState,
-  ): Promise<{ ok: true; sealed: string } | { ok: false; exitCode: number | null; stderr: string; timedOut: boolean; invalidOutput?: boolean }> {
+  ): Promise<{ ok: true; sealed: string } | { ok: false; exitCode: number | null; fullStderr: string; stderrTail: string; timedOut: boolean; invalidOutput?: boolean }> {
     const remainingMs = Math.max(1, req.expiresAtMs - now());
     const timeoutSec = Math.min(600, Math.max(10, Math.floor(remainingMs / 1000)));
     const reason = buildFillApprovalReason(req.origin, req.topOrigin, req.reason);
@@ -576,7 +628,7 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
       let settled = false;
       let timedOut = false;
       const finish = (
-        result: { ok: true; sealed: string } | { ok: false; exitCode: number | null; stderr: string; timedOut: boolean; invalidOutput?: boolean },
+        result: { ok: true; sealed: string } | { ok: false; exitCode: number | null; fullStderr: string; stderrTail: string; timedOut: boolean; invalidOutput?: boolean },
       ) => {
         if (settled) return;
         settled = true;
@@ -590,18 +642,19 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
         argv,
         { env, maxBuffer: MAX_HELPER_BUFFER_BYTES, windowsHide: true },
         (error, stdout, stderr) => {
-          const safeStderr = sanitizeSingleLine(String(stderr || ''), MAX_LOG_STDERR_CHARS);
+          const fullStderr = String(stderr || '');
+          const stderrTail = stderrLogTail(fullStderr, MAX_LOG_STDERR_CHARS);
           if (error) {
             const code = typeof (error as { code?: unknown }).code === 'number'
               ? (error as { code: number }).code
               : null;
-            finish({ ok: false, exitCode: code, stderr: safeStderr, timedOut });
+            finish({ ok: false, exitCode: code, fullStderr, stderrTail, timedOut });
             return;
           }
           // Stdout is read strictly as the sealed base64url envelope and never logged.
-          const sealed = String(stdout || '').trim();
-          if (!SEALED_B64U_RE.test(sealed)) {
-            finish({ ok: false, exitCode: 0, stderr: safeStderr, timedOut: false, invalidOutput: true });
+          const sealed = extractSealedFromStdout(String(stdout || ''));
+          if (!sealed) {
+            finish({ ok: false, exitCode: 0, fullStderr, stderrTail, timedOut: false, invalidOutput: true });
             return;
           }
           finish({ ok: true, sealed });
@@ -622,7 +675,7 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
   async function executeSealed(req: ParsedPendingFill, sealed: string, state: ActiveFillState): Promise<void> {
     let attempt = 0;
     let lastCode: string | null = null;
-    while (!stopped && now() < req.expiresAtMs) {
+    while (!stopped && now() < req.expiresAtMs && attempt < maxExecuteAttempts) {
       const remainingMs = req.expiresAtMs - now();
       const timeoutMs = Math.min(CU_VAULT_FILL_EXECUTE_TIMEOUT_MS, Math.max(5_000, remainingMs + 5_000));
       let reply: CuVaultFillHttpResponse;
@@ -635,6 +688,7 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
         });
       } catch (error) {
         log(`execute ${req.requestId} transport error: ${errorMessage(error)}`);
+        await cancelRemote(req.requestId, 'error');
         recordAudit(req, 'failed', 'transport_error');
         return;
       }
@@ -649,8 +703,12 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
       lastCode = retryInfo.code ?? `http_${reply.status}`;
       if (retryInfo.retryable) {
         const baseDelay = executeRetryBackoff[Math.min(attempt, executeRetryBackoff.length - 1)] ?? 1_000;
-        const waitMs = Math.min(retryInfo.retryAfterMs ?? baseDelay, Math.max(0, req.expiresAtMs - now()));
+        const delayMs = retryInfo.retryAfterMs !== null
+          ? Math.max(baseDelay, Math.min(retryInfo.retryAfterMs, MAX_CU_VAULT_FILL_RETRY_AFTER_MS))
+          : baseDelay;
         attempt += 1;
+        if (attempt >= maxExecuteAttempts) break;
+        const waitMs = Math.min(delayMs, Math.max(0, req.expiresAtMs - now()));
         if (waitMs <= 0) break;
         const keepGoing = await sleepCancellable(waitMs, state);
         if (!keepGoing) {
@@ -674,8 +732,13 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
       recordAudit(req, 'cancelled', 'stopped');
       return;
     }
-    await cancelRemote(req.requestId, 'timeout');
-    recordAudit(req, 'timeout', lastCode ?? 'expired');
+    if (now() >= req.expiresAtMs) {
+      await cancelRemote(req.requestId, 'timeout');
+      recordAudit(req, 'timeout', lastCode ?? 'expired');
+      return;
+    }
+    await cancelRemote(req.requestId, 'error');
+    recordAudit(req, 'failed', lastCode ?? 'retry_exhausted');
   }
 
   async function handleRequest(req: ParsedPendingFill, state: ActiveFillState): Promise<void> {
@@ -708,9 +771,9 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
           recordAudit(req, 'error', 'invalid_sealed_output');
           return;
         }
-        const classified = classifyHelperFailure(helper.exitCode, helper.stderr, helper.timedOut, now() >= req.expiresAtMs);
-        if (helper.stderr) {
-          log(`${req.requestId} ${classified.code}: ${helper.stderr}`);
+        const classified = classifyHelperFailure(helper.exitCode, helper.fullStderr, helper.timedOut, now() >= req.expiresAtMs);
+        if (helper.stderrTail) {
+          log(`${req.requestId} ${classified.code}: ${helper.stderrTail}`);
         }
         await cancelRemote(req.requestId, classified.cancelReason);
         recordAudit(req, classified.outcome, classified.code);
@@ -751,7 +814,7 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
           lastLoggedPollError = msg;
           log(msg);
         }
-        pollFailures = Math.min(pollFailures + 1, pollErrorBackoff.length - 1);
+        pollFailures = Math.min(pollFailures + 1, pollErrorBackoff.length);
         return;
       }
       pollFailures = 0;
@@ -788,7 +851,7 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
         lastLoggedPollError = msg;
         log(`pending poll failed: ${msg}`);
       }
-      pollFailures = Math.min(pollFailures + 1, pollErrorBackoff.length - 1);
+      pollFailures = Math.min(pollFailures + 1, pollErrorBackoff.length);
     } finally {
       if (pollController === controller) pollController = null;
       pollInFlight = false;
@@ -816,6 +879,7 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
       scheduleNextPoll();
     },
     stop(): void {
+      if (stopped) return;
       stopped = true;
       if (pollTimer) {
         clearTimeout(pollTimer);
@@ -825,9 +889,11 @@ export function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFi
         pollController.abort();
         pollController = null;
       }
-      for (const state of active.values()) {
+      for (const [requestId, state] of active) {
         state.cancelWait();
         try { state.child?.kill('SIGTERM'); } catch {}
+        // Best-effort, strictly bounded cancel with unref'd timer so shutdown never hangs.
+        void cancelRemote(requestId, 'cancelled', { allowWhenStopped: true, timeoutMs: stopCancelTimeoutMs });
       }
     },
     pollOnce,

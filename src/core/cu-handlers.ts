@@ -855,6 +855,8 @@ function parseBrokerEventId(eventId: string | null): { generation: string; curso
 
 export interface CuHandlersPorts {
   upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+  /** True only when a bearer auth token is configured; /api/cu/fill/* fails closed (404) otherwise. */
+  authTokenConfigured?: () => boolean;
   /** Optional shared broker client (created internally when omitted). */
   broker?: CuBrokerClient;
   /** Optional test seam for the broker socket path. */
@@ -1333,6 +1335,10 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
 
   async function ensureVaultFillAvailable(res: TransportResponse): Promise<boolean> {
     res.setHeader('Cache-Control', 'private, no-store');
+    if (ports.authTokenConfigured?.() !== true) {
+      res.status(404).json({ error: 'Computer-use vault fill requires a configured bearer token', code: 'vault_fill_unavailable' });
+      return false;
+    }
     if (!ensureAvailable(res)) return false;
     if (vaultFillSupported === null) {
       try {
@@ -1527,7 +1533,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         const flushCompleteFrame = (): boolean => {
           if (!frameHeaderLines.length && !frameDataLines.length) return true;
           // Vault fill material must never travel on the viewer/control SSE stream.
-          const isFillEvent = frameHeaderLines.some(line => /^event:\s*fill(?:$|[_-])/i.test(line));
+          const isFillEvent = frameHeaderLines.some(line => /^event:.*fill/i.test(line));
           if (isFillEvent) {
             frameHeaderLines = [];
             frameDataLines = [];

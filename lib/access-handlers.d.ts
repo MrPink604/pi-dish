@@ -40,6 +40,7 @@ export interface AccessHandlers {
     host: TransportHandler;
     ticket: TransportHandler;
     hostDescriptor(): HostDescriptor;
+    hasAuthToken(): boolean;
     upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
     bearerUpgradeAuthorized(req: IncomingMessage): boolean;
 }

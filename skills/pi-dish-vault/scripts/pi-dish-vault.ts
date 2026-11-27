@@ -39,7 +39,7 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_LENGTH = 32;
 const MIN_LENGTH = 16;
 const MAX_LENGTH = 128;
-const MAX_ORIGIN_CHARS = 512;
+const MAX_ORIGIN_CHARS = 256;
 const IDENTITY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const HELP: Record<string, string> = {

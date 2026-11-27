@@ -7,6 +7,9 @@ export declare const DEFAULT_CU_VAULT_FILL_POLL_WAIT_MS = 20000;
 export declare const MAX_CU_VAULT_FILL_POLL_WAIT_MS = 25000;
 export declare const CU_VAULT_FILL_EXECUTE_TIMEOUT_MS = 50000;
 export declare const CU_VAULT_FILL_CANCEL_TIMEOUT_MS = 15000;
+export declare const CU_VAULT_FILL_STOP_CANCEL_TIMEOUT_MS = 2000;
+export declare const MAX_CU_VAULT_FILL_EXECUTE_ATTEMPTS = 20;
+export declare const MAX_CU_VAULT_FILL_RETRY_AFTER_MS = 5000;
 export declare const CU_VAULT_FILL_ENVELOPE_LABEL = "cu-broker vault-fill v1";
 export declare const CU_VAULT_FILL_ENVELOPE_ALG = "X25519-HKDF-SHA256-ChaCha20Poly1305";
 export declare const CU_VAULT_FILL_RETRYABLE_CODES: ReadonlySet<string>;
@@ -58,6 +61,8 @@ export interface CuVaultFillPorts {
     readonly now?: () => number;
     readonly pollErrorBackoffMs?: readonly number[];
     readonly executeRetryBackoffMs?: readonly number[];
+    readonly maxExecuteAttempts?: number;
+    readonly stopCancelTimeoutMs?: number;
     readonly log?: (message: string) => void;
 }
 export interface CuVaultFillCoordinator {
@@ -71,6 +76,13 @@ export interface CuVaultFillCoordinator {
  * absent or disabled (`enabled !== true`). Throws on malformed enabled config.
  */
 export declare function readCuVaultFillConfig(settings: Record<string, unknown>, baseDishDir?: string): CuVaultFillConfig | null;
+/**
+ * Extracts the sealed base64url envelope from helper stdout.
+ * `aac 0.11.0 --output json run` logs WARN lines via tracing_subscriber to stdout;
+ * allow timestamped WARN/INFO prefix lines only when the final non-empty line is a
+ * valid sealed envelope. Never logs stdout.
+ */
+export declare function extractSealedFromStdout(stdout: string): string | null;
 /** Builds a concise approval reason, surfacing `topOrigin` whenever the form is in a cross-origin frame. */
 export declare function buildFillApprovalReason(origin: string, topOrigin: string | null, reason: string | null): string;
 export declare function createCuVaultFillCoordinator(ports: CuVaultFillPorts): CuVaultFillCoordinator;

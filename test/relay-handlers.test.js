@@ -444,3 +444,42 @@ test('namesVaultBridgeRoute blocks case, encoded, slash, and traversal variants,
     assert.equal(ok.status, 200);
     assert.equal(seenBridgeHeader, undefined, 'vault bridge header must never be forwarded across relay hops');
 });
+test('namesCuRoute normalizes dot segments, encodings, and host prefixes so /api/cu/fill/* traversal variants 404', async (t) => {
+    for (const matched of [
+        '/cu/fill/pending',
+        '/CU/FILL/pending',
+        '/%63u/fill/pending',
+        '/foo/../cu/fill/pending',
+        '/./cu/fill/execute',
+        '/%2e%2e/api/cu/fill/pending',
+        '/foo/..%2fcu/fill/cancel',
+        '/hosts/cu-sandbox/api/foo/../cu/fill/pending',
+        '/cu\\fill/pending',
+        '/cu/%zz',
+    ]) {
+        assert.equal((0, relay_handlers_1.namesCuRoute)(matched), true, matched);
+    }
+    for (const unmatched of ['/sessions/123', '/cu-other/fill/pending', '/vault/cu']) {
+        assert.equal((0, relay_handlers_1.namesCuRoute)(unmatched), false, unmatched);
+    }
+    let peerHit = false;
+    const peer = http.createServer((_req, res) => {
+        peerHit = true;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+    });
+    const peerPort = await listen(t, peer);
+    const base = await mountRawApi(t, 1000);
+    bindDirectPeer(t, 'cu-peer', peerPort);
+    for (const variant of [
+        '/hosts/cu-peer/api/cu/fill/pending',
+        '/hosts/cu-peer/api/foo/../cu/fill/pending',
+        '/hosts/cu-peer/api/./cu/fill/pending',
+        '/hosts/cu-peer/api/foo/..%2fcu/fill/pending',
+        '/hosts/cu-peer/api/%2e%2e/api/cu/fill/pending',
+    ]) {
+        const res = await fetch(`${base}${variant}`);
+        assert.equal(res.status, 404, variant);
+    }
+    assert.equal(peerHit, false, 'blocked CU fill traversal variants must never reach peer');
+});

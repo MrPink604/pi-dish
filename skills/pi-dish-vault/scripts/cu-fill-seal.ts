@@ -47,7 +47,7 @@ const PUBLIC_KEY_B64U_RE = /^[A-Za-z0-9_-]{43}$/;
 const MAX_STDIN_BYTES = 16 * 1024;
 const MAX_SEALED_CHARS = 21_846;
 const MAX_FIELD_VALUE_CHARS = 1024;
-const MAX_ORIGIN_CHARS = 512;
+const MAX_ORIGIN_CHARS = 256;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

@@ -228,11 +228,20 @@ test('cu-fill-seal CLI reads stdin header + env vars, outputs sealed base64url o
     assert.equal(badRes.stdout, '');
     assert.ok(!badRes.stderr.includes('secret-with'));
     assert.match(badRes.stderr, /invalid value for field password/);
-    // Low-order all-zero public key and non-https origin are rejected.
+    // Low-order all-zero public key, non-https origin, and >256-char origin are rejected.
     const zeroKeyRes = await runSealerCli({ ...header, publicKey: Buffer.alloc(32).toString('base64url') }, { CU_FILL_PASSWORD: 'ok' });
     assert.equal(zeroKeyRes.code, 1);
     const httpOriginRes = await runSealerCli({ ...header, origin: 'http://portal.acme.example' }, { CU_FILL_PASSWORD: 'ok' });
     assert.equal(httpOriginRes.code, 1);
+    const longOrigin = `https://${'a'.repeat(245)}.test`; // 8 + 245 + 5 = 258 > 256
+    const longOriginRes = await runSealerCli({ ...header, origin: longOrigin }, { CU_FILL_PASSWORD: 'ok' });
+    assert.equal(longOriginRes.code, 1);
+});
+test('extractSealedFromStdout accepts bare sealed output or aac timestamped WARN lines, and rejects arbitrary output', () => {
+    assert.equal((0, cu_vault_fill_1.extractSealedFromStdout)(FLEET_VECTOR.sealed), FLEET_VECTOR.sealed);
+    assert.equal((0, cu_vault_fill_1.extractSealedFromStdout)(`2026-11-27T02:25:14.442608Z WARN ap_client::proxy: reconnecting\n${FLEET_VECTOR.sealed}`), FLEET_VECTOR.sealed);
+    assert.equal((0, cu_vault_fill_1.extractSealedFromStdout)(`unexpected stdout line\n${FLEET_VECTOR.sealed}`), null);
+    assert.equal((0, cu_vault_fill_1.extractSealedFromStdout)('2026-11-27T02:25:14.442608Z ERROR aac::command::run: refused'), null);
 });
 // ---------------------------------------------------------------------------
 // 2. Guest pi-dish proxy routes with fake control.sock
@@ -387,6 +396,7 @@ async function mountGuestFillApp(t, socketPath, token = null) {
     const cu = (0, cu_handlers_1.createCuHandlers)({
         socketPath: () => socketPath,
         upgradeAuthorized: req => access.bearerUpgradeAuthorized(req),
+        authTokenConfigured: access.hasAuthToken,
     });
     const app = express();
     app.use(access.jsonBody);
@@ -411,7 +421,25 @@ async function mountGuestFillApp(t, socketPath, token = null) {
 }
 test('guest fill routes are disabled (404) when broker does not advertise vault_fill', async (t) => {
     const { socketPath } = await startFakeFillBroker(t, { capabilities: ['bind', 'ordered_sse'] });
-    const { base } = await mountGuestFillApp(t, socketPath);
+    const bearer = 'guest-bearer-no-cap';
+    const { base } = await mountGuestFillApp(t, socketPath, bearer);
+    const headers = { authorization: `Bearer ${bearer}` };
+    assert.equal((await fetch(`${base}/api/cu/fill/pending`, { headers })).status, 404);
+    assert.equal((await fetch(`${base}/api/cu/fill/status?requestId=${FLEET_VECTOR.requestId}`, { headers })).status, 404);
+    assert.equal((await fetch(`${base}/api/cu/fill/execute`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ requestId: FLEET_VECTOR.requestId, sealed: FLEET_VECTOR.sealed }),
+    })).status, 404);
+    assert.equal((await fetch(`${base}/api/cu/fill/cancel`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ requestId: FLEET_VECTOR.requestId, reason: 'denied' }),
+    })).status, 404);
+});
+test('guest fill routes fail closed (404) when no bearer auth token is configured', async (t) => {
+    const { socketPath } = await startFakeFillBroker(t, { capabilities: ['bind', 'ordered_sse', 'vault_fill'] });
+    const { base } = await mountGuestFillApp(t, socketPath, null);
     assert.equal((await fetch(`${base}/api/cu/fill/pending`)).status, 404);
     assert.equal((await fetch(`${base}/api/cu/fill/status?requestId=${FLEET_VECTOR.requestId}`)).status, 404);
     assert.equal((await fetch(`${base}/api/cu/fill/execute`, {
@@ -498,15 +526,21 @@ test('guest fill routes enforce bearer auth, clamp waitMs, forward execute/cance
     await readChunk(); // hello frame
     for (const client of state.sseClients) {
         client.write(`event: fill_request\ndata: ${JSON.stringify({ requestId: FLEET_VECTOR.requestId, nonce: 'secret-nonce', publicKey: 'secret-pub' })}\n\n`);
+        client.write(`event: vault_fill\ndata: ${JSON.stringify({ requestId: FLEET_VECTOR.requestId, nonce: 'vault-fill-nonce' })}\n\n`);
+        client.write(`event: cu_fill_done\ndata: ${JSON.stringify({ requestId: FLEET_VECTOR.requestId, note: 'cu-fill-done' })}\n\n`);
         client.write(`event: lease_changed\ndata: ${JSON.stringify({ state: 'agent', epoch: 5, nonce: 'leaked-nonce', publicKey: 'leaked-pub', sealed: 'leaked-sealed' })}\n\n`);
     }
     await readChunk();
     streamAbort.abort();
     assert.ok(!sseText.includes('secret-nonce'));
+    assert.ok(!sseText.includes('vault-fill-nonce'));
+    assert.ok(!sseText.includes('cu-fill-done'));
     assert.ok(!sseText.includes('leaked-nonce'));
     assert.ok(!sseText.includes('leaked-pub'));
     assert.ok(!sseText.includes('leaked-sealed'));
-    assert.ok(!sseText.includes('fill_request'));
+    assert.ok(!sseText.includes('event: fill_request'));
+    assert.ok(!sseText.includes('event: vault_fill'));
+    assert.ok(!sseText.includes('event: cu_fill_done'));
     assert.match(sseText, /"epoch":5/);
     // Hub HTTP /hosts/:name/api/cu/fill/* stays closed (404) so browser clients cannot pull nonces/keys.
     const prevHome = process.env.HOME;
@@ -537,6 +571,11 @@ test('guest fill routes enforce bearer auth, clamp waitMs, forward execute/cance
     t.after(() => new Promise(resolve => { hubServer.closeAllConnections?.(); hubServer.close(() => resolve()); }));
     const hubPort = hubServer.address().port;
     assert.equal((await fetch(`http://127.0.0.1:${hubPort}/hosts/cu-sandbox/api/cu/fill/pending`)).status, 404);
+    assert.equal((await fetch(`http://127.0.0.1:${hubPort}/hosts/cu-sandbox/api/foo/../cu/fill/pending`)).status, 404);
+    assert.equal((await fetch(`http://127.0.0.1:${hubPort}/hosts/cu-sandbox/api/foo/..%2fcu/fill/pending`)).status, 404);
+    assert.equal((await fetch(`http://127.0.0.1:${hubPort}/hosts/cu-sandbox/api/%2e%2e/api/cu/fill/pending`)).status, 404);
+    assert.equal((0, relay_handlers_1.namesCuRoute)('/foo/../cu/fill/pending'), true);
+    assert.equal((0, relay_handlers_1.namesCuRoute)('/%2e%2e/api/cu/fill/pending'), true);
     assert.equal((await fetch(`http://127.0.0.1:${hubPort}/hosts/cu-sandbox/api/cu/fill/execute`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -548,9 +587,13 @@ test('guest fillPending aborts the control.sock long-poll if the caller disconne
         capabilities: ['vault_fill'],
         pendingDelayMs: 5_000,
     });
-    const { base } = await mountGuestFillApp(t, socketPath);
+    const bearer = 'guest-bearer-abort';
+    const { base } = await mountGuestFillApp(t, socketPath, bearer);
     const abort = new AbortController();
-    const reqPromise = fetch(`${base}/api/cu/fill/pending?waitMs=5000`, { signal: abort.signal }).catch(() => null);
+    const reqPromise = fetch(`${base}/api/cu/fill/pending?waitMs=5000`, {
+        headers: { authorization: `Bearer ${bearer}` },
+        signal: abort.signal,
+    }).catch(() => null);
     await waitUntil(() => state.seenPendingQuery.length === 1);
     abort.abort();
     await reqPromise;
@@ -985,4 +1028,258 @@ process.exit(child.status ?? 1);
     const audits = readAuditLines(fixture.auditPath);
     assert.equal(audits.length, 1);
     assert.equal(audits[0].outcome, 'filled');
+});
+test('hub coordinator classifies refusals/timeouts on full stderr past 256 bytes and logs only bounded tail line', async (t) => {
+    const longPrefix = 'W'.repeat(320);
+    const cases = [
+        {
+            requestId: `fill-${'8'.repeat(32)}`,
+            stderr: `${longPrefix}\npi-dish-vault: refused before approval: origin mismatch\n`,
+            expectedCancel: 'denied',
+            expectedOutcome: 'refused',
+            expectedCode: 'policy_refused',
+            expectedLogMatch: /origin mismatch$/,
+        },
+        {
+            requestId: `fill-${'9'.repeat(32)}`,
+            stderr: `${longPrefix}\npi-dish-vault: no decision in pi-dish within 180s\n`,
+            expectedCancel: 'timeout',
+            expectedOutcome: 'timeout',
+            expectedCode: 'approval_timeout',
+            expectedLogMatch: /no decision in pi-dish within 180s$/,
+        },
+    ];
+    for (const tc of cases) {
+        const fixture = createCoordinatorFixture(t, `process.stderr.write(${JSON.stringify(tc.stderr)}); process.exit(4);`);
+        const req = makePendingReq({ requestId: tc.requestId, publicKey: fixture.recipPubB64u });
+        const cancels = [];
+        const coord = (0, cu_vault_fill_1.createCuVaultFillCoordinator)({
+            config: fixture.config,
+            vaultCli: { file: process.execPath, prefixArgs: [fixture.fakeVault] },
+            sealerScript: SEALER_SCRIPT,
+            auditFile: () => fixture.auditPath,
+            log: message => fixture.logs.push(message),
+            requestRemote: async (_remote, call) => {
+                if (call.method === 'GET')
+                    return { status: 200, body: { ok: true, seq: 1, requests: [req] } };
+                if (call.method === 'POST' && call.path === '/api/cu/fill/cancel') {
+                    cancels.push((0, test_types_js_1.record)(call.body));
+                    return { status: 200, body: { ok: true } };
+                }
+                return { status: 404, body: {} };
+            },
+        });
+        t.after(() => coord.stop());
+        await coord.pollOnce();
+        await waitUntil(() => cancels.length === 1 && coord.activeCount() === 0);
+        assert.deepEqual(cancels[0], { requestId: tc.requestId, reason: tc.expectedCancel });
+        const audits = readAuditLines(fixture.auditPath);
+        assert.equal(audits[0].outcome, tc.expectedOutcome);
+        assert.equal(audits[0].code, tc.expectedCode);
+        assert.equal(fixture.logs.length, 1);
+        assert.match(fixture.logs[0], tc.expectedLogMatch);
+        assert.ok(!fixture.logs[0].includes('WWWWWWWWWW'), 'log line must contain only the tail line, not the preamble');
+    }
+});
+test('hub coordinator rejects non-canonical or >256-char pending origins as invalid_origin before spawning helper', async (t) => {
+    const longOrigin = `https://${'a'.repeat(245)}.test`; // 258 chars > 256
+    for (const [idx, badOrigin] of [
+        'https://Login.Acme.Example:443',
+        ' https://login.acme.example ',
+        longOrigin,
+    ].entries()) {
+        const fixture = createCoordinatorFixture(t, `require('node:fs').writeFileSync(${JSON.stringify('NEVER')}, 'ran'); process.exit(0);`);
+        const ranFile = path.join(fixture.dir, 'should-not-run');
+        fs.writeFileSync(fixture.fakeVault, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(ranFile)}, 'ran');\n`, { mode: 0o755 });
+        const requestId = `fill-${String(idx).padStart(32, 'b')}`;
+        const req = makePendingReq({ requestId, origin: badOrigin, publicKey: fixture.recipPubB64u });
+        const cancels = [];
+        const coord = (0, cu_vault_fill_1.createCuVaultFillCoordinator)({
+            config: fixture.config,
+            vaultCli: { file: process.execPath, prefixArgs: [fixture.fakeVault] },
+            sealerScript: SEALER_SCRIPT,
+            auditFile: () => fixture.auditPath,
+            log: message => fixture.logs.push(message),
+            requestRemote: async (_remote, call) => {
+                if (call.method === 'GET')
+                    return { status: 200, body: { ok: true, seq: 1, requests: [req] } };
+                if (call.method === 'POST' && call.path === '/api/cu/fill/cancel') {
+                    cancels.push((0, test_types_js_1.record)(call.body));
+                    return { status: 200, body: { ok: true } };
+                }
+                return { status: 404, body: {} };
+            },
+        });
+        t.after(() => coord.stop());
+        await coord.pollOnce();
+        await waitUntil(() => cancels.length === 1 && coord.activeCount() === 0);
+        assert.deepEqual(cancels[0], { requestId, reason: 'error' }, badOrigin);
+        assert.equal(fs.existsSync(ranFile), false, badOrigin);
+        const audits = readAuditLines(fixture.auditPath);
+        assert.equal(audits[0].outcome, 'error');
+        assert.equal(audits[0].code, 'invalid_origin');
+    }
+});
+test('hub coordinator retry logic requires applied:false on 503 broker_busy, bounds retryAfterMs, and caps attempts', async (t) => {
+    // 1) 503 broker_busy without applied:false, and 409 retries with applied:true/'unknown', must NOT retry.
+    for (const nonRetryable of [
+        { status: 503, body: { ok: false, code: 'broker_busy' } },
+        { status: 409, body: { ok: false, code: 'agent_busy', applied: true } },
+        { status: 409, body: { ok: false, code: 'fill_in_progress', applied: 'unknown' } },
+    ]) {
+        const fixture = createCoordinatorFixture(t, `process.stdout.write(${JSON.stringify(FLEET_VECTOR.sealed)});`);
+        const req = makePendingReq({ requestId: `fill-${'c'.repeat(32)}`, publicKey: fixture.recipPubB64u });
+        let execCount = 0;
+        const coord = (0, cu_vault_fill_1.createCuVaultFillCoordinator)({
+            config: fixture.config,
+            vaultCli: { file: process.execPath, prefixArgs: [fixture.fakeVault] },
+            sealerScript: SEALER_SCRIPT,
+            auditFile: () => fixture.auditPath,
+            executeRetryBackoffMs: [5],
+            log: message => fixture.logs.push(message),
+            requestRemote: async (_remote, call) => {
+                if (call.method === 'GET')
+                    return { status: 200, body: { ok: true, seq: 1, requests: [req] } };
+                if (call.method === 'POST' && call.path === '/api/cu/fill/execute') {
+                    execCount += 1;
+                    return nonRetryable;
+                }
+                return { status: 200, body: { ok: true } };
+            },
+        });
+        t.after(() => coord.stop());
+        await coord.pollOnce();
+        await waitUntil(() => execCount === 1 && coord.activeCount() === 0);
+        assert.equal(execCount, 1);
+        assert.equal(readAuditLines(fixture.auditPath)[0].outcome, 'failed');
+    }
+    // 2) retryAfterMs < baseDelay still waits >= baseDelay, and attempts cap at maxExecuteAttempts -> cancel error.
+    {
+        const fixture = createCoordinatorFixture(t, `process.stdout.write(${JSON.stringify(FLEET_VECTOR.sealed)});`);
+        const req = makePendingReq({ requestId: `fill-${'d'.repeat(32)}`, publicKey: fixture.recipPubB64u });
+        const execTimestamps = [];
+        const cancels = [];
+        const coord = (0, cu_vault_fill_1.createCuVaultFillCoordinator)({
+            config: fixture.config,
+            vaultCli: { file: process.execPath, prefixArgs: [fixture.fakeVault] },
+            sealerScript: SEALER_SCRIPT,
+            auditFile: () => fixture.auditPath,
+            executeRetryBackoffMs: [40],
+            maxExecuteAttempts: 3,
+            log: message => fixture.logs.push(message),
+            requestRemote: async (_remote, call) => {
+                if (call.method === 'GET')
+                    return { status: 200, body: { ok: true, seq: 1, requests: [req] } };
+                if (call.method === 'POST' && call.path === '/api/cu/fill/execute') {
+                    execTimestamps.push(Date.now());
+                    return { status: 409, body: { ok: false, code: 'agent_busy', retryAfterMs: 1 } };
+                }
+                if (call.method === 'POST' && call.path === '/api/cu/fill/cancel') {
+                    cancels.push((0, test_types_js_1.record)(call.body));
+                    return { status: 200, body: { ok: true } };
+                }
+                return { status: 404, body: {} };
+            },
+        });
+        t.after(() => coord.stop());
+        await coord.pollOnce();
+        await waitUntil(() => cancels.length === 1 && coord.activeCount() === 0);
+        assert.equal(execTimestamps.length, 3, 'execute attempts must stop at maxExecuteAttempts');
+        assert.ok(execTimestamps[1] - execTimestamps[0] >= 25, 'delay must respect baseDelay floor when retryAfterMs is tiny');
+        assert.deepEqual(cancels[0], { requestId: req.requestId, reason: 'error' });
+        assert.equal(readAuditLines(fixture.auditPath)[0].outcome, 'failed');
+    }
+});
+test('hub coordinator cancels on execute transport error, reaches final poll backoff slot, and cancels in-flight requests on stop()', async (t) => {
+    // 1) Execute transport error triggers best-effort cancelRemote(id, 'error').
+    {
+        const fixture = createCoordinatorFixture(t, `process.stdout.write(${JSON.stringify(FLEET_VECTOR.sealed)});`);
+        const req = makePendingReq({ requestId: `fill-${'e'.repeat(32)}`, publicKey: fixture.recipPubB64u });
+        const cancels = [];
+        const coord = (0, cu_vault_fill_1.createCuVaultFillCoordinator)({
+            config: fixture.config,
+            vaultCli: { file: process.execPath, prefixArgs: [fixture.fakeVault] },
+            sealerScript: SEALER_SCRIPT,
+            auditFile: () => fixture.auditPath,
+            log: message => fixture.logs.push(message),
+            requestRemote: async (_remote, call) => {
+                if (call.method === 'GET')
+                    return { status: 200, body: { ok: true, seq: 1, requests: [req] } };
+                if (call.method === 'POST' && call.path === '/api/cu/fill/execute') {
+                    throw new Error('simulated transport drop');
+                }
+                if (call.method === 'POST' && call.path === '/api/cu/fill/cancel') {
+                    cancels.push((0, test_types_js_1.record)(call.body));
+                    return { status: 200, body: { ok: true } };
+                }
+                return { status: 404, body: {} };
+            },
+        });
+        t.after(() => coord.stop());
+        await coord.pollOnce();
+        await waitUntil(() => cancels.length === 1 && coord.activeCount() === 0);
+        assert.deepEqual(cancels[0], { requestId: req.requestId, reason: 'error' });
+        assert.equal(readAuditLines(fixture.auditPath)[0].code, 'transport_error');
+    }
+    // 2) Poll backoff climbs all the way to the last element (e.g., 15s slot in production).
+    {
+        const fixture = createCoordinatorFixture(t, 'process.exit(0);');
+        const pollTimes = [];
+        const coord = (0, cu_vault_fill_1.createCuVaultFillCoordinator)({
+            config: fixture.config,
+            vaultCli: { file: process.execPath, prefixArgs: [fixture.fakeVault] },
+            sealerScript: SEALER_SCRIPT,
+            auditFile: () => fixture.auditPath,
+            pollErrorBackoffMs: [5, 10, 60],
+            log: message => fixture.logs.push(message),
+            requestRemote: async () => {
+                pollTimes.push(Date.now());
+                if (pollTimes.length >= 4)
+                    coord.stop();
+                return { status: 503, body: {} };
+            },
+        });
+        t.after(() => coord.stop());
+        coord.start();
+        await waitUntil(() => pollTimes.length >= 4);
+        // 1st fail -> 5ms, 2nd fail -> 10ms, 3rd fail -> 60ms (the final slot!).
+        assert.ok(pollTimes[3] - pollTimes[2] >= 45, `expected final backoff slot (>=45ms), got ${pollTimes[3] - pollTimes[2]}ms`);
+    }
+    // 3) stop() fires bounded best-effort cancel for in-flight requests without hanging.
+    {
+        const fixture = createCoordinatorFixture(t, 'setInterval(() => {}, 1000);');
+        const req = makePendingReq({ requestId: `fill-${'f'.repeat(32)}`, publicKey: fixture.recipPubB64u });
+        const cancels = [];
+        const coord = (0, cu_vault_fill_1.createCuVaultFillCoordinator)({
+            config: fixture.config,
+            vaultCli: { file: process.execPath, prefixArgs: [fixture.fakeVault] },
+            sealerScript: SEALER_SCRIPT,
+            auditFile: () => fixture.auditPath,
+            stopCancelTimeoutMs: 60,
+            log: message => fixture.logs.push(message),
+            requestRemote: async (_remote, call) => {
+                if (call.method === 'GET')
+                    return { status: 200, body: { ok: true, seq: 1, requests: [req] } };
+                if (call.method === 'POST' && call.path === '/api/cu/fill/cancel') {
+                    const entry = { body: (0, test_types_js_1.record)(call.body), aborted: false };
+                    cancels.push(entry);
+                    // Stall until aborted by stopCancelTimeoutMs to prove shutdown stays bounded.
+                    return await new Promise((_resolve, reject) => {
+                        call.signal?.addEventListener('abort', () => {
+                            entry.aborted = true;
+                            reject(new Error('aborted'));
+                        }, { once: true });
+                    });
+                }
+                return { status: 404, body: {} };
+            },
+        });
+        await coord.pollOnce();
+        assert.equal(coord.activeCount(), 1);
+        const stopStart = Date.now();
+        coord.stop();
+        assert.ok(Date.now() - stopStart < 50, 'stop() must return synchronously without blocking');
+        await waitUntil(() => cancels.length === 1 && cancels[0].aborted === true);
+        assert.deepEqual(cancels[0].body, { requestId: req.requestId, reason: 'cancelled' });
+    }
 });

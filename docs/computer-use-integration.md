@@ -904,3 +904,58 @@ To eliminate `CU_BROKER_SESSION_SECRET` from `tmux` command lines, `/proc/<omp>/
   3. On a warm `omp 19.1.1` MCP cache (lazy spawn), if an agent somehow became prompt-injected *before* its first `mcp__cua_*` tool call (e.g. via `web_search`), an injected bash child of `omp` could launch `/usr/local/bin/cua-driver-mcp` itself to claim the pending `mcpToken` (or race with `LD_PRELOAD` under same-UID). Even then, it still only receives an `mcpToken` gated by the same single-seat lease (cut off immediately on human Take Over) and never learns `pi-dish`'s control-plane `sessionSecret`.
 - **Forward path to hard enforcement (Slice 4b UID split):** Running `omp` + its shell under an unprivileged `cu-agent` UID (no `sudo`, no access to `control.sock`, `backend.sock`, or `~/.config/cua/token`, with `kernel.yama.ptrace_scope = 1`, `claims/` mode `0710` group-accessible without listing, and `autoAcquire` restricted) turns this exact Slice 2 protocol into a kernel-enforced boundary with zero API changes: a sibling bash child of `omp` cannot see `mcpToken` in env/SQLite, cannot redeem a burned claim, cannot `ptrace` sibling `cua-driver-mcp` (`ptrace_scope=1`), and cannot call `/v1/mcp/call` (`claimedPeer` `SO_PEERCRED` check). Remaining same-UID risks even in Slice 4b are limited to killing `cua-driver-mcp` (DoS), racing an unredeemed lazy-spawn claim via the real `/usr/local/bin/cua-driver-mcp` binary before the first CUA call, or indirect prompt injection through normal broker-gated MCP calls.
 
+---
+
+## 10. Slice 3: Hub-Mediated Vault Fill Setup & Operations
+
+The hub coordinator (`src/core/cu-vault-fill.ts`) is **off by default** and runs only on the hub (`beelink`) when explicitly enabled in `~/.pi/dish/settings.json`. Guest `/api/cu/fill/{pending,execute,cancel,status}` proxy routes (`src/core/cu-handlers.ts`) activate only when a bearer auth token is configured on the guest (`PI_DISH_TOKEN` or `~/.pi/dish/token`) **and** `cu-broker` advertises capability `vault_fill`; `/hosts/:name/api/cu/fill/*` stays closed (`404`) to browser clients.
+
+### 10.1 Hub Configuration (`~/.pi/dish/settings.json`)
+
+```json
+{
+  "cuVaultFill": {
+    "enabled": true,
+    "remote": "cu-sandbox",
+    "identity": "cu-sandbox-proxy",
+    "identitiesDir": "~/.pi/dish/vault/identities",
+    "pollWaitMs": 20000
+  }
+}
+```
+
+- `enabled`: must be `true` to start the coordinator (absent or `false` keeps it off). Set `PI_DISH_CU_VAULT_FILL=off` in the server environment to force it off (e.g. in tests or maintenance).
+- `remote`: name of a configured entry in `settings.json` `remotes` (reached via `remote-hosts.ts` with its bearer token).
+- `identity` (default `"cu-sandbox-proxy"`): isolated `aac` identity passed to `pi-dish-vault --identity`. Its `XDG_CONFIG_HOME` lives at `<identitiesDir>/<identity>` (mode `0700`); optionally set `"xdgConfigHome"` to pin a single explicit path.
+- `pollWaitMs` (default `20000`, `1000..25000`): long-poll window against `/api/cu/fill/pending`.
+
+### 10.2 One-Time Pairing & Device Policy (`beelink`)
+
+1. In the `pi-dish-vault-listener` tmux window, run `pair cu-sandbox-proxy` to print a one-time PSK token, then pair the isolated identity:
+   ```sh
+   node skills/pi-dish-vault/scripts/pi-dish-vault.js pair --identity cu-sandbox-proxy <psk-token>
+   node skills/pi-dish-vault/scripts/pi-dish-vault.js status --identity cu-sandbox-proxy
+   ```
+2. Add the paired device's 64-character lowercase hex fingerprint to `~/.pi/dish/vault/policies.json` (`0600`):
+   ```json
+   {
+     "devices": {
+       "<64-hex-fingerprint>": {
+         "name": "cu-sandbox-proxy",
+         "allowFolder": "cu-sandbox",
+         "allowFolderId": "<bitwarden-folder-uuid>",
+         "allowedFields": ["username", "password", "totp"],
+         "allowCreate": false,
+         "allowWindow": false,
+         "requireOriginMatch": true
+       }
+     }
+   }
+   ```
+3. Enable the `cuVaultFill` block in `~/.pi/dish/settings.json` and restart `pi-dish`.
+
+### 10.3 Audit Log
+
+The hub writes one non-secret NDJSON line per request to `~/.pi/dish/cu-vault-fill-audit.ndjson` (`0600`, rotates at `1 MiB` to `.1`), recording `ts`, `requestId`, `remote`, `origin`, `topOrigin`, `item`, `fields`, `outcome`, and `code` (never values, nonces, public keys, envelopes, or stderr text).
+
+

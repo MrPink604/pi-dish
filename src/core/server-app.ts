@@ -142,6 +142,7 @@ export function startServer(rootDirectory: string): Server {
   const cuHandlers = createCuHandlers({
     broker: cuBroker,
     upgradeAuthorized: req => accessHandlers.bearerUpgradeAuthorized(req),
+    authTokenConfigured: accessHandlers.hasAuthToken,
     onBrokerEvent: event => { cuAgentLeases.handleBrokerEvent(event); },
   });
   // Raw cua-spacesd viewer/gRPC-Web proxy: mounted before compression and

@@ -91,6 +91,8 @@ export type ParsedOpenMediaResponse = {
 export declare function parseOpenMediaResponse(contentType: string | string[] | undefined, grpcStatusHeader: string | string[] | undefined, body: Buffer): ParsedOpenMediaResponse;
 export interface CuHandlersPorts {
     upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
+    /** True only when a bearer auth token is configured; /api/cu/fill/* fails closed (404) otherwise. */
+    authTokenConfigured?: () => boolean;
     /** Optional shared broker client (created internally when omitted). */
     broker?: CuBrokerClient;
     /** Optional test seam for the broker socket path. */

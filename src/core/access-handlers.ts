@@ -55,6 +55,7 @@ export interface AccessHandlers {
   host: TransportHandler;
   ticket: TransportHandler;
   hostDescriptor(): HostDescriptor;
+  hasAuthToken(): boolean;
   upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
   bearerUpgradeAuthorized(req: IncomingMessage): boolean;
 }
@@ -397,5 +398,5 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (!authToken) { res.json({ ticket: null }); return; }
     res.json(mintTicket(purpose));
   };
-  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, checkCuMutationIngress, cuMutationGuard, ompModelsMutationGuard, requireBearer, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized, bearerUpgradeAuthorized };
+  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, checkCuMutationIngress, cuMutationGuard, ompModelsMutationGuard, requireBearer, apiGate, hostsGate, host, ticket, hostDescriptor, hasAuthToken: () => authToken !== null, upgradeAuthorized, bearerUpgradeAuthorized };
 }

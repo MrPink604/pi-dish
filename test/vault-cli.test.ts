@@ -260,11 +260,13 @@ process.stdout.write(JSON.stringify({ success: true, credential: { notes: JSON.s
     reason: 'CU fill',
   });
 
-  // Invalid --origin and --identity values are refused before calling aac.
+  // Invalid --origin (including >256 chars) and --identity values are refused before calling aac.
+  const tooLongOrigin = `https://${'a'.repeat(245)}.test`; // 258 chars > 256
   for (const badArgs of [
     ['run', '--item', 'x', '--origin', 'https://example.com/path', '--env', 'PW=password', '--', 'true'],
     ['run', '--item', 'x', '--origin', 'https://user@example.com', '--env', 'PW=password', '--', 'true'],
     ['run', '--item', 'x', '--origin', 'ftp://example.com', '--env', 'PW=password', '--', 'true'],
+    ['run', '--item', 'x', '--origin', tooLongOrigin, '--env', 'PW=password', '--', 'true'],
     ['run', '--item', 'x', '--identity', '../escape', '--env', 'PW=password', '--', 'true'],
     ['pair', '--identity', 'a/b', 'psk-token'],
   ]) {

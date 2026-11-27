@@ -19,9 +19,10 @@ export declare function namesVaultBridgeRoute(rawPath: string): boolean;
 export declare function namesPageForms(path: string): boolean;
 /**
  * Matches any `/hosts/:name/api` suffix that a downstream hop could interpret
- * as a `/api/cu` route (including percent-encoded, mixed-case, or duplicate-slash
- * variants) so CU requests never bypass the hub's header allowlist, CSRF guard,
- * or Spaces route allowlist.
+ * as a `/api/cu` route (case-insensitively, after repeated percent decoding,
+ * backslash conversion, duplicate-slash collapse, and dot-segment normalization)
+ * so CU requests never bypass the hub's header allowlist, CSRF guard, Spaces
+ * route allowlist, or `/api/cu/fill/*` block. Undecodable paths fail closed.
  */
 export declare function namesCuRoute(reqPath: string): boolean;
 /**
