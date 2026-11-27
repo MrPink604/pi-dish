@@ -330,6 +330,7 @@ interface ManagedLeaseRecord {
   adoptedWithoutSecret: boolean;
   reAdopted: boolean;
   pendingStartupReconcile: boolean;
+  pendingInitialBind: boolean;
   pendingTransferClaimId: string | null;
   pendingReleaseCleanup?: boolean;
   heartbeatTimer: NodeJS.Timeout | null;
@@ -581,8 +582,13 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
     if (reason === 'acquired') return false;
 
     const birthMatches = snapshotMatchesBoundBirth(rec, obj);
+    const preBindPending = rec.pendingInitialBind
+      && obj !== null
+      && (obj.pid === null || obj.pid === undefined)
+      && (obj.pidStartTime === null || obj.pidStartTime === undefined)
+      && obj.pendingClaim === true;
     const peerLive = birthMatches && hasLiveClaimedPeer(obj);
-    const hasPendingClaim = birthMatches && obj !== null && obj.pendingClaim === true;
+    const hasPendingClaim = preBindPending || (birthMatches && obj !== null && obj.pendingClaim === true);
 
     if (reason === 'claimed_peer_reaped' || reason === 'claim_expired') {
       return !peerLive && !hasPendingClaim;
@@ -748,6 +754,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
           adoptedWithoutSecret: true,
           reAdopted: true,
           pendingStartupReconcile: true,
+          pendingInitialBind: false,
           pendingTransferClaimId: null,
           heartbeatTimer: null,
           heartbeatIntervalMs: resolveHeartbeatMs(null),
@@ -2184,6 +2191,7 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         adoptedWithoutSecret: false,
         reAdopted: false,
         pendingStartupReconcile: false,
+        pendingInitialBind: false,
         pendingTransferClaimId: null,
         heartbeatTimer: null,
         heartbeatIntervalMs: resolveHeartbeatMs(hbSec),
@@ -2383,10 +2391,14 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         attemptedPidStartTime: proc.startTime,
       });
     }
+    const isInitialBind = !transfer;
     const previousBirth = processBirthKey(rec.pid, rec.pidStartTime);
     const nextBirth = processBirthKey(proc.pid, proc.startTime);
     rec.pid = proc.pid;
     rec.pidStartTime = proc.startTime;
+    if (isInitialBind) {
+      rec.pendingInitialBind = true;
+    }
     if (previousBirth !== nextBirth) {
       resetRecordDelivery(rec, rec.generation ?? knownGeneration ?? 'default', nextBirth);
     }
@@ -2501,6 +2513,10 @@ export function createCuAgentLeases(ports: CuAgentLeasesPorts): CuAgentLeases {
         persistStore();
       }
       throw bindError;
+    } finally {
+      if (isInitialBind) {
+        rec.pendingInitialBind = false;
+      }
     }
 
     if (transfer) {

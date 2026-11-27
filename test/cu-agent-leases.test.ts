@@ -5555,4 +5555,334 @@ test('unit: G3 — allowReclaim never counts as a usable claim; claim expiring b
   assert.equal(broker.forcedMutationCalls.length, 0);
 });
 
+test('unit: G4 — pre-bind heartbeat resolving during in-flight initial bind does not release lease, while real PID mismatch or lost claim still releases', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cu-g4-'));
+  const sockPath = path.join(tmpDir, 'broker.sock');
+  const claimDir = path.join(tmpDir, 'claims');
+  const broker = await startFakeCuBroker(sockPath, claimDir);
+  broker.enableSlice2b();
+  t.after(async () => {
+    await broker.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const baseClient = createCuBrokerClient({ socketPath: () => sockPath });
+
+  // Case 1: Hold POST /v1/lease/bind reply while a stale pre-bind heartbeat reply (pid:null, pendingClaim:true,
+  // pre-bind cursor) resolves first. Initial bind MUST succeed, lease MUST stay active, and heartbeats MUST continue.
+  {
+    const caseStorePath = path.join(tmpDir, 'cu-agent-leases-case1.json');
+    let holdPreBindHb = true;
+    let capturedPreBindHb = false;
+    let releasePreBindHb: (() => void) | null = null;
+    let preBindHbReturned = false;
+    let holdSubsequentHbs = false;
+    const subsequentHbReleases: Array<() => void> = [];
+    let holdBind = false;
+    let bindReachedBroker = false;
+    let releaseBind: (() => void) | null = null;
+
+    const controlledClient: CuBrokerMod.CuBrokerClient = {
+      socketPath: () => baseClient.socketPath(),
+      configured: () => baseClient.configured(),
+      available: () => baseClient.available(),
+      openEvents: (...args) => baseClient.openEvents(...args),
+      async requestJson(method, pathname, body) {
+        if (pathname === '/v1/lease/heartbeat' && holdPreBindHb) {
+          holdPreBindHb = false;
+          holdSubsequentHbs = true;
+          // Execute heartbeat against broker BEFORE bind so the snapshot genuinely predates bind (pid:null, pendingClaim:true).
+          const reply = await baseClient.requestJson(method, pathname, body);
+          const replyBody = record(reply.body);
+          const replyLease = record(replyBody.lease);
+          assert.equal(reply.status, 200);
+          assert.equal(replyLease.pid, null, 'precondition: heartbeat snapshot predates bind (pid is null)');
+          assert.equal(replyLease.pendingClaim, true, 'precondition: pre-bind snapshot has pendingClaim:true');
+          capturedPreBindHb = true;
+          await new Promise<void>(resolve => { releasePreBindHb = resolve; });
+          preBindHbReturned = true;
+          return reply;
+        }
+        if (pathname === '/v1/lease/heartbeat' && holdSubsequentHbs) {
+          await new Promise<void>(resolve => { subsequentHbReleases.push(resolve); });
+          return baseClient.requestJson(method, pathname, body);
+        }
+        if (pathname === '/v1/lease/bind' && holdBind) {
+          holdBind = false;
+          // Execute bind on the broker, then hold the bind reply so the stale pre-bind heartbeat resolves first.
+          const reply = await baseClient.requestJson(method, pathname, body);
+          bindReachedBroker = true;
+          await new Promise<void>(resolve => { releaseBind = resolve; });
+          return reply;
+        }
+        return baseClient.requestJson(method, pathname, body);
+      },
+    };
+
+    const sid = '~sk1_omp_g4_prebind_hb_race';
+    const mgr = createCuAgentLeases({
+      broker: controlledClient,
+      storeFile: () => caseStorePath,
+      processAlive: p => p.pid === 71001 && p.startTime === '710010',
+      pidAlive: () => false,
+      heartbeatIntervalMs: 25,
+      livenessCheckMs: 0,
+      abortSession: async () => true,
+      resumeSession: async () => true,
+    });
+    t.after(() => mgr.stop());
+    await mgr.probeCapabilities();
+
+    const h = present(await mgr.prepareSpawn({ knownSessionId: sid }));
+    await waitFor(() => capturedPreBindHb && releasePreBindHb !== null, 'pre-bind heartbeat captured before bind');
+
+    const relBefore = broker.releaseCalls.length;
+    holdBind = true;
+    const bindPromise = mgr.bindSpawnedProcess(h, { pid: 71001, startTime: '710010' });
+    await waitFor(() => bindReachedBroker && releaseBind !== null, 'initial bind held in flight');
+
+    // Let the stale pre-bind heartbeat reply resolve while initial bind is still in flight.
+    releasePreBindHb!();
+    await waitFor(() => preBindHbReturned, 'stale pre-bind heartbeat reply delivered');
+    // Allow sendHeartbeat's continuation (and any erroneous release call) to run before finishing bind.
+    await new Promise(resolve => setTimeout(resolve, 40));
+
+    holdSubsequentHbs = false;
+    while (subsequentHbReleases.length) subsequentHbReleases.shift()!();
+    releaseBind!();
+    await bindPromise;
+    mgr.attachSpawnedSession(h, { sessionId: sid, pid: 71001, pidStartTime: '710010' });
+
+    assert.equal(broker.releaseCalls.length, relBefore, 'pre-bind heartbeat during initial bind must NOT release lease');
+    assert.equal(broker.state, 'agent', 'broker lease remains active after initial bind');
+    assert.equal(broker.lease?.pid, 71001);
+    assert.equal(mgr.isDesktopAccessLost(sid), false, 'lease is NOT marked access_lost');
+    assert.equal(mgr.ownerIdForSession(sid), h.leaseOwnerId, 'session still owns lease');
+
+    const hbAfterBind = broker.heartbeatCalls.length;
+    await waitFor(() => broker.heartbeatCalls.length > hbAfterBind, 'lease continues sending heartbeats after bind');
+    assert.equal(broker.state, 'agent');
+    assert.equal(mgr.isDesktopAccessLost(sid), false);
+    assert.equal(broker.releaseCalls.length, relBefore);
+
+    await mgr.releaseSession(sid);
+    assert.equal(broker.state, 'idle');
+    mgr.stop();
+  }
+
+  // Case 1b: A pre-bind heartbeat reply (pid:null, pendingClaim:true, pre-bind cursor) arriving AFTER the bind reply
+  // completes is dropped as stale by cursor ordering; lease stays active and heartbeats continue.
+  {
+    const caseStorePath = path.join(tmpDir, 'cu-agent-leases-case1b.json');
+    let holdPreBindHb = true;
+    let capturedPreBindHb = false;
+    let releasePreBindHb: (() => void) | null = null;
+    let preBindHbReturned = false;
+    let holdSubsequentHbs = false;
+    const subsequentHbReleases: Array<() => void> = [];
+
+    const controlledClient: CuBrokerMod.CuBrokerClient = {
+      socketPath: () => baseClient.socketPath(),
+      configured: () => baseClient.configured(),
+      available: () => baseClient.available(),
+      openEvents: (...args) => baseClient.openEvents(...args),
+      async requestJson(method, pathname, body) {
+        if (pathname === '/v1/lease/heartbeat' && holdPreBindHb) {
+          holdPreBindHb = false;
+          holdSubsequentHbs = true;
+          const reply = await baseClient.requestJson(method, pathname, body);
+          const replyBody = record(reply.body);
+          const replyLease = record(replyBody.lease);
+          assert.equal(reply.status, 200);
+          assert.equal(replyLease.pid, null, 'precondition: delayed heartbeat snapshot predates bind');
+          assert.equal(replyLease.pendingClaim, true);
+          capturedPreBindHb = true;
+          await new Promise<void>(resolve => { releasePreBindHb = resolve; });
+          preBindHbReturned = true;
+          return reply;
+        }
+        if (pathname === '/v1/lease/heartbeat' && holdSubsequentHbs) {
+          await new Promise<void>(resolve => { subsequentHbReleases.push(resolve); });
+          return baseClient.requestJson(method, pathname, body);
+        }
+        return baseClient.requestJson(method, pathname, body);
+      },
+    };
+
+    const sid = '~sk1_omp_g4_prebind_hb_after_bind';
+    const mgr = createCuAgentLeases({
+      broker: controlledClient,
+      storeFile: () => caseStorePath,
+      processAlive: p => p.pid === 71005 && p.startTime === '710050',
+      pidAlive: () => false,
+      heartbeatIntervalMs: 25,
+      livenessCheckMs: 0,
+      abortSession: async () => true,
+      resumeSession: async () => true,
+    });
+    t.after(() => mgr.stop());
+    await mgr.probeCapabilities();
+
+    const h = present(await mgr.prepareSpawn({ knownSessionId: sid }));
+    await waitFor(() => capturedPreBindHb && releasePreBindHb !== null, 'pre-bind heartbeat captured before bind');
+
+    const relBefore = broker.releaseCalls.length;
+    await mgr.bindSpawnedProcess(h, { pid: 71005, startTime: '710050' });
+    mgr.attachSpawnedSession(h, { sessionId: sid, pid: 71005, pidStartTime: '710050' });
+
+    // Deliver the stale pre-bind heartbeat reply AFTER initial bind has already completed.
+    releasePreBindHb!();
+    await waitFor(() => preBindHbReturned, 'delayed pre-bind heartbeat reply delivered after bind');
+    await new Promise(resolve => setTimeout(resolve, 40));
+
+    holdSubsequentHbs = false;
+    while (subsequentHbReleases.length) subsequentHbReleases.shift()!();
+
+    assert.equal(broker.releaseCalls.length, relBefore, 'stale pre-bind heartbeat arriving after bind must be dropped without releasing');
+    assert.equal(broker.state, 'agent', 'broker lease remains active after stale pre-bind heartbeat');
+    assert.equal(broker.lease?.pid, 71005);
+    assert.equal(mgr.isDesktopAccessLost(sid), false);
+    assert.equal(mgr.ownerIdForSession(sid), h.leaseOwnerId);
+
+    const hbAfter = broker.heartbeatCalls.length;
+    await waitFor(() => broker.heartbeatCalls.length > hbAfter, 'lease continues sending heartbeats after stale reply dropped');
+    assert.equal(broker.state, 'agent');
+    assert.equal(mgr.isDesktopAccessLost(sid), false);
+    assert.equal(broker.releaseCalls.length, relBefore);
+
+    await mgr.releaseSession(sid);
+    assert.equal(broker.state, 'idle');
+    mgr.stop();
+  }
+
+  // Case 2a: While initial bind is in flight, a heartbeat reporting a genuinely DIFFERENT non-null PID still releases.
+  {
+    const caseStorePath = path.join(tmpDir, 'cu-agent-leases-case2a.json');
+    let holdWrongPidHb = true;
+    let capturedWrongPidHb = false;
+    let releaseWrongPidHb: (() => void) | null = null;
+    let holdSubsequentHbs = false;
+    const subsequentHbReleases: Array<() => void> = [];
+    let holdBind = false;
+    let bindHeld = false;
+    let releaseBind: (() => void) | null = null;
+
+    const controlledClient: CuBrokerMod.CuBrokerClient = {
+      socketPath: () => baseClient.socketPath(),
+      configured: () => baseClient.configured(),
+      available: () => baseClient.available(),
+      openEvents: (...args) => baseClient.openEvents(...args),
+      async requestJson(method, pathname, body) {
+        if (pathname === '/v1/lease/heartbeat' && holdWrongPidHb) {
+          holdWrongPidHb = false;
+          holdSubsequentHbs = true;
+          const reply = await baseClient.requestJson(method, pathname, body);
+          const replyBody = record(reply.body);
+          const replyLease = record(replyBody.lease);
+          // Mutate snapshot to report a genuinely different non-null PID.
+          const forged = {
+            ...replyBody,
+            lease: { ...replyLease, pid: 71999, pidStartTime: 719990, pendingClaim: true },
+          };
+          capturedWrongPidHb = true;
+          await new Promise<void>(resolve => { releaseWrongPidHb = resolve; });
+          return { status: reply.status, body: forged };
+        }
+        if (pathname === '/v1/lease/heartbeat' && holdSubsequentHbs) {
+          await new Promise<void>(resolve => { subsequentHbReleases.push(resolve); });
+          return baseClient.requestJson(method, pathname, body);
+        }
+        if (pathname === '/v1/lease/bind' && holdBind) {
+          holdBind = false;
+          bindHeld = true;
+          await new Promise<void>(resolve => { releaseBind = resolve; });
+          return baseClient.requestJson(method, pathname, body);
+        }
+        return baseClient.requestJson(method, pathname, body);
+      },
+    };
+
+    const sid = '~sk1_omp_g4_different_pid_inflight';
+    const mgr = createCuAgentLeases({
+      broker: controlledClient,
+      storeFile: () => caseStorePath,
+      processAlive: p => p.pid === 71002 && p.startTime === '710020',
+      pidAlive: () => false,
+      heartbeatIntervalMs: 20,
+      livenessCheckMs: 0,
+      abortSession: async () => true,
+      resumeSession: async () => true,
+    });
+    t.after(() => mgr.stop());
+    await mgr.probeCapabilities();
+
+    const h = present(await mgr.prepareSpawn({ knownSessionId: sid }));
+    await waitFor(() => capturedWrongPidHb && releaseWrongPidHb !== null, 'forged different-pid heartbeat captured');
+
+    const relBefore = broker.releaseCalls.length;
+    holdBind = true;
+    const bindPromise = mgr.bindSpawnedProcess(h, { pid: 71002, startTime: '710020' });
+    await waitFor(() => bindHeld && releaseBind !== null, 'bind held for different-pid test');
+
+    releaseWrongPidHb!();
+    await waitFor(() => broker.state === 'idle', 'genuinely different non-null PID during initial bind still releases lease');
+    assert.ok(broker.releaseCalls.length > relBefore);
+    assert.equal(mgr.isDesktopAccessLost(sid), true);
+
+    holdSubsequentHbs = false;
+    while (subsequentHbReleases.length) subsequentHbReleases.shift()!();
+    releaseBind!();
+    await assert.rejects(() => bindPromise);
+    mgr.stop();
+  }
+
+  // Case 2b: After initial bind completes, a different PID or a lost claim still marks access_lost and releases.
+  {
+    const caseStorePath = path.join(tmpDir, 'cu-agent-leases-case2b.json');
+    const sidDiff = '~sk1_omp_g4_postbind_different_pid';
+    const mgr = createCuAgentLeases({
+      broker: baseClient,
+      storeFile: () => caseStorePath,
+      processAlive: p => (p.pid === 71003 && p.startTime === '710030') || (p.pid === 71004 && p.startTime === '710040'),
+      pidAlive: () => false,
+      heartbeatIntervalMs: 20,
+      livenessCheckMs: 0,
+      abortSession: async () => true,
+      resumeSession: async () => true,
+    });
+    t.after(() => mgr.stop());
+    await mgr.probeCapabilities();
+
+    // Different PID after bind
+    const hDiff = present(await mgr.prepareSpawn({ knownSessionId: sidDiff }));
+    await mgr.bindSpawnedProcess(hDiff, { pid: 71003, startTime: '710030' });
+    mgr.attachSpawnedSession(hDiff, { sessionId: sidDiff, pid: 71003, pidStartTime: '710030' });
+    const hb1 = broker.heartbeatCalls.length;
+    await waitFor(() => broker.heartbeatCalls.length > hb1, 'post-bind heartbeat succeeds while birth matches');
+    assert.ok(broker.lease);
+    broker.lease.pid = 71888;
+    broker.lease.pidStartTime = 718880;
+    broker.cursor += 1;
+    await waitFor(() => broker.state === 'idle', 'different PID after bind releases lease');
+    assert.equal(mgr.isDesktopAccessLost(sidDiff), true);
+
+    // Lost claim after bind
+    const sidLost = '~sk1_omp_g4_postbind_lost_claim';
+    const hLost = present(await mgr.prepareSpawn({ knownSessionId: sidLost }));
+    await mgr.bindSpawnedProcess(hLost, { pid: 71004, startTime: '710040' });
+    mgr.attachSpawnedSession(hLost, { sessionId: sidLost, pid: 71004, pidStartTime: '710040' });
+    const hb2 = broker.heartbeatCalls.length;
+    await waitFor(() => broker.heartbeatCalls.length > hb2, 'post-bind heartbeat succeeds while claim pending');
+    broker.activeClaims.delete(hLost.brokerSessionId);
+    broker.cursor += 1;
+    await waitFor(() => broker.state === 'idle', 'lost claim after bind releases lease');
+    assert.equal(mgr.isDesktopAccessLost(sidLost), true);
+
+    mgr.stop();
+  }
+
+  assert.equal(broker.validationErrorCalls.length, 0);
+  assert.equal(broker.forcedMutationCalls.length, 0);
+});
+
 export {};
