@@ -35,6 +35,7 @@ pub const MIN_PASSWORD_LENGTH: u8 = 16;
 pub const MAX_PASSWORD_LENGTH: u8 = 128;
 const MAX_NAME: usize = 256;
 const MAX_LOGIN_TEXT: usize = 1024;
+pub const MAX_ORIGIN_BYTES: usize = 256;
 
 /// The search text of a search probe; `None` for any other query.
 pub fn search_query(query: &CredentialQuery) -> Option<Result<String, String>> {
@@ -84,6 +85,7 @@ pub struct Envelope {
     pub item: String,
     /// Distinct: built-ins in [`FIELDS`] order, then `field:<name>` entries as requested.
     pub fields: Vec<String>,
+    pub origin: Option<String>,
     pub reason: Option<String>,
     pub session: Option<SessionClaim>,
     pub timeout_sec: u64,
@@ -93,6 +95,8 @@ pub struct Envelope {
 struct Wire {
     item: String,
     fields: Vec<String>,
+    #[serde(default)]
+    origin: Option<String>,
     #[serde(default)]
     reason: Option<String>,
     #[serde(default)]
@@ -130,6 +134,7 @@ pub fn decode(query: &CredentialQuery) -> Result<Envelope, String> {
         return Ok(Envelope {
             item: value.to_string(),
             fields: LOGIN_FIELDS.iter().map(|field| (*field).to_string()).collect(),
+            origin: None,
             reason: None,
             session: None,
             timeout_sec: DEFAULT_TIMEOUT_SEC,
@@ -143,6 +148,16 @@ pub fn check_query(query: &CredentialQuery) -> Option<Result<Envelope, String>> 
     query.search_string().trim().strip_prefix(CHECK_PREFIX).map(decode_wire)
 }
 
+/// A bounded single-line origin, `None` when absent or blank.
+fn decode_origin(value: Option<String>) -> Result<Option<String>, String> {
+    let Some(raw) = value else { return Ok(None) };
+    if raw.len() > MAX_ORIGIN_BYTES || raw.chars().any(char::is_control) {
+        return Err(format!("origin must be one line of at most {MAX_ORIGIN_BYTES} bytes"));
+    }
+    let text = raw.trim().to_string();
+    Ok((!text.is_empty()).then_some(text))
+}
+
 fn decode_wire(encoded: &str) -> Result<Envelope, String> {
     let bytes = URL_SAFE_NO_PAD.decode(encoded.trim_end_matches('=')).map_err(|e| format!("bad envelope encoding: {e}"))?;
     let wire: Wire = serde_json::from_slice(&bytes).map_err(|e| format!("bad envelope JSON: {e}"))?;
@@ -151,10 +166,11 @@ fn decode_wire(encoded: &str) -> Result<Envelope, String> {
         return Err("envelope names no item".to_string());
     }
     let fields = canonical_fields(&wire.fields).ok_or_else(|| format!("fields must be distinct values from {}, {CUSTOM_PREFIX}<name>", FIELDS.join(", ")))?;
+    let origin = decode_origin(wire.origin)?;
     let reason = wire.reason.map(|reason| reason.trim().to_string()).filter(|reason| !reason.is_empty());
     let session = wire.session.filter(|session| !session.r#ref.trim().is_empty());
     let timeout_sec = wire.timeout_sec.unwrap_or(DEFAULT_TIMEOUT_SEC).clamp(10, MAX_TIMEOUT_SEC);
-    Ok(Envelope { item, fields, reason, session, timeout_sec })
+    Ok(Envelope { item, fields, origin, reason, session, timeout_sec })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,9 +273,75 @@ mod tests {
         let encoded = base64::engine::general_purpose::URL_SAFE.encode(r#"{"item":"x","fields":["notes"]}"#);
         let envelope = decode(&CredentialQuery::Domain(format!("{PREFIX}{encoded}"))).expect("valid envelope");
         assert_eq!(envelope.fields, vec!["notes"]);
+        assert_eq!(envelope.origin, None);
         assert_eq!(envelope.reason, None);
         assert_eq!(envelope.session, None);
         assert_eq!(envelope.timeout_sec, DEFAULT_TIMEOUT_SEC);
+    }
+
+    #[test]
+    fn decodes_envelope_with_and_without_origin() {
+        let with_origin = decode(&domain(r#"{"item":"acme","fields":["password"],"origin":"https://portal.acme.com"}"#)).expect("valid origin");
+        assert_eq!(with_origin.origin.as_deref(), Some("https://portal.acme.com"));
+
+        let trimmed = decode(&domain(r#"{"item":"acme","fields":["password"],"origin":"  https://portal.acme.com:8443  "}"#)).expect("trimmed origin");
+        assert_eq!(trimmed.origin.as_deref(), Some("https://portal.acme.com:8443"));
+
+        let max_origin = format!("https://{}", "a".repeat(MAX_ORIGIN_BYTES - "https://".len()));
+        assert_eq!(max_origin.len(), MAX_ORIGIN_BYTES);
+        let at_limit = decode(&domain(&serde_json::json!({ "item": "acme", "fields": ["password"], "origin": max_origin }).to_string())).expect("256-byte origin");
+        assert_eq!(at_limit.origin.as_deref(), Some(max_origin.as_str()));
+
+        for absent in [
+            r#"{"item":"acme","fields":["password"]}"#,
+            r#"{"item":"acme","fields":["password"],"origin":null}"#,
+            r#"{"item":"acme","fields":["password"],"origin":""}"#,
+            r#"{"item":"acme","fields":["password"],"origin":"   "}"#,
+        ] {
+            assert_eq!(decode(&domain(absent)).expect("absent origin").origin, None, "{absent}");
+        }
+
+        let stock = decode(&CredentialQuery::Domain("github.com".to_string())).expect("stock query");
+        assert_eq!(stock.origin, None);
+
+        let check = CredentialQuery::Domain(format!(
+            "{CHECK_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(r#"{"item":"acme","fields":["password"],"origin":"https://portal.acme.com"}"#)
+        ));
+        assert_eq!(check_query(&check).expect("check probe").expect("valid").origin.as_deref(), Some("https://portal.acme.com"));
+    }
+
+    #[test]
+    fn rejects_bad_origins() {
+        let too_long_ascii = format!("https://{}", "a".repeat(MAX_ORIGIN_BYTES + 1 - "https://".len()));
+        assert_eq!(too_long_ascii.len(), MAX_ORIGIN_BYTES + 1);
+        let too_long_utf8 = "é".repeat(MAX_ORIGIN_BYTES / 2 + 1);
+        assert!(too_long_utf8.chars().count() <= MAX_ORIGIN_BYTES);
+        assert!(too_long_utf8.len() > MAX_ORIGIN_BYTES);
+
+        for bad in [
+            too_long_ascii.as_str(),
+            too_long_utf8.as_str(),
+            "https://portal.acme.com\n",
+            "https://portal.acme.com\nb",
+            "https://portal.acme.com\r",
+            "https://portal.acme.com\t",
+            "https://portal.acme.com\0",
+            "https://portal.acme.com\x7f",
+            "https://portal.acme.com\u{0085}",
+            "\n",
+        ] {
+            let payload = serde_json::json!({ "item": "acme", "fields": ["password"], "origin": bad }).to_string();
+            assert!(decode(&domain(&payload)).is_err(), "expected error for {bad:?}");
+        }
+
+        assert!(decode(&domain(r#"{"item":"acme","fields":["password"],"origin":123}"#)).is_err());
+
+        let bad_check = CredentialQuery::Domain(format!(
+            "{CHECK_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(r#"{"item":"acme","fields":["password"],"origin":"https://a.com\n"}"#)
+        ));
+        assert!(check_query(&bad_check).expect("check probe").is_err());
     }
 
     #[test]

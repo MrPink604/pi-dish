@@ -237,9 +237,13 @@ async fn handle_create(vault: &Vault, bridge: &Arc<Bridge>, device: Device, requ
         id: &id,
         action: "create",
         device,
+        item_id: None,
         item: &request.name,
         fields: &fields,
+        folder_id: None,
         folder: Some(vault.create_folder()),
+        origin: None,
+        item_uris: None,
         reason: request.reason.as_deref(),
         session: request.session.as_ref(),
         expires_at: now_millis() + lifetime.as_millis() as u64,
@@ -357,9 +361,13 @@ async fn handle_request(
         id: &id,
         action: "release",
         device: Device { name: device.clone(), fingerprint },
+        item_id: Some(&prepared.id),
         item: &prepared.name,
         fields: &request.fields,
-        folder: None,
+        folder_id: prepared.folder_id.as_deref(),
+        folder: prepared.folder.as_deref(),
+        origin: request.origin.as_deref(),
+        item_uris: Some(&prepared.uris),
         reason: request.reason.as_deref(),
         session: request.session.as_ref(),
         expires_at: now_millis() + lifetime.as_millis() as u64,
@@ -555,6 +563,107 @@ mod tests {
         assert_eq!(check(r#"{"item":"n1","fields":["field:key"]}"#).await, serde_json::json!({ "ok": true }));
         assert_eq!(check(r#"{"item":"n1","fields":["password"]}"#).await["error"], r#""huggingface-read" has no password; it has field:key"#);
         assert_eq!(check(r#"{"item":"hf","fields":["password"]}"#).await["error"], r#"no item "hf"; find its id with `search`"#);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn capture_one_bridge_post() -> (String, tokio::task::JoinHandle<serde_json::Value>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let header_end = loop {
+                let n = socket.read(&mut chunk).await.expect("read");
+                assert!(n > 0, "unexpected EOF before headers");
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            };
+            let headers = String::from_utf8_lossy(&buf[..header_end]);
+            let content_len: usize = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse().expect("content-length"))
+                })
+                .expect("Content-Length header");
+            while buf.len() < header_end + content_len {
+                let n = socket.read(&mut chunk).await.expect("read body");
+                assert!(n > 0, "unexpected EOF in body");
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let body: serde_json::Value = serde_json::from_slice(&buf[header_end..header_end + content_len]).expect("JSON body");
+            let reply = r#"{"status":"denied"}"#;
+            let response = format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            socket.write_all(response.as_bytes()).await.expect("write response");
+            body
+        });
+        (format!("http://{addr}"), server)
+    }
+
+    #[tokio::test]
+    async fn handle_request_and_create_post_expected_bridge_fields() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("pi-dish-vault-bridge-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("bridge.token"), "test-token\n").expect("write token");
+        let bw = dir.join("bw");
+        let item = r#"{"id":"item-uuid-1","name":"Acme Portal","folderId":"f-cu","type":1,"login":{"username":"alice","password":"pw","uris":[{"uri":"https://portal.acme.com/login"},{"uri":"https://status.acme.com"}]}}"#;
+        std::fs::write(
+            &bw,
+            format!(
+                "#!/bin/sh\ncase \"$1 $2 $3\" in\n  'list folders '*) echo '[{{\"id\":\"f-cu\",\"name\":\"cu-sandbox\"}}]' ;;\n  'list items '*) echo '[]' ;;\n  'get item item-uuid-1') echo '{item}' ;;\n  *) echo 'Not found.' >&2; exit 1 ;;\nesac\n"
+            ),
+        )
+        .expect("write stub");
+        std::fs::set_permissions(&bw, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        let vault = Arc::new(Vault::new(bw.to_string_lossy().into_owned(), DEFAULT_DENY_FOLDER.to_string(), DEFAULT_CREATE_FOLDER.to_string(), Some(SecretString::from("session-key"))));
+
+        // Release request carries itemId, folderId, folder, origin, and itemUris.
+        let (base, server) = capture_one_bridge_post().await;
+        let bridge = Arc::new(Bridge::new(base, dir.join("bridge.token")));
+        let release_query = CredentialQuery::Domain(format!(
+            "{}{}",
+            envelope::PREFIX,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"item":"item-uuid-1","fields":["username","password"],"origin":"https://portal.acme.com"}"#)
+        ));
+        let (reply, answer) = oneshot::channel();
+        handle_request(vault.clone(), bridge, dir.clone(), release_query, IdentityFingerprint([7; 32]), reply).await;
+        assert!(!answer.await.expect("reply").approved);
+        let posted = server.await.expect("captured release");
+        assert_eq!(posted["action"], "release");
+        assert_eq!(posted["itemId"], "item-uuid-1");
+        assert_eq!(posted["item"], "Acme Portal");
+        assert_eq!(posted["folderId"], "f-cu");
+        assert_eq!(posted["folder"], "cu-sandbox");
+        assert_eq!(posted["origin"], "https://portal.acme.com");
+        assert_eq!(posted["itemUris"], serde_json::json!(["https://portal.acme.com/login", "https://status.acme.com"]));
+
+        // Create request carries folder and omits itemId, folderId, origin, and itemUris.
+        let (base, server) = capture_one_bridge_post().await;
+        let bridge = Arc::new(Bridge::new(base, dir.join("bridge.token")));
+        let create_query = CredentialQuery::Domain(format!(
+            "{}{}",
+            envelope::CREATE_PREFIX,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"name":"new-login","username":"u"}"#)
+        ));
+        let (reply, answer) = oneshot::channel();
+        handle_request(vault, bridge, dir.clone(), create_query, IdentityFingerprint([7; 32]), reply).await;
+        assert!(!answer.await.expect("reply").approved);
+        let created = server.await.expect("captured create");
+        assert_eq!(created["action"], "create");
+        assert_eq!(created["folder"], DEFAULT_CREATE_FOLDER);
+        let obj = created.as_object().expect("JSON object");
+        for omitted in ["itemId", "folderId", "origin", "itemUris"] {
+            assert!(!obj.contains_key(omitted), "create should omit {omitted}");
+        }
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -258,27 +258,22 @@ impl Vault {
         search_results(&listing, denied.as_deref(), SEARCH_LIMIT)
     }
 
-    /// Looks an item up before asking the operator: its display name, and a
-    /// refusal when it is missing, ambiguous, in the deny folder or lacks a
-    /// requested field. The document stays in memory only until the request
-    /// is answered.
+    /// Looks an item up before asking the operator: its display name, folder,
+    /// stored login URIs, and a refusal when it is missing, ambiguous, in the
+    /// deny folder or lacks a requested field. The document stays in memory
+    /// only until the request is answered.
     pub async fn prepare(&self, item: &str, fields: &[String]) -> Result<Prepared, Refusal> {
         if !self.is_unlocked() {
             return Err(Refusal::plain("the vault is locked (the operator types `unlock` in the listener window)"));
         }
         let document = Zeroizing::new(self.run(&["get", "item", item]).await.map_err(|error| lookup_refusal(item, error))?);
         let summary: BwSummary = serde_json::from_slice(&document).map_err(|e| Refusal::plain(format!("unexpected bw output: {e}")))?;
-        if let (Some(folder), Some(denied)) = (summary.folder_id.as_deref(), self.denied_folder().await.map_err(Refusal::plain)?) {
-            if folder == denied {
-                // Search hides these items; the requester sees a missing item.
-                return Err(Refusal { log: format!("the item is in the \"{}\" folder", self.deny_folder), requester: no_item(item) });
-            }
-        }
-        let name = summary.name.clone().unwrap_or_else(|| item.to_string());
-        if let Some(error) = missing_fields(&name, &summary, fields) {
-            return Err(Refusal::plain(error));
-        }
-        Ok(Prepared { id: summary.id.unwrap_or_else(|| item.to_string()), name, document })
+        let folders = if summary.folder_id.as_deref().is_some_and(|id| !id.trim().is_empty()) {
+            self.folders().await.map_err(Refusal::plain)?
+        } else {
+            Vec::new()
+        };
+        prepare_summary(item, summary, &folders, &self.deny_folder, fields, document)
     }
 
     /// The requested fields of a prepared item, after approval.
@@ -351,11 +346,60 @@ fn missing_fields(name: &str, item: &BwSummary, fields: &[String]) -> Option<Str
 }
 
 pub const SEARCH_LIMIT: usize = 100;
+pub const MAX_ITEM_URIS: usize = 64;
+const MAX_URI_CHARS: usize = 2048;
 
 pub struct Prepared {
     pub id: String,
     pub name: String,
+    pub folder: Option<String>,
+    pub folder_id: Option<String>,
+    pub uris: Vec<String>,
     document: Zeroizing<Vec<u8>>,
+}
+
+/// Stored login URIs for bridge origin matching: clean, non-blank, capped at [`MAX_ITEM_URIS`].
+fn item_uris(summary: &BwSummary) -> Vec<String> {
+    summary
+        .login
+        .as_ref()
+        .and_then(|login| login.uris.as_ref())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.uri.as_deref())
+        .filter(|uri| !uri.chars().any(char::is_control))
+        .map(str::trim)
+        .filter(|uri| !uri.is_empty() && uri.encode_utf16().count() <= MAX_URI_CHARS)
+        .take(MAX_ITEM_URIS)
+        .map(str::to_string)
+        .collect()
+}
+
+fn prepare_summary(
+    item: &str,
+    summary: BwSummary,
+    folders: &[BwFolder],
+    deny_folder: &str,
+    fields: &[String],
+    document: Zeroizing<Vec<u8>>,
+) -> Result<Prepared, Refusal> {
+    let folder_id = summary.folder_id.as_deref().filter(|id| !id.trim().is_empty()).map(str::to_string);
+    let matched_folder = folder_id.as_deref().and_then(|fid| folders.iter().find(|entry| entry.id.as_deref() == Some(fid)));
+    if matched_folder.and_then(|entry| entry.name.as_deref()) == Some(deny_folder) {
+        // Search hides these items; the requester sees a missing item.
+        return Err(Refusal { log: format!("the item is in the \"{deny_folder}\" folder"), requester: no_item(item) });
+    }
+    let folder = matched_folder
+        .and_then(|entry| entry.name.as_deref())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_string);
+    let name = summary.name.clone().unwrap_or_else(|| item.to_string());
+    if let Some(error) = missing_fields(&name, &summary, fields) {
+        return Err(Refusal::plain(error));
+    }
+    let uris = item_uris(&summary);
+    let id = summary.id.filter(|id| !id.trim().is_empty()).unwrap_or_else(|| item.to_string());
+    Ok(Prepared { id, name, folder, folder_id, uris, document })
 }
 
 #[derive(Deserialize)]
@@ -596,6 +640,124 @@ esac
         assert_eq!(items[0]["folderId"], "f1");
         assert_eq!(items[0]["login"]["username"], "admin");
         assert_eq!(items[0]["login"]["password"], "Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prepared_maps_folder_id_name_and_capped_uris_from_summary() {
+        let folders: Vec<BwFolder> = serde_json::from_str(
+            r#"[
+              {"id":null,"name":"No Folder"},
+              {"id":"f-cu","name":"cu-sandbox"},
+              {"id":"f-spaced","name":" exact-spaces "},
+              {"id":"f-deny","name":"no-agents"}
+            ]"#,
+        )
+        .expect("folders JSON");
+
+        // Folder resolved, URIs cleaned (null/blank/control skipped, outer spaces trimmed).
+        let raw = r#"{
+          "id":"item-uuid-1",
+          "name":"Acme Portal",
+          "folderId":"f-cu",
+          "type":1,
+          "login":{
+            "username":"alice",
+            "password":"secret",
+            "uris":[
+              {"uri":null},
+              {"uri":""},
+              {"uri":"   "},
+              {"uri":"https://bad.example/\n"},
+              {"uri":"https://bad.example/a\nb"},
+              {"uri":"  https://portal.acme.com/login  "},
+              {"uri":"https://status.acme.com"}
+            ]
+          }
+        }"#;
+        let summary: BwSummary = serde_json::from_str(raw).expect("summary JSON");
+        let prepared = prepare_summary("Acme Portal", summary, &folders, "no-agents", &fields(&["username", "password"]), Zeroizing::new(raw.as_bytes().to_vec()))
+            .expect("prepared");
+        assert_eq!(prepared.id, "item-uuid-1");
+        assert_eq!(prepared.name, "Acme Portal");
+        assert_eq!(prepared.folder_id.as_deref(), Some("f-cu"));
+        assert_eq!(prepared.folder.as_deref(), Some("cu-sandbox"));
+        assert_eq!(prepared.uris, vec!["https://portal.acme.com/login", "https://status.acme.com"]);
+
+        // Exact untrimmed folder name is preserved.
+        let spaced: BwSummary = serde_json::from_str(r#"{"id":"i2","name":"Spaced","folderId":"f-spaced","type":2,"notes":"x"}"#).expect("summary");
+        let prepared_spaced = prepare_summary("i2", spaced, &folders, "no-agents", &fields(&["notes"]), Zeroizing::new(Vec::new())).expect("prepared");
+        assert_eq!(prepared_spaced.folder_id.as_deref(), Some("f-spaced"));
+        assert_eq!(prepared_spaced.folder.as_deref(), Some(" exact-spaces "));
+        assert!(prepared_spaced.uris.is_empty());
+
+        // Unknown folderId keeps folder_id and sets folder to None.
+        let unknown_folder: BwSummary = serde_json::from_str(r#"{"id":"i3","name":"Orphan","folderId":"f-missing","type":2,"notes":"x"}"#).expect("summary");
+        let prepared_orphan = prepare_summary("i3", unknown_folder, &folders, "no-agents", &fields(&["notes"]), Zeroizing::new(Vec::new())).expect("prepared");
+        assert_eq!(prepared_orphan.folder_id.as_deref(), Some("f-missing"));
+        assert_eq!(prepared_orphan.folder, None);
+
+        // No folder -> both None.
+        let no_folder: BwSummary = serde_json::from_str(r#"{"id":"i4","name":"Plain","folderId":null,"type":2,"notes":"x"}"#).expect("summary");
+        let prepared_plain = prepare_summary("i4", no_folder, &folders, "no-agents", &fields(&["notes"]), Zeroizing::new(Vec::new())).expect("prepared");
+        assert_eq!(prepared_plain.folder_id, None);
+        assert_eq!(prepared_plain.folder, None);
+
+        // Deny folder is refused and hides the folder from the requester.
+        let denied: BwSummary = serde_json::from_str(r#"{"id":"i5","name":"Bank","folderId":"f-deny","type":1,"login":{"password":"pin"}}"#).expect("summary");
+        let refusal = prepare_summary("Bank", denied, &folders, "no-agents", &fields(&["password"]), Zeroizing::new(Vec::new()))
+            .err()
+            .expect("denied folder refused");
+        assert!(refusal.log.contains("no-agents"));
+        assert!(!refusal.requester.contains("no-agents"));
+
+        // URIs are capped at MAX_ITEM_URIS (64).
+        let many_uris: Vec<serde_json::Value> = (0..70).map(|i| serde_json::json!({ "uri": format!("https://site-{i}.example/login") })).collect();
+        let capped_json = serde_json::json!({
+            "id": "i6",
+            "name": "Many URIs",
+            "type": 1,
+            "login": { "password": "pw", "uris": many_uris }
+        });
+        let capped_summary: BwSummary = serde_json::from_value(capped_json).expect("summary");
+        let prepared_capped = prepare_summary("i6", capped_summary, &folders, "no-agents", &fields(&["password"]), Zeroizing::new(Vec::new())).expect("prepared");
+        assert_eq!(prepared_capped.uris.len(), MAX_ITEM_URIS);
+        assert_eq!(prepared_capped.uris.first().map(String::as_str), Some("https://site-0.example/login"));
+        assert_eq!(prepared_capped.uris.last().map(String::as_str), Some("https://site-63.example/login"));
+    }
+
+    #[tokio::test]
+    async fn prepare_resolves_folder_via_bw_and_skips_folders_when_unfoldered() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pi-dish-vault-prepare-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let bw = dir.join("bw");
+        let foldered = r#"{"id":"item-1","name":"Acme","folderId":"f-cu","type":1,"login":{"password":"pw","uris":[{"uri":"https://portal.acme.com/login"}]}}"#;
+        let unfoldered = r#"{"id":"item-2","name":"Note","folderId":null,"type":2,"notes":"hi"}"#;
+        std::fs::write(
+            &bw,
+            format!(
+                "#!/bin/sh\ndir=$(dirname \"$0\")\necho \"$*\" >> \"$dir/argv\"\ncase \"$1 $2 $3\" in\n  'list folders '*) echo '[{{\"id\":\"f-cu\",\"name\":\"cu-sandbox\"}}]' ;;\n  'get item item-1') echo '{foldered}' ;;\n  'get item item-2') echo '{unfoldered}' ;;\n  *) exit 1 ;;\nesac\n"
+            ),
+        )
+        .expect("write stub");
+        std::fs::set_permissions(&bw, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        let vault = Vault::new(bw.to_string_lossy().into_owned(), "no-agents".to_string(), "agent-created".to_string(), Some(SecretString::from("key")));
+
+        let p1 = vault.prepare("item-1", &fields(&["password"])).await.expect("foldered item");
+        assert_eq!(p1.id, "item-1");
+        assert_eq!(p1.folder_id.as_deref(), Some("f-cu"));
+        assert_eq!(p1.folder.as_deref(), Some("cu-sandbox"));
+        assert_eq!(p1.uris, vec!["https://portal.acme.com/login"]);
+
+        let p2 = vault.prepare("item-2", &fields(&["notes"])).await.expect("unfoldered item");
+        assert_eq!(p2.id, "item-2");
+        assert_eq!(p2.folder_id, None);
+        assert_eq!(p2.folder, None);
+        assert!(p2.uris.is_empty());
+
+        let argv = std::fs::read_to_string(dir.join("argv")).expect("argv log");
+        assert_eq!(argv.matches("list folders").count(), 1, "{argv}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
