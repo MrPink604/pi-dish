@@ -9,7 +9,16 @@ import path = require('node:path');
 import type { IncomingMessage, OutgoingHttpHeaders } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type * as WS from 'ws';
-import { createCuBrokerClient, TAKEOVER_BROKER_TIMEOUT_MS, type CuBrokerClient } from './cu-broker';
+import {
+  createCuBrokerClient,
+  DEFAULT_BROKER_TIMEOUT_MS,
+  FILL_CANCEL_BROKER_TIMEOUT_MS,
+  FILL_EXECUTE_BROKER_TIMEOUT_MS,
+  FILL_MAX_WAIT_MS,
+  FILL_PENDING_TIMEOUT_HEADROOM_MS,
+  TAKEOVER_BROKER_TIMEOUT_MS,
+  type CuBrokerClient,
+} from './cu-broker';
 import type { CuBrokerEvent } from './cu-agent-leases';
 import type { TransportHandler, TransportRequest, TransportResponse } from './access-handlers';
 import { errorMessage, errorStatus, requestBody } from './http-boundary';
@@ -776,15 +785,20 @@ function withSpacesViewerPath(viewer: unknown): Record<string, unknown> | null {
   return { ...viewer, spacesPath };
 }
 
-const AGENT_SECRET_KEYS = new Set(['sessionSecret', 'tokenHash', 'claimNonce', 'mcpToken']);
+const AGENT_SECRET_KEYS = new Set(['sessionSecret', 'tokenHash', 'claimNonce', 'mcpToken', 'nonce', 'publicKey', 'sealed']);
+const FILL_ROUTE_SECRET_KEYS = new Set(['sessionSecret', 'tokenHash', 'claimNonce', 'mcpToken']);
 const NESTED_SCRUB_KEYS = ['lease', 'preempted', 'handedBackTo', 'displaced', 'previous', 'released', 'holder', 'cancelled', 'reaped', 'cancelledReservation'] as const;
+const FILL_CAPABILITY = 'vault_fill';
+const FILL_REQUEST_ID_RE = /^fill-[0-9a-f]{32}$/;
+const FILL_CANCEL_REASONS = new Set(['denied', 'timeout', 'error', 'cancelled']);
+const MAX_FILL_SEALED_CHARS = 21_846;
 const DEFAULT_SSE_DRAIN_TIMEOUT_MS = 15_000;
 const DEFAULT_SSE_MAX_BUFFERED_BYTES = 256 * 1024;
 
-function stripAgentSecretsRecord(source: Record<string, unknown>): Record<string, unknown> {
+function stripSecretKeysRecord(source: Record<string, unknown>, secretKeys: ReadonlySet<string>): Record<string, unknown> {
   let changed = false;
   const out: Record<string, unknown> = { ...source };
-  for (const secretKey of AGENT_SECRET_KEYS) {
+  for (const secretKey of secretKeys) {
     if (secretKey in out) {
       delete out[secretKey];
       changed = true;
@@ -793,20 +807,20 @@ function stripAgentSecretsRecord(source: Record<string, unknown>): Record<string
   for (const nestedKey of NESTED_SCRUB_KEYS) {
     const val = out[nestedKey];
     if (isRecord(val)) {
-      const scrubbed = stripAgentSecretsRecord(val);
+      const scrubbed = stripSecretKeysRecord(val, secretKeys);
       if (scrubbed !== val) {
         out[nestedKey] = scrubbed;
         changed = true;
       }
     }
   }
-  for (const listKey of ['entries', 'events'] as const) {
+  for (const listKey of ['entries', 'events', 'requests'] as const) {
     const list = out[listKey];
     if (!Array.isArray(list)) continue;
     let listChanged = false;
     const scrubbedList = list.map((item: unknown) => {
       if (!isRecord(item)) return item;
-      const scrubbed = stripAgentSecretsRecord(item);
+      const scrubbed = stripSecretKeysRecord(item, secretKeys);
       if (scrubbed !== item) listChanged = true;
       return scrubbed;
     });
@@ -820,7 +834,12 @@ function stripAgentSecretsRecord(source: Record<string, unknown>): Record<string
 
 function stripAgentSecrets<T>(value: T): T {
   if (!isRecord(value)) return value;
-  return stripAgentSecretsRecord(value) as T;
+  return stripSecretKeysRecord(value, AGENT_SECRET_KEYS) as T;
+}
+
+function stripFillRouteSecrets<T>(value: T): T {
+  if (!isRecord(value)) return value;
+  return stripSecretKeysRecord(value, FILL_ROUTE_SECRET_KEYS) as T;
 }
 
 function parseBrokerEventId(eventId: string | null): { generation: string; cursor: number } | null {
@@ -869,6 +888,10 @@ export interface CuHandlers {
   release: TransportHandler;
   viewerTicket: TransportHandler;
   audit: TransportHandler;
+  fillPending: TransportHandler;
+  fillExecute: TransportHandler;
+  fillCancel: TransportHandler;
+  fillStatus: TransportHandler;
   spacesProxy: TransportHandler;
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;
   stop(): void;
@@ -924,9 +947,18 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   let brokerWatchSynced = false;
   let brokerState: string | null = null;
   let latestEpoch = -1;
+  let vaultFillSupported: boolean | null = null;
   let watchGeneration: string | null = null;
   let watchCursor: number | null = null;
   let watchSyncWaiters: Array<() => void> = [];
+
+  function recordBrokerCapabilities(body: Record<string, unknown>): void {
+    if (Array.isArray(body.capabilities)) {
+      vaultFillSupported = body.capabilities.includes(FILL_CAPABILITY);
+    } else if (!('capabilities' in body)) {
+      vaultFillSupported = false;
+    }
+  }
 
   function isHumanControlActive(): boolean {
     return brokerWatchSynced && brokerState === 'human';
@@ -1078,6 +1110,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
   function handleWatchLost(): void {
     brokerWatchSynced = false;
     brokerState = null;
+    vaultFillSupported = null;
     revokeInteractiveTickets(null);
     revokeAllActive('Broker watch lost');
     resolveWatchSyncWaiters();
@@ -1177,6 +1210,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         resetEpoch: shouldReset,
         generationChanged,
       });
+      if (isHello) recordBrokerCapabilities(parsed);
 
       ports.onBrokerEvent?.({
         eventName: currentEventName || (isHello ? 'hello' : 'message'),
@@ -1287,9 +1321,41 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     res.status(status).json(stripAgentSecrets(normalizeBrokerErrorBody(status, body)));
   }
 
+  function sendFillReply(res: TransportResponse, status: number, body: unknown): void {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.status(status).json(stripFillRouteSecrets(normalizeBrokerErrorBody(status, body)));
+  }
+
   function sendBrokerFailure(res: TransportResponse, error: unknown): void {
     if (res.headersSent) return;
     res.status(errorStatus(error, 502)).json({ error: errorMessage(error) });
+  }
+
+  async function ensureVaultFillAvailable(res: TransportResponse): Promise<boolean> {
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (!ensureAvailable(res)) return false;
+    if (vaultFillSupported === null) {
+      try {
+        const reply = await broker.requestJson('GET', '/v1/status');
+        if (reply.status === 200 && isRecord(reply.body)) {
+          const st = typeof reply.body.state === 'string' ? reply.body.state : null;
+          const ep = typeof reply.body.epoch === 'number' && Number.isFinite(reply.body.epoch) ? reply.body.epoch : null;
+          if (st !== null && ep !== null) applyBrokerSnapshot(st, ep);
+          recordBrokerCapabilities(reply.body);
+        } else {
+          res.status(503).json({ error: 'Computer-use broker status unavailable', code: 'broker_unavailable' });
+          return false;
+        }
+      } catch (error) {
+        sendBrokerFailure(res, error);
+        return false;
+      }
+    }
+    if (vaultFillSupported !== true) {
+      res.status(404).json({ error: 'Computer-use vault fill is not available on this host', code: 'vault_fill_unavailable' });
+      return false;
+    }
+    return true;
   }
 
   const status: TransportHandler = async (_req, res) => {
@@ -1300,6 +1366,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
         const st = typeof reply.body.state === 'string' ? reply.body.state : null;
         const ep = typeof reply.body.epoch === 'number' && Number.isFinite(reply.body.epoch) ? reply.body.epoch : null;
         if (st !== null && ep !== null) applyBrokerSnapshot(st, ep);
+        recordBrokerCapabilities(reply.body);
       }
       sendBrokerReply(res, reply.status, reply.body);
     } catch (error) {
@@ -1459,6 +1526,14 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
 
         const flushCompleteFrame = (): boolean => {
           if (!frameHeaderLines.length && !frameDataLines.length) return true;
+          // Vault fill material must never travel on the viewer/control SSE stream.
+          const isFillEvent = frameHeaderLines.some(line => /^event:\s*fill(?:$|[_-])/i.test(line));
+          if (isFillEvent) {
+            frameHeaderLines = [];
+            frameDataLines = [];
+            frameBytes = 0;
+            return true;
+          }
           const outLines: string[] = [...frameHeaderLines];
           if (frameDataLines.length) {
             const rawData = frameDataLines.join('\n');
@@ -1740,6 +1815,156 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
       sendBrokerReply(res, reply.status, reply.body);
     } catch (error) {
       sendBrokerFailure(res, error);
+    }
+  };
+
+  function handleFillCryptoUnavailable(res: TransportResponse, statusCode: number, body: unknown): boolean {
+    if (statusCode === 503 && isRecord(body) && body.code === 'crypto_unavailable') {
+      vaultFillSupported = false;
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.status(404).json({ error: 'Computer-use vault fill is not available on this host', code: 'vault_fill_unavailable' });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Long-poll passthrough for pending vault fill requests (`GET /api/cu/fill/pending`).
+   * Clamps `waitMs <= 25 s`, raises the broker timeout accordingly, and aborts
+   * the control.sock call if the hub disconnects. Never logs request/response bodies.
+   */
+  const fillPending: TransportHandler = async (req, res) => {
+    if (!(await ensureVaultFillAvailable(res))) return;
+    const params = new URLSearchParams();
+    if (req.query.since !== undefined && req.query.since !== '') {
+      if (typeof req.query.since !== 'string' || !/^\d+$/.test(req.query.since) || !Number.isSafeInteger(Number(req.query.since))) {
+        res.status(400).json({ ok: false, code: 'invalid_query', error: 'since must be a non-negative integer' });
+        return;
+      }
+      params.set('since', req.query.since);
+    }
+    let waitMs = 0;
+    if (req.query.waitMs !== undefined && req.query.waitMs !== '') {
+      if (typeof req.query.waitMs !== 'string' || !/^\d+$/.test(req.query.waitMs)) {
+        res.status(400).json({ ok: false, code: 'invalid_query', error: 'waitMs must be a non-negative integer' });
+        return;
+      }
+      waitMs = Math.min(FILL_MAX_WAIT_MS, Number(req.query.waitMs));
+      params.set('waitMs', String(waitMs));
+    }
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    req.once('close', onClose);
+    res.once('close', onClose);
+    const timeoutMs = Math.max(DEFAULT_BROKER_TIMEOUT_MS, waitMs + FILL_PENDING_TIMEOUT_HEADROOM_MS);
+    const qs = params.toString();
+    try {
+      const reply = await broker.requestJson('GET', `/v1/fill/pending${qs ? `?${qs}` : ''}`, undefined, { timeoutMs, signal: controller.signal });
+      if (res.writableEnded || res.destroyed) return;
+      if (handleFillCryptoUnavailable(res, reply.status, reply.body)) return;
+      sendFillReply(res, reply.status, reply.body);
+    } catch (error) {
+      if (controller.signal.aborted || res.writableEnded || res.destroyed) return;
+      sendBrokerFailure(res, error);
+    } finally {
+      req.removeListener('close', onClose);
+      res.removeListener('close', onClose);
+    }
+  };
+
+  /**
+   * Executes one sealed fill request (`POST /api/cu/fill/execute`, 45 s broker timeout).
+   * Strictly forwards only `{ requestId, sealed }` and never logs the request body.
+   */
+  const fillExecute: TransportHandler = async (req, res) => {
+    if (!(await ensureVaultFillAvailable(res))) return;
+    const raw = requestBody(req);
+    const requestId = typeof raw.requestId === 'string' ? raw.requestId : '';
+    if (!FILL_REQUEST_ID_RE.test(requestId)) {
+      res.status(400).json({ ok: false, code: 'invalid_request_id', error: 'requestId must be a fill-<32 hex> id' });
+      return;
+    }
+    const sealed = typeof raw.sealed === 'string' ? raw.sealed : '';
+    if (!sealed) {
+      res.status(400).json({ ok: false, code: 'invalid_fill_request', error: 'sealed envelope string is required', requestId });
+      return;
+    }
+    if (sealed.length > MAX_FILL_SEALED_CHARS) {
+      res.status(413).json({ ok: false, code: 'envelope_too_large', error: 'Sealed envelope exceeds maximum size', requestId });
+      return;
+    }
+    try {
+      const reply = await broker.requestJson('POST', '/v1/fill/execute', { requestId, sealed }, { timeoutMs: FILL_EXECUTE_BROKER_TIMEOUT_MS });
+      if (handleFillCryptoUnavailable(res, reply.status, reply.body)) return;
+      sendFillReply(res, reply.status, reply.body);
+    } catch (error) {
+      sendBrokerFailure(res, error);
+    }
+  };
+
+  /** Cancels a pending vault fill request (`POST /api/cu/fill/cancel`). */
+  const fillCancel: TransportHandler = async (req, res) => {
+    if (!(await ensureVaultFillAvailable(res))) return;
+    const raw = requestBody(req);
+    const requestId = typeof raw.requestId === 'string' ? raw.requestId : '';
+    if (!FILL_REQUEST_ID_RE.test(requestId)) {
+      res.status(400).json({ ok: false, code: 'invalid_request_id', error: 'requestId must be a fill-<32 hex> id' });
+      return;
+    }
+    const payload: Record<string, unknown> = { requestId };
+    if (raw.reason !== undefined) {
+      if (typeof raw.reason !== 'string' || !FILL_CANCEL_REASONS.has(raw.reason)) {
+        res.status(400).json({ ok: false, code: 'invalid_reason', error: 'reason must be denied, timeout, error, or cancelled', requestId });
+        return;
+      }
+      payload.reason = raw.reason;
+    }
+    try {
+      const reply = await broker.requestJson('POST', '/v1/fill/cancel', payload, { timeoutMs: FILL_CANCEL_BROKER_TIMEOUT_MS });
+      if (handleFillCryptoUnavailable(res, reply.status, reply.body)) return;
+      sendFillReply(res, reply.status, reply.body);
+    } catch (error) {
+      sendBrokerFailure(res, error);
+    }
+  };
+
+  /**
+   * Queries status of a vault fill request (`GET /api/cu/fill/status?requestId=&waitMs=`),
+   * forwarding to the broker's `POST /v1/fill/status` endpoint over control.sock.
+   */
+  const fillStatus: TransportHandler = async (req, res) => {
+    if (!(await ensureVaultFillAvailable(res))) return;
+    const requestId = typeof req.query.requestId === 'string' ? req.query.requestId : '';
+    if (!FILL_REQUEST_ID_RE.test(requestId)) {
+      res.status(400).json({ ok: false, code: 'invalid_request_id', error: 'requestId must be a fill-<32 hex> id' });
+      return;
+    }
+    let waitMs = 0;
+    if (req.query.waitMs !== undefined && req.query.waitMs !== '') {
+      if (typeof req.query.waitMs !== 'string' || !/^\d+$/.test(req.query.waitMs)) {
+        res.status(400).json({ ok: false, code: 'invalid_query', error: 'waitMs must be a non-negative integer', requestId });
+        return;
+      }
+      waitMs = Math.min(FILL_MAX_WAIT_MS, Number(req.query.waitMs));
+    }
+    const payload: Record<string, unknown> = { requestId };
+    if (waitMs > 0) payload.waitMs = waitMs;
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    req.once('close', onClose);
+    res.once('close', onClose);
+    const timeoutMs = Math.max(DEFAULT_BROKER_TIMEOUT_MS, waitMs + FILL_PENDING_TIMEOUT_HEADROOM_MS);
+    try {
+      const reply = await broker.requestJson('POST', '/v1/fill/status', payload, { timeoutMs, signal: controller.signal });
+      if (res.writableEnded || res.destroyed) return;
+      if (handleFillCryptoUnavailable(res, reply.status, reply.body)) return;
+      sendFillReply(res, reply.status, reply.body);
+    } catch (error) {
+      if (controller.signal.aborted || res.writableEnded || res.destroyed) return;
+      sendBrokerFailure(res, error);
+    } finally {
+      req.removeListener('close', onClose);
+      res.removeListener('close', onClose);
     }
   };
 
@@ -2306,6 +2531,7 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     stopped = true;
     brokerWatchSynced = false;
     brokerState = null;
+    vaultFillSupported = null;
     viewerTickets.clear();
     mediaTickets.clear();
     for (const closeStream of [...activeBrokerStreams]) {
@@ -2328,6 +2554,10 @@ export function createCuHandlers(ports: CuHandlersPorts): CuHandlers {
     release,
     viewerTicket,
     audit,
+    fillPending,
+    fillExecute,
+    fillCancel,
+    fillStatus,
     spacesProxy,
     upgrade,
     stop,

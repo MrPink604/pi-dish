@@ -123,6 +123,10 @@ export interface CuHandlers {
     release: TransportHandler;
     viewerTicket: TransportHandler;
     audit: TransportHandler;
+    fillPending: TransportHandler;
+    fillExecute: TransportHandler;
+    fillCancel: TransportHandler;
+    fillStatus: TransportHandler;
     spacesProxy: TransportHandler;
     upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;
     stop(): void;

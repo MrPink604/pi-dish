@@ -10,6 +10,11 @@ import { httpError } from './http-boundary';
 // broker (8s) < guest spaces proxy (10s) < hub relay (15s) < browser (25s).
 export const DEFAULT_BROKER_TIMEOUT_MS = 8_000;
 export const TAKEOVER_BROKER_TIMEOUT_MS = 8_000;
+// Slice 3 vault fill calls carry their own longer broker deadlines.
+export const FILL_MAX_WAIT_MS = 25_000;
+export const FILL_PENDING_TIMEOUT_HEADROOM_MS = 10_000;
+export const FILL_EXECUTE_BROKER_TIMEOUT_MS = 45_000;
+export const FILL_CANCEL_BROKER_TIMEOUT_MS = 15_000;
 const MAX_BROKER_BODY_BYTES = 2 * 1024 * 1024;
 
 export interface CuBrokerResponse {
@@ -41,7 +46,7 @@ export interface CuBrokerClient {
     method: 'GET' | 'POST',
     endpointPath: string,
     body?: unknown,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<CuBrokerResponse>;
   openEvents(
     onResponse: (res: http.IncomingMessage) => void,
@@ -80,7 +85,7 @@ export function createCuBrokerClient(options: CuBrokerClientOptions = {}): CuBro
     method: 'GET' | 'POST',
     endpointPath: string,
     body?: unknown,
-    reqOptions: { timeoutMs?: number } = {},
+    reqOptions: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<CuBrokerResponse> {
     const candidate = resolveSocket();
     if (!candidate) {
@@ -89,6 +94,10 @@ export function createCuBrokerClient(options: CuBrokerClientOptions = {}): CuBro
     const socket = isSocketPathLive(candidate) ? candidate : null;
     if (!socket) {
       return Promise.reject(httpError('Computer-use broker is unavailable', 503));
+    }
+    const signal = reqOptions.signal;
+    if (signal?.aborted) {
+      return Promise.reject(httpError('cu-broker request aborted', 499));
     }
     const timeoutMs = reqOptions.timeoutMs ?? DEFAULT_BROKER_TIMEOUT_MS;
     const payload = body !== undefined ? JSON.stringify(body) : null;
@@ -103,10 +112,15 @@ export function createCuBrokerClient(options: CuBrokerClientOptions = {}): CuBro
 
     return new Promise<CuBrokerResponse>((resolve, reject) => {
       let settled = false;
+      const onAbort = () => {
+        try { req.destroy(); } catch {}
+        finish({ ok: false, error: httpError('cu-broker request aborted', 499) });
+      };
       const finish = (outcome: { ok: true; value: CuBrokerResponse } | { ok: false; error: Error }) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         if (outcome.ok) resolve(outcome.value);
         else reject(outcome.error);
       };
@@ -141,6 +155,7 @@ export function createCuBrokerClient(options: CuBrokerClientOptions = {}): CuBro
         finish({ ok: false, error: httpError('cu-broker request timed out', 504) });
       }, timeoutMs);
       timer.unref();
+      signal?.addEventListener('abort', onAbort, { once: true });
 
       req.on('error', () => {
         finish({ ok: false, error: httpError('cu-broker is unavailable', 503) });

@@ -11,6 +11,7 @@
     "skills/pi-dish-pages/scripts/pi-dish-pages.ts",
     "skills/pi-dish-review/scripts/pi-dish-review.ts",
     "skills/pi-dish-vault/scripts/pi-dish-vault.ts",
+    "skills/pi-dish-vault/scripts/cu-fill-seal.ts",
     "extensions/pi-dish-share-omp.mts"
   ]
 }

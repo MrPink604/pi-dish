@@ -2,6 +2,10 @@
 import http = require('node:http');
 export declare const DEFAULT_BROKER_TIMEOUT_MS = 8000;
 export declare const TAKEOVER_BROKER_TIMEOUT_MS = 8000;
+export declare const FILL_MAX_WAIT_MS = 25000;
+export declare const FILL_PENDING_TIMEOUT_HEADROOM_MS = 10000;
+export declare const FILL_EXECUTE_BROKER_TIMEOUT_MS = 45000;
+export declare const FILL_CANCEL_BROKER_TIMEOUT_MS = 15000;
 export interface CuBrokerResponse {
     status: number;
     body: unknown;
@@ -26,6 +30,7 @@ export interface CuBrokerClient {
     available(): boolean;
     requestJson(method: 'GET' | 'POST', endpointPath: string, body?: unknown, options?: {
         timeoutMs?: number;
+        signal?: AbortSignal;
     }): Promise<CuBrokerResponse>;
     openEvents(onResponse: (res: http.IncomingMessage) => void, onError: (error: Error) => void, options?: CuBrokerEventsOptions): http.ClientRequest | null;
 }

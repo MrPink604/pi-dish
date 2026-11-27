@@ -23,6 +23,7 @@ import { createAccessHandlers } from './access-handlers';
 import { createCuBrokerClient } from './cu-broker';
 import { createCuAgentLeases, CuBrokerUnavailableError, CuSeatBusyError, cuBrokerUnavailableResponseFields, type CuCommandTarget } from './cu-agent-leases';
 import { createCuHandlers } from './cu-handlers';
+import { createCuVaultFillCoordinator, readCuVaultFillConfig, type CuVaultFillCoordinator } from './cu-vault-fill';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';
 import { createPublicationHandlers } from './publication-handlers';
@@ -193,6 +194,10 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/cu/release', accessHandlers.cuMutationGuard, cuHandlers.release);
   app.post('/api/cu/viewer/ticket', accessHandlers.cuMutationGuard, cuHandlers.viewerTicket);
   app.get('/api/cu/audit', cuHandlers.audit);
+  app.get('/api/cu/fill/pending', cuHandlers.fillPending);
+  app.post('/api/cu/fill/execute', accessHandlers.cuMutationGuard, cuHandlers.fillExecute);
+  app.post('/api/cu/fill/cancel', accessHandlers.cuMutationGuard, cuHandlers.fillCancel);
+  app.get('/api/cu/fill/status', cuHandlers.fillStatus);
 
   const relayHandlers = createRelayHandlers({
     fleetArtifacts,
@@ -1473,6 +1478,7 @@ export function startServer(rootDirectory: string): Server {
 
   let recoveryStopped = false;
   let ciWatcher: CiWatcher | undefined;
+  let cuVaultFill: CuVaultFillCoordinator | undefined;
   let tmuxServerWatch: TmuxServerWatch | undefined;
   let stopTmuxNoServerWatch: (() => void) | undefined;
   let stopTmuxSpawnWatch: (() => void) | undefined;
@@ -1481,6 +1487,7 @@ export function startServer(rootDirectory: string): Server {
     recoveryRunner.stop();
     routineRunner?.stop();
     ciWatcher?.stop();
+    cuVaultFill?.stop();
     tmuxServerWatch?.stop();
     stopTmuxNoServerWatch?.();
     stopTmuxSpawnWatch?.();
@@ -1611,6 +1618,19 @@ export function startServer(rootDirectory: string): Server {
             ciWatcher.start();
           }
         } catch (error) { console.error(`[ci-watcher] ${errorMessage(error)}`); }
+      }
+      if (process.env.PI_DISH_CU_VAULT_FILL !== 'off') {
+        try {
+          const fillConfig = readCuVaultFillConfig(automationSettings);
+          if (fillConfig) {
+            cuVaultFill = createCuVaultFillCoordinator({
+              config: fillConfig,
+              rootDirectory,
+              log: message => console.error(`[cu-vault-fill] ${message}`),
+            });
+            cuVaultFill.start();
+          }
+        } catch (error) { console.error(`[cu-vault-fill] ${errorMessage(error)}`); }
       }
       // Prime roots live in the daemon roster, not the bridge registry, so poll it.
       getPrimeDaemon().start();

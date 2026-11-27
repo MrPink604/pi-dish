@@ -169,6 +169,25 @@ test('the notification names the claimed session, the device and the item', () =
     assert.equal(payload.body, 'Htpc provision on desktop wants fleet-sudo-desktop (password) — install rocprofiler');
     assert.equal(payload.tag, `vault:${payload.vaultRequestId}`);
     assert.equal((0, vault_approvals_1.vaultPushPayload)(created(instance, { session: null, reason: 'r'.repeat(400) })).body.length, 180);
+    // topOrigin is validated and surfaced when it differs from origin (hidden when equal).
+    const crossFrame = created(instance, {
+        session: null,
+        origin: 'https://auth.acme.example',
+        topOrigin: 'https://www.acme.example',
+        itemUris: ['https://auth.acme.example/login'],
+        reason: 'sign in',
+    });
+    assert.equal(crossFrame.topOrigin, 'https://www.acme.example');
+    assert.match((0, vault_approvals_1.vaultPushPayload)(crossFrame).body, /on https:\/\/auth\.acme\.example \(page https:\/\/www\.acme\.example\) \[origin matched\]/);
+    const sameFrame = created(instance, {
+        session: null,
+        origin: 'https://auth.acme.example',
+        topOrigin: 'https://auth.acme.example',
+        itemUris: ['https://auth.acme.example/login'],
+        reason: 'sign in',
+    });
+    assert.ok(!(0, vault_approvals_1.vaultPushPayload)(sameFrame).body.includes('(page '));
+    assert.equal(create(instance, { topOrigin: 'https://bad.example/path' }).ok, false);
 });
 test('a create always asks: no window opens, and a release window never covers it', () => {
     const { instance, notified } = vault();

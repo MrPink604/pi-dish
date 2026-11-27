@@ -18,6 +18,7 @@ function buildOverview(expiresAt, session) {
                 folder: 'cu-sandbox',
                 fields: ['username', 'password'],
                 origin: 'https://portal.acme.com',
+                topOrigin: 'https://www.acme.com',
                 originMatch: 'match',
                 allowWindow: false,
                 policyName: 'cu-sandbox',
@@ -50,6 +51,7 @@ function buildOverview(expiresAt, session) {
                 folder: null,
                 fields: ['password'],
                 origin: 'https://other.example',
+                topOrigin: 'https://other.example',
                 originMatch: 'mismatch',
                 allowWindow: true,
                 policyName: null,
@@ -81,7 +83,8 @@ async function openVaultPanel(page, overview) {
     const cuCard = page.locator('.vault-panel .vault-card[data-vault-request="vault-req-cu-1"]');
     await (0, fixtures_js_1.expect)(cuCard).toBeVisible();
     await (0, fixtures_js_1.expect)(cuCard.locator('.vault-policy')).toHaveText('cu-sandbox');
-    await (0, fixtures_js_1.expect)(cuCard.locator('.vault-origin')).toHaveText('https://portal.acme.com');
+    await (0, fixtures_js_1.expect)(cuCard.locator('.vault-origin').first()).toHaveText('https://portal.acme.com');
+    await (0, fixtures_js_1.expect)(cuCard.locator('.vault-top-origin')).toHaveText('https://www.acme.com');
     await (0, fixtures_js_1.expect)(cuCard.locator('[data-vault-origin-match="match"]')).toHaveText('exact match');
     await (0, fixtures_js_1.expect)(cuCard.locator('[data-vault-decision="approve"]')).toBeVisible();
     await (0, fixtures_js_1.expect)(cuCard.locator('[data-vault-decision="deny"]')).toBeVisible();
@@ -92,6 +95,7 @@ async function openVaultPanel(page, overview) {
     await (0, fixtures_js_1.expect)(legacyCard.locator('[data-vault-decision="approve-window"]')).toBeVisible();
     const mismatchCard = page.locator('.vault-panel .vault-card[data-vault-request="vault-req-mismatch-1"]');
     await (0, fixtures_js_1.expect)(mismatchCard.locator('.vault-origin')).toHaveText('https://other.example');
+    await (0, fixtures_js_1.expect)(mismatchCard.locator('.vault-top-origin')).toHaveCount(0);
     await (0, fixtures_js_1.expect)(mismatchCard.locator('[data-vault-origin-match="mismatch"]')).toHaveText('mismatch');
     const panelMetrics = await page.locator('.vault-panel').evaluate(el => {
         const rect = el.getBoundingClientRect();
@@ -132,7 +136,8 @@ fixtures_js_1.test.describe('desktop approval cards (1280x800)', () => {
         const dockedCard = page.locator('#vaultSessionDock .vault-card[data-vault-request="vault-req-cu-1"]');
         await (0, fixtures_js_1.expect)(dockedCard).toBeVisible();
         await (0, fixtures_js_1.expect)(dockedCard.locator('.vault-policy')).toHaveText('cu-sandbox');
-        await (0, fixtures_js_1.expect)(dockedCard.locator('.vault-origin')).toHaveText('https://portal.acme.com');
+        await (0, fixtures_js_1.expect)(dockedCard.locator('.vault-origin').first()).toHaveText('https://portal.acme.com');
+        await (0, fixtures_js_1.expect)(dockedCard.locator('.vault-top-origin')).toHaveText('https://www.acme.com');
         await (0, fixtures_js_1.expect)(dockedCard.locator('[data-vault-origin-match="match"]')).toHaveText('exact match');
         await (0, fixtures_js_1.expect)(dockedCard.locator('[data-vault-decision="approve-window"]')).toHaveCount(0);
         // Panel also renders the legacy no-origin card and mismatch badge cleanly at desktop width.

@@ -79,6 +79,7 @@ test('cards show origin, match badge, policy name, and hide Approve 15 min when 
                 folder: 'cu-sandbox',
                 fields: ['username', 'password'],
                 origin: 'https://portal.acme.com',
+                topOrigin: 'https://www.acme.com',
                 originMatch: 'match',
                 allowWindow: false,
                 policyName: 'cu-sandbox<script>',
@@ -94,6 +95,7 @@ test('cards show origin, match badge, policy name, and hide Approve 15 min when 
                 item: 'Other',
                 fields: ['password'],
                 origin: 'https://evil.example',
+                topOrigin: 'https://evil.example',
                 originMatch: 'mismatch',
                 allowWindow: true,
                 policyName: null,
@@ -112,6 +114,7 @@ test('cards show origin, match badge, policy name, and hide Approve 15 min when 
     assert.equal(view.pending.length, 3);
     assert.equal(view.pending[0].allowWindow, false);
     assert.equal(view.pending[0].origin, 'https://portal.acme.com');
+    assert.equal(view.pending[0].topOrigin, 'https://www.acme.com');
     assert.equal(view.pending[0].originMatch, 'match');
     assert.equal(view.pending[0].policyName, 'cu-sandbox<script>');
     assert.equal(view.pending[1].allowWindow, true);
@@ -120,12 +123,14 @@ test('cards show origin, match badge, policy name, and hide Approve 15 min when 
     assert.equal(view.pending[2].originMatch, 'no-origin');
     const restrictedHtml = vaultCardsHtml([view.pending[0]], { ...options, inSession: false });
     assert.match(restrictedHtml, /https:\/\/portal\.acme\.com/);
+    assert.match(restrictedHtml, /<dt>Top page<\/dt><dd class="vault-origin vault-top-origin">https:\/\/www\.acme\.com<\/dd>/);
     assert.match(restrictedHtml, /data-vault-origin-match="match">exact match/);
     assert.match(restrictedHtml, /cu-sandbox&lt;script&gt;/);
     assert.ok(!restrictedHtml.includes('<script>'));
     assert.ok(!restrictedHtml.includes('approve-window'), 'window button must be hidden when allowWindow is false');
     const mismatchHtml = vaultCardsHtml([view.pending[1]], { ...options, inSession: false });
     assert.match(mismatchHtml, /https:\/\/evil\.example/);
+    assert.ok(!mismatchHtml.includes('vault-top-origin'), 'Top page row stays hidden when topOrigin equals origin');
     assert.match(mismatchHtml, /data-vault-origin-match="mismatch">mismatch/);
     assert.ok(mismatchHtml.includes('approve-window'));
     const legacyHtml = vaultCardsHtml([view.pending[2]], { ...options, inSession: false });

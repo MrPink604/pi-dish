@@ -18,6 +18,7 @@ function buildOverview(expiresAt: number, session?: { ref: string; host: string 
         folder: 'cu-sandbox',
         fields: ['username', 'password'],
         origin: 'https://portal.acme.com',
+        topOrigin: 'https://www.acme.com',
         originMatch: 'match',
         allowWindow: false,
         policyName: 'cu-sandbox',
@@ -50,6 +51,7 @@ function buildOverview(expiresAt: number, session?: { ref: string; host: string 
         folder: null,
         fields: ['password'],
         origin: 'https://other.example',
+        topOrigin: 'https://other.example',
         originMatch: 'mismatch',
         allowWindow: true,
         policyName: null,
@@ -85,7 +87,8 @@ test('approval cards render origin, match badges, policy name, and window gating
   const cuCard = page.locator('.vault-panel .vault-card[data-vault-request="vault-req-cu-1"]');
   await expect(cuCard).toBeVisible();
   await expect(cuCard.locator('.vault-policy')).toHaveText('cu-sandbox');
-  await expect(cuCard.locator('.vault-origin')).toHaveText('https://portal.acme.com');
+  await expect(cuCard.locator('.vault-origin').first()).toHaveText('https://portal.acme.com');
+  await expect(cuCard.locator('.vault-top-origin')).toHaveText('https://www.acme.com');
   await expect(cuCard.locator('[data-vault-origin-match="match"]')).toHaveText('exact match');
   await expect(cuCard.locator('[data-vault-decision="approve"]')).toBeVisible();
   await expect(cuCard.locator('[data-vault-decision="deny"]')).toBeVisible();
@@ -98,6 +101,7 @@ test('approval cards render origin, match badges, policy name, and window gating
 
   const mismatchCard = page.locator('.vault-panel .vault-card[data-vault-request="vault-req-mismatch-1"]');
   await expect(mismatchCard.locator('.vault-origin')).toHaveText('https://other.example');
+  await expect(mismatchCard.locator('.vault-top-origin')).toHaveCount(0);
   await expect(mismatchCard.locator('[data-vault-origin-match="mismatch"]')).toHaveText('mismatch');
 
   const panelMetrics = await page.locator('.vault-panel').evaluate(el => {
@@ -146,7 +150,8 @@ test.describe('desktop approval cards (1280x800)', () => {
     const dockedCard = page.locator('#vaultSessionDock .vault-card[data-vault-request="vault-req-cu-1"]');
     await expect(dockedCard).toBeVisible();
     await expect(dockedCard.locator('.vault-policy')).toHaveText('cu-sandbox');
-    await expect(dockedCard.locator('.vault-origin')).toHaveText('https://portal.acme.com');
+    await expect(dockedCard.locator('.vault-origin').first()).toHaveText('https://portal.acme.com');
+    await expect(dockedCard.locator('.vault-top-origin')).toHaveText('https://www.acme.com');
     await expect(dockedCard.locator('[data-vault-origin-match="match"]')).toHaveText('exact match');
     await expect(dockedCard.locator('[data-vault-decision="approve-window"]')).toHaveCount(0);
 

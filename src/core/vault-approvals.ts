@@ -107,6 +107,8 @@ export interface VaultRequest {
   readonly folder: string | null;
   /** Optional target origin (`scheme://host[:port]`) for origin-checked requests. */
   readonly origin: string | null;
+  /** Optional top-level page origin when the target form lives inside a cross-origin frame. */
+  readonly topOrigin: string | null;
   /** Whether `origin` matched an `https:` stored URI of the item. */
   readonly originMatch: VaultOriginMatch;
   /** False for `create` or when device policy disables 15-minute windows. */
@@ -843,8 +845,9 @@ export function vaultPushPayload(request: VaultRequest): Omit<PushPayload, 'host
     ? `${lead} wants to create ${request.item} in ${request.folder} (${request.fields.join(', ')})`
     : `${lead} wants ${request.item} (${request.fields.join(', ')})`;
   if (request.origin) {
+    const topSuffix = request.topOrigin && request.topOrigin !== request.origin ? ` (page ${request.topOrigin})` : '';
     const badge = request.originMatch === 'match' ? ' [origin matched]' : request.originMatch === 'mismatch' ? ' [origin mismatch]' : '';
-    body += ` on ${request.origin}${badge}`;
+    body += ` on ${request.origin}${topSuffix}${badge}`;
   }
   if (request.reason) body += ` — ${request.reason}`;
   if (body.length > PUSH_BODY_CHARS) body = `${body.slice(0, PUSH_BODY_CHARS - 1)}…`;
@@ -992,6 +995,10 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
       if (rawOrigin === undefined) return fail(400, 'origin must be a bare http(s) origin (scheme://host[:port])');
       const parsedOrigin = rawOrigin ? parseOrigin(rawOrigin) : null;
       if (rawOrigin && !parsedOrigin) return fail(400, 'origin must be a bare http(s) origin (scheme://host[:port])');
+      const rawTopOrigin = optionalCleanString(input.topOrigin, MAX_ORIGIN_CHARS);
+      if (rawTopOrigin === undefined) return fail(400, 'topOrigin must be a bare http(s) origin (scheme://host[:port])');
+      const parsedTopOrigin = rawTopOrigin ? parseOrigin(rawTopOrigin) : null;
+      if (rawTopOrigin && !parsedTopOrigin) return fail(400, 'topOrigin must be a bare http(s) origin (scheme://host[:port])');
       const itemUris = decodeItemUris(input.itemUris);
       if (!itemUris) return fail(400, 'itemUris must be an array of up to 64 URI strings');
       const reason = optionalString(input.reason, 500);
@@ -1003,6 +1010,7 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
       if (!(expiresAt > at)) return fail(400, 'expiresAt must be a future epoch-millisecond time');
 
       const origin = parsedOrigin?.origin ?? null;
+      const topOrigin = parsedTopOrigin?.origin ?? null;
       const originMatch = evaluateOriginMatch(parsedOrigin, itemUris);
       const evalMeta: PolicyEvaluationInput = { action, folderId, folder, fields, parsedOrigin, itemUris, originMatch };
       const resolved = resolveDevicePolicy(device.fingerprint, policyFile(), enrolledFile(), false);
@@ -1062,6 +1070,7 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
         folderId,
         folder,
         origin,
+        topOrigin,
         originMatch,
         allowWindow: verdict.allowWindow,
         policyName: verdict.policyName,

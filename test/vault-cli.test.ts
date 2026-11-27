@@ -200,3 +200,76 @@ test('the inject step refuses a bundle missing a requested custom field', async 
   const failed = await run(process.execPath, [cli, '__inject', JSON.stringify(['KEY=field:api-key']), '--', 'true'], { env }).then(() => false, () => true);
   assert.ok(failed);
 });
+
+test('run carries optional --origin in the envelope and --identity isolates XDG_CONFIG_HOME across commands', async (t) => {
+  const { home } = setup(t, false);
+  const callsLog = path.join(home, 'aac-calls.ndjson');
+  const aac = path.join(home, 'aac-env');
+  fs.writeFileSync(aac, `#!${process.execPath}
+const fs = require('node:fs');
+const argv = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(callsLog)}, JSON.stringify({ argv, xdg: process.env.XDG_CONFIG_HOME || null }) + '\\n');
+if (argv.includes('connections')) { process.stdout.write('ok\\n'); process.exit(0); }
+if (argv.includes('run') && process.env.AAC_REFUSE) process.exit(4);
+process.stdout.write(JSON.stringify({ success: true, credential: { notes: JSON.stringify({ error: 'origin mismatch' }) } }));
+`, { mode: 0o755 });
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: path.join(home, 'default-xdg'),
+    AAC_BIN: aac,
+    PI_DISH_URL: 'http://127.0.0.1:9',
+    PI_DISH_SESSION_ID: '',
+  };
+  delete env.PI_DISH_VAULT_RELAY_URL;
+  delete env.PI_DISH_VAULT_IDENTITIES_DIR;
+  delete env.PI_DISH_VAULT_IDENTITY_HOME;
+
+  await run(process.execPath, [
+    cli, 'run', '--identity', 'cu-sandbox-proxy', '--item', 'Acme Portal',
+    '--origin', 'https://Login.Acme.Example:443', '--reason', 'CU fill',
+    '--env', 'CU_FILL_USERNAME=username', '--env', 'CU_FILL_PASSWORD=password', '--', 'true',
+  ], { env });
+
+  await run(process.execPath, [cli, 'pair', '--identity', 'cu-sandbox-proxy', 'psk-test-token'], { env });
+  await run(process.execPath, [cli, '--identity', 'cu-sandbox-proxy', 'status'], { env });
+
+  // Refused run must pass the same isolated XDG_CONFIG_HOME to explainRefusal's check probe.
+  await run(process.execPath, [
+    cli, 'run', '--identity', 'cu-sandbox-proxy', '--item', 'Acme Portal',
+    '--origin', 'https://login.acme.example', '--env', 'PW=password', '--', 'true',
+  ], { env: { ...env, AAC_REFUSE: '1' } }).then(() => assert.fail('expected exit 4'), (error: { code?: number; stderr?: string }) => {
+    assert.equal(error.code, 4);
+    assert.match(error.stderr ?? '', /refused before approval: origin mismatch/);
+  });
+
+  const expectedXdg = path.join(home, '.pi', 'dish', 'vault', 'identities', 'cu-sandbox-proxy');
+  assert.equal(fs.statSync(expectedXdg).mode & 0o777, 0o700);
+  const calls = fs.readFileSync(callsLog, 'utf8').trim().split('\n').map(line => record(JSON.parse(line)));
+  assert.equal(calls.length, 5);
+  for (const call of calls) {
+    assert.equal(call.xdg, expectedXdg, 'every aac call under --identity must use the isolated 0700 XDG_CONFIG_HOME');
+  }
+  const runArgv = calls[0].argv as string[];
+  assert.deepEqual(decode(runArgv[runArgv.indexOf('--domain') + 1]!), {
+    item: 'Acme Portal',
+    fields: ['username', 'password'],
+    timeoutSec: 300,
+    origin: 'https://login.acme.example',
+    reason: 'CU fill',
+  });
+
+  // Invalid --origin and --identity values are refused before calling aac.
+  for (const badArgs of [
+    ['run', '--item', 'x', '--origin', 'https://example.com/path', '--env', 'PW=password', '--', 'true'],
+    ['run', '--item', 'x', '--origin', 'https://user@example.com', '--env', 'PW=password', '--', 'true'],
+    ['run', '--item', 'x', '--origin', 'ftp://example.com', '--env', 'PW=password', '--', 'true'],
+    ['run', '--item', 'x', '--identity', '../escape', '--env', 'PW=password', '--', 'true'],
+    ['pair', '--identity', 'a/b', 'psk-token'],
+  ]) {
+    const failed = await run(process.execPath, [cli, ...badArgs], { env }).then(() => false, () => true);
+    assert.ok(failed, badArgs.join(' '));
+  }
+  assert.equal(fs.readFileSync(callsLog, 'utf8').trim().split('\n').length, 5);
+});

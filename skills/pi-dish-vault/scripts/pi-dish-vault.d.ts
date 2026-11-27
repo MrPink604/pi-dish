@@ -2,10 +2,17 @@
 // Generated edge from skills/pi-dish-vault/scripts/pi-dish-vault.ts; edit that source and run npm run build:edges.
 export declare const ENVELOPE_PREFIX = "pidish-vault:v1:";
 export declare const FIELDS: readonly ['username', 'password', 'totp', 'uri', 'notes'];
+export declare function validateIdentityName(raw: string): string;
+/** Resolves and creates (0700) the isolated XDG_CONFIG_HOME for a named aac identity. */
+export declare function resolveIdentityConfigHome(identity: string, env?: NodeJS.ProcessEnv): string;
+/** Validates a bare single-line http(s)://host[:port] origin (matching vault-approvals parseOrigin). */
+export declare function normalizeOriginFlag(raw: string): string;
 interface RunArgs {
     item: string;
     env: string[];
     fields: string[];
+    origin: string | null;
+    identity: string | null;
     reason: string | null;
     timeout: number;
     session?: string;
@@ -21,6 +28,7 @@ export interface SessionClaim {
 export declare function encodeEnvelope(body: {
     item: string;
     fields: readonly string[];
+    origin?: string | null;
     reason: string | null;
     session: SessionClaim | null;
     timeoutSec: number;
@@ -30,6 +38,7 @@ interface CreateArgs {
     username: string | null;
     uri: string | null;
     length: number;
+    identity: string | null;
     reason: string | null;
     timeout: number;
     session?: string;

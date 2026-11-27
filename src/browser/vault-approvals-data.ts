@@ -6,7 +6,7 @@ export type VaultDecision = 'approve' | 'approve-window' | 'deny';
 export type VaultOriginMatchView = 'match' | 'mismatch' | 'no-origin';
 export interface VaultRequestView {
   readonly id: string; readonly device: string; readonly action: 'release' | 'create'; readonly item: string; readonly folder: string; readonly fields: readonly string[];
-  readonly origin: string; readonly originMatch: VaultOriginMatchView; readonly allowWindow: boolean; readonly policyName: string;
+  readonly origin: string; readonly topOrigin: string; readonly originMatch: VaultOriginMatchView; readonly allowWindow: boolean; readonly policyName: string;
   readonly reason: string; readonly sessionName: string; readonly sessionRef: string; readonly sessionHost: string; readonly expiresAt: number;
 }
 export interface VaultGrantView {
@@ -38,12 +38,13 @@ export function decodeVaultOverview(value: unknown): VaultOverviewView {
     const session = record(entry.session) ? entry.session : {};
     const action = entry.action === 'create' ? 'create' : 'release';
     const origin = text(entry.origin);
+    const topOrigin = text(entry.topOrigin);
     // Old servers omit allowWindow (default true on release); new servers send explicit false when policy forbids windows.
     const allowWindow = action !== 'create' && (entry.allowWindow === undefined || entry.allowWindow === true);
     return [{
       id: entry.id, device: record(entry.device) ? text(entry.device.name) : '', action,
       item: text(entry.item), folder: text(entry.folder), fields: strings(entry.fields),
-      origin, originMatch: decodeOriginMatch(entry.originMatch, origin), allowWindow, policyName: text(entry.policyName),
+      origin, topOrigin, originMatch: decodeOriginMatch(entry.originMatch, origin), allowWindow, policyName: text(entry.policyName),
       reason: text(entry.reason), sessionName: text(session.name), sessionRef: text(session.ref), sessionHost: text(session.host),
       expiresAt: entry.expiresAt,
     } satisfies VaultRequestView];
@@ -95,6 +96,8 @@ export function vaultCardsHtml(requests: readonly VaultRequestView[], options: {
     const policyLine = request.policyName ? `<dt>Policy</dt><dd><span class="vault-policy" data-vault-policy="${escapeHtml(request.policyName)}">${escapeHtml(request.policyName)}</span></dd>` : '';
     const originLine = !create || request.origin
       ? `<dt>Origin</dt><dd class="vault-origin-row">${request.origin ? `<span class="vault-origin">${escapeHtml(request.origin)}</span>` : ''}${originMatchBadge(request.originMatch)}</dd>` : '';
+    const topOriginLine = request.origin && request.topOrigin && request.topOrigin !== request.origin
+      ? `<dt>Top page</dt><dd class="vault-origin vault-top-origin">${escapeHtml(request.topOrigin)}</dd>` : '';
     return `<article class="vault-card" data-vault-request="${escapeHtml(request.id)}">
       <header><strong>${create ? '➕ Create' : '🔐'} ${escapeHtml(request.item)}</strong><span class="vault-fields">${escapeHtml(request.fields.join(', '))}</span></header>
       <dl>
@@ -103,6 +106,7 @@ export function vaultCardsHtml(requests: readonly VaultRequestView[], options: {
         <dt>Device</dt><dd>${escapeHtml(request.device)}</dd>
         ${policyLine}
         ${originLine}
+        ${topOriginLine}
         ${sessionLine}
         ${request.reason ? `<dt>Reason <small>(reported)</small></dt><dd>${escapeHtml(request.reason)}</dd>` : ''}
         <dt>Expires</dt><dd>in ${escapeHtml(remaining(request.expiresAt, options.now))}</dd>

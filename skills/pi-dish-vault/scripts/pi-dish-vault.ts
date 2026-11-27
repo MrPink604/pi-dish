@@ -8,6 +8,8 @@
  * The `--domain` query carries an envelope naming the item, fields, reason and
  * session, so the approval card can say who is asking and why.
  */
+import fs = require('node:fs');
+import os = require('node:os');
 import path = require('node:path');
 import { spawn, spawnSync } from 'node:child_process';
 import type * as PiDishClient from '../../lib/pi-dish-client.js';
@@ -37,16 +39,20 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_LENGTH = 32;
 const MIN_LENGTH = 16;
 const MAX_LENGTH = 128;
+const MAX_ORIGIN_CHARS = 512;
+const IDENTITY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const HELP: Record<string, string> = {
   run: `run — fetch one Bitwarden item, approved in pi-dish, into one command's environment.
 
-Usage: run --item <id-or-name> --env VAR=field [--env ...] [--reason <text>] [--timeout <secs>] -- <cmd> [args...]
+Usage: run --item <id-or-name> --env VAR=field [--env ...] [--origin <origin>] [--identity <name>] [--reason <text>] [--timeout <secs>] -- <cmd> [args...]
 
 Flags:
   --item NAME      Bitwarden item id or exact name
   --env VAR=FIELD  inject FIELD as $VAR; repeatable. FIELD is username, password, totp,
                    uri, notes, or field:<name> for a custom (text or hidden) field
+  --origin ORIGIN  bare http(s)://host[:port] target origin for origin-checked policies
+  --identity NAME  use an isolated aac XDG_CONFIG_HOME for this named identity
   --reason TEXT    one short, honest line shown on the approval card
   --timeout SECS   how long to wait for the decision (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC})
   --session ID     this caller's session id, when discovery cannot infer it
@@ -58,26 +64,27 @@ Example:
   search: `search — list vault items you may request: ids, kinds, names, URIs and the fields each
 item has (field:<name> for custom fields), never values. No approval needed.
 
-Usage: search [text...] [--json]
+Usage: search [--identity <name>] [text...] [--json]
 
 Without text, lists every requestable item (up to 100). Request an item by its id
 with \`run --item <id>\`; names are not unique. A field the item lacks is refused.`,
   sync: `sync — ask the vault listener to run \`bw sync\`, so items the operator just added or
 changed show up in search and requests. No approval needed.
 
-Usage: sync
+Usage: sync [--identity <name>]
 
 Fails while the vault is locked or Bitwarden is unreachable; the listener's window says which.`,
   create: `create — add one new login to the vault, approved in pi-dish. The listener generates the
 password; it never passes through this host. The login lands in the listener's create folder.
 
-Usage: create --name <name> [--username <user>] [--uri <url>] [--length <n>] [--reason <text>] [--timeout <secs>] [--json]
+Usage: create --name <name> [--username <user>] [--uri <url>] [--length <n>] [--identity <name>] [--reason <text>] [--timeout <secs>] [--json]
 
 Flags:
   --name NAME      the new item's name; refused when a visible item already has it
   --username USER  login username (optional)
   --uri URL        login URI (optional)
   --length N       generated password length, ${MIN_LENGTH}-${MAX_LENGTH} (default ${DEFAULT_LENGTH})
+  --identity NAME  use an isolated aac XDG_CONFIG_HOME for this named identity
   --reason TEXT    one short, honest line shown on the approval card
   --timeout SECS   how long to wait for the decision (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC})
   --session ID     this caller's session id, when discovery cannot infer it
@@ -86,28 +93,94 @@ Prints the new item's id; use it with \`run --item <id> --env PW=password\` to s
 password where it is needed (that release is approved separately).`,
   pair: `pair — pair this host with the hub's vault listener (once per host).
 
-Usage: pair <psk-token>
+Usage: pair [--identity <name>] <psk-token>
 
 The operator prints a token with \`pair <host-name>\` in the listener's tmux window.`,
   status: `status — show whether aac is installed and which listener connections are cached.
 
-Usage: status`,
+Usage: status [--identity <name>]`,
 };
 
-interface RunArgs { item: string; env: string[]; fields: string[]; reason: string | null; timeout: number; session?: string; command: string[] }
+export function validateIdentityName(raw: string): string {
+  const name = raw.trim();
+  if (!IDENTITY_NAME_RE.test(name) || name === '.' || name === '..' || name.includes('..')) {
+    throw new Error('--identity must be 1-64 letters, digits, dots, dashes or underscores');
+  }
+  return name;
+}
+
+/** Resolves and creates (0700) the isolated XDG_CONFIG_HOME for a named aac identity. */
+export function resolveIdentityConfigHome(identity: string, env: NodeJS.ProcessEnv = process.env): string {
+  const valid = validateIdentityName(identity);
+  const explicitHome = (env.PI_DISH_VAULT_IDENTITY_HOME || '').trim();
+  const baseDir = (env.PI_DISH_VAULT_IDENTITIES_DIR || '').trim()
+    || path.join(os.homedir(), '.pi', 'dish', 'vault', 'identities');
+  const dir = explicitHome ? path.resolve(explicitHome) : path.join(path.resolve(baseDir), valid);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+  return dir;
+}
+
+function aacEnvFor(identity: string | null): NodeJS.ProcessEnv {
+  if (!identity) return process.env;
+  return { ...process.env, XDG_CONFIG_HOME: resolveIdentityConfigHome(identity, process.env) };
+}
+
+/** Validates a bare single-line http(s)://host[:port] origin (matching vault-approvals parseOrigin). */
+export function normalizeOriginFlag(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > MAX_ORIGIN_CHARS || /[\u0000-\u0020\u007f]/.test(trimmed)) {
+    throw new Error('--origin must be a bare http(s) origin (scheme://host[:port])');
+  }
+  if (!/^https?:\/\//i.test(trimmed) || trimmed.includes('?') || trimmed.includes('#')
+      || trimmed.includes('@') || trimmed.includes('\\') || trimmed.includes('*') || /%2a/i.test(trimmed)) {
+    throw new Error('--origin must be a bare http(s) origin (scheme://host[:port])');
+  }
+  let parsed: URL;
+  try { parsed = new URL(trimmed); } catch {
+    throw new Error('--origin must be a bare http(s) origin (scheme://host[:port])');
+  }
+  if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+      || parsed.username || parsed.password || parsed.search || parsed.hash
+      || parsed.pathname !== '/' || !parsed.hostname || parsed.hostname.includes('*') || parsed.origin === 'null') {
+    throw new Error('--origin must be a bare http(s) origin (scheme://host[:port])');
+  }
+  const afterScheme = trimmed.slice(parsed.protocol.length + 2);
+  if (afterScheme.includes('/')) {
+    throw new Error('--origin must be a bare http(s) origin (scheme://host[:port])');
+  }
+  return parsed.origin;
+}
+
+interface RunArgs {
+  item: string;
+  env: string[];
+  fields: string[];
+  origin: string | null;
+  identity: string | null;
+  reason: string | null;
+  timeout: number;
+  session?: string;
+  command: string[];
+}
 
 /** `run` arguments; everything after `--` is the command. */
 export function parseRunArgs(argv: readonly string[]): RunArgs {
   const split = argv.indexOf('--');
   if (split < 0 || split === argv.length - 1) throw new Error('give the command after --');
   const flags = argv.slice(0, split);
-  const args: RunArgs = { item: '', env: [], fields: [], reason: null, timeout: DEFAULT_TIMEOUT_SEC, command: argv.slice(split + 1) };
+  const args: RunArgs = {
+    item: '', env: [], fields: [], origin: null, identity: null, reason: null,
+    timeout: DEFAULT_TIMEOUT_SEC, command: argv.slice(split + 1),
+  };
   for (let i = 0; i < flags.length; i++) {
     const flag = flags[i];
     const value = flags[i + 1];
     if (value === undefined) throw new Error(`${flag} needs a value`);
     i++;
     if (flag === '--item') args.item = value;
+    else if (flag === '--origin') args.origin = normalizeOriginFlag(value);
+    else if (flag === '--identity') args.identity = mergeIdentity(args.identity, validateIdentityName(value));
     else if (flag === '--reason') args.reason = value;
     else if (flag === '--session') args.session = value;
     else if (flag === '--timeout') {
@@ -132,17 +205,25 @@ export function parseRunArgs(argv: readonly string[]): RunArgs {
 
 export interface SessionClaim { ref: string; name: string | null; host: string | null }
 
-export function encodeEnvelope(body: { item: string; fields: readonly string[]; reason: string | null; session: SessionClaim | null; timeoutSec: number }): string {
+export function encodeEnvelope(body: {
+  item: string;
+  fields: readonly string[];
+  origin?: string | null;
+  reason: string | null;
+  session: SessionClaim | null;
+  timeoutSec: number;
+}): string {
   const payload: Record<string, unknown> = { item: body.item, fields: body.fields, timeoutSec: body.timeoutSec };
+  if (body.origin) payload.origin = body.origin;
   if (body.reason) payload.reason = body.reason;
   if (body.session) payload.session = body.session;
   return ENVELOPE_PREFIX + Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
-interface CreateArgs { name: string; username: string | null; uri: string | null; length: number; reason: string | null; timeout: number; session?: string; json: boolean }
+interface CreateArgs { name: string; username: string | null; uri: string | null; length: number; identity: string | null; reason: string | null; timeout: number; session?: string; json: boolean }
 
 export function parseCreateArgs(argv: readonly string[]): CreateArgs {
-  const args: CreateArgs = { name: '', username: null, uri: null, length: DEFAULT_LENGTH, reason: null, timeout: DEFAULT_TIMEOUT_SEC, json: false };
+  const args: CreateArgs = { name: '', username: null, uri: null, length: DEFAULT_LENGTH, identity: null, reason: null, timeout: DEFAULT_TIMEOUT_SEC, json: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === '--json') { args.json = true; continue; }
@@ -152,6 +233,7 @@ export function parseCreateArgs(argv: readonly string[]): CreateArgs {
     if (flag === '--name') args.name = value.trim();
     else if (flag === '--username') args.username = value.trim() || null;
     else if (flag === '--uri') args.uri = value.trim() || null;
+    else if (flag === '--identity') args.identity = mergeIdentity(args.identity, validateIdentityName(value));
     else if (flag === '--reason') args.reason = value.trim() || null;
     else if (flag === '--session') args.session = value;
     else if (flag === '--length') {
@@ -241,10 +323,12 @@ const AAC_REFUSED = 4;
 /** The listener answers `CHECK_PREFIX` + the request payload itself, without approval: `{"ok":true}` or `{"error":"<why>"}`. */
 export const CHECK_PREFIX = 'pidish-vault:check:';
 
-async function run(argv: readonly string[]): Promise<void> {
+async function run(argv: readonly string[], globalIdentity: string | null): Promise<void> {
   const args = parseRunArgs(argv);
+  const identity = mergeIdentity(globalIdentity, args.identity);
+  const env = aacEnvFor(identity);
   const envelope = encodeEnvelope({
-    item: args.item.trim(), fields: args.fields, reason: args.reason?.trim() || null,
+    item: args.item.trim(), fields: args.fields, origin: args.origin, reason: args.reason?.trim() || null,
     session: await sessionClaim(args.session), timeoutSec: args.timeout,
   });
   const invocation = aacInvocation(args, __filename);
@@ -253,20 +337,22 @@ async function run(argv: readonly string[]): Promise<void> {
     ...invocation.env.flatMap(mapping => ['--env', mapping]), '--', ...invocation.command]);
   process.stderr.write(`pi-dish-vault: waiting for approval of ${args.item} in pi-dish (up to ${args.timeout}s)…\n`);
   const started = Date.now();
-  const child = spawn(aacBin(), aacArgs, { stdio: 'inherit' });
+  const child = spawn(aacBin(), aacArgs, { stdio: 'inherit', env });
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => child.kill(signal));
   child.on('error', error => fail(`could not run ${aacBin()}: ${error.message} (install aac v0.11.0 or set AAC_BIN)`));
   child.on('exit', (code, signal) => {
-    if (code === AAC_REFUSED) process.stderr.write(`pi-dish-vault: ${explainRefusal(envelope, args.timeout, (Date.now() - started) / 1000)}\n`);
+    if (code === AAC_REFUSED) process.stderr.write(`pi-dish-vault: ${explainRefusal(envelope, args.timeout, (Date.now() - started) / 1000, env)}\n`);
     process.exit(signal ? 1 : code ?? 1);
   });
 }
 
-async function create(argv: readonly string[]): Promise<void> {
+async function create(argv: readonly string[], globalIdentity: string | null): Promise<void> {
   const args = parseCreateArgs(argv);
+  const identity = mergeIdentity(globalIdentity, args.identity);
+  const env = aacEnvFor(identity);
   const probe = encodeCreate({ ...args, session: await sessionClaim(args.session), timeoutSec: args.timeout });
   process.stderr.write(`pi-dish-vault: waiting for approval to create ${args.name} in pi-dish (up to ${args.timeout}s)…\n`);
-  const result = spawnSync(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', String(args.timeout)]), { encoding: 'utf8' });
+  const result = spawnSync(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', String(args.timeout)]), { encoding: 'utf8', env });
   if (result.error) return fail(`could not run ${aacBin()}: ${result.error.message} (install aac v0.11.0 or set AAC_BIN)`);
   if (result.status === AAC_REFUSED) return fail(`not created: denied in pi-dish, or no decision within ${args.timeout}s`);
   if (result.status !== 0) {
@@ -284,9 +370,9 @@ async function create(argv: readonly string[]): Promise<void> {
 }
 
 /** aac says only "Request denied"; ask the listener whether it refused the request before approval, and why. */
-function explainRefusal(envelope: string, timeoutSec: number, elapsedSec: number): string {
+function explainRefusal(envelope: string, timeoutSec: number, elapsedSec: number, env: NodeJS.ProcessEnv): string {
   const probe = CHECK_PREFIX + envelope.slice(ENVELOPE_PREFIX.length);
-  const result = spawnSync(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), { encoding: 'utf8' });
+  const result = spawnSync(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), { encoding: 'utf8', env });
   let verdict: Record<string, unknown> = {};
   try {
     const notes = core.record(core.record(JSON.parse(result.stdout)).credential ?? {}).notes;
@@ -326,8 +412,8 @@ function inject(argv: readonly string[]): void {
 export const PAIR_PROBE = 'pidish-vault:pair';
 
 /** Run aac, turning a spawn error or a non-zero status into one attributable line. */
-function runAac(argv: string[], verb: string): string | null {
-  const result = spawnSync(aacBin(), argv, { encoding: 'utf8' });
+function runAac(argv: string[], verb: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const result = spawnSync(aacBin(), argv, { encoding: 'utf8', env });
   if (result.error) {
     fail(`could not run ${aacBin()}: ${result.error.message}`);
     return null;
@@ -340,9 +426,35 @@ function runAac(argv: string[], verb: string): string | null {
   return result.stdout;
 }
 
-function pair(token: string | undefined): void {
-  if (!token) return fail('usage: pair <psk-token>');
-  const paired = runAac(aacArgv(['connect', '--token', token, '--domain', PAIR_PROBE, '--output', 'json', '--timeout', '30']), 'pairing');
+function mergeIdentity(globalIdentity: string | null, localIdentity: string | null): string | null {
+  if (globalIdentity && localIdentity && globalIdentity !== localIdentity) {
+    throw new Error('--identity cannot be specified with different values');
+  }
+  return localIdentity ?? globalIdentity;
+}
+
+function takeIdentityFlag(argv: readonly string[]): { identity: string | null; rest: string[] } {
+  let identity: string | null = null;
+  const rest: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--identity') {
+      const value = argv[i + 1];
+      if (value === undefined) throw new Error('--identity needs a value');
+      identity = mergeIdentity(identity, validateIdentityName(value));
+      i++;
+      continue;
+    }
+    rest.push(argv[i]!);
+  }
+  return { identity, rest };
+}
+
+function pair(argv: readonly string[], globalIdentity: string | null): void {
+  const parsed = takeIdentityFlag(argv);
+  const identity = mergeIdentity(globalIdentity, parsed.identity);
+  const token = parsed.rest[0];
+  if (!token || parsed.rest.length > 1) return fail('usage: pair [--identity <name>] <psk-token>');
+  const paired = runAac(aacArgv(['connect', '--token', token, '--domain', PAIR_PROBE, '--output', 'json', '--timeout', '30']), 'pairing', aacEnvFor(identity));
   if (paired === null) return;
   process.stdout.write('Paired with the vault listener. `status` lists the cached connection.\n');
 }
@@ -368,11 +480,14 @@ export function decodeSearchReply(stdout: string): { results: SearchEntry[]; tru
   return { results, truncated: listing.truncated === true };
 }
 
-function search(args: readonly string[]): void {
+function search(argv: readonly string[], globalIdentity: string | null): void {
+  const parsed = takeIdentityFlag(argv);
+  const identity = mergeIdentity(globalIdentity, parsed.identity);
+  const args = parsed.rest;
   const json = args.includes('--json');
   const text = args.filter(arg => arg !== '--json').join(' ').trim();
   const probe = SEARCH_PREFIX + Buffer.from(text, 'utf8').toString('base64url');
-  const reply = runAac(aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), 'search');
+  const reply = runAac(aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), 'search', aacEnvFor(identity));
   if (reply === null) return;
   const listing = decodeSearchReply(reply);
   if (json) return core.print(listing, true);
@@ -387,13 +502,19 @@ function search(args: readonly string[]): void {
 /** The listener answers this probe itself: `bw sync`, then an empty credential. */
 export const SYNC_PROBE = 'pidish-vault:sync';
 
-function sync(): void {
-  if (runAac(aacArgv(['--output', 'json', 'connect', '--domain', SYNC_PROBE, '--timeout', '60']), 'sync') === null) return;
+function sync(argv: readonly string[], globalIdentity: string | null): void {
+  const parsed = takeIdentityFlag(argv);
+  const identity = mergeIdentity(globalIdentity, parsed.identity);
+  if (parsed.rest.length) return fail(`unknown option: ${parsed.rest[0]}`);
+  if (runAac(aacArgv(['--output', 'json', 'connect', '--domain', SYNC_PROBE, '--timeout', '60']), 'sync', aacEnvFor(identity)) === null) return;
   process.stdout.write('Vault synced.\n');
 }
 
-function status(): void {
-  const result = spawnSync(aacBin(), ['connections', 'list'], { encoding: 'utf8' });
+function status(argv: readonly string[], globalIdentity: string | null): void {
+  const parsed = takeIdentityFlag(argv);
+  const identity = mergeIdentity(globalIdentity, parsed.identity);
+  if (parsed.rest.length) return fail(`unknown option: ${parsed.rest[0]}`);
+  const result = spawnSync(aacBin(), ['connections', 'list'], { encoding: 'utf8', env: aacEnvFor(identity) });
   if (result.error) return fail(`aac is not installed (${result.error.message}); install aac v0.11.0 or set AAC_BIN`);
   process.stdout.write(result.stdout || '');
   if (result.status !== 0) process.stderr.write(result.stderr || '');
@@ -401,7 +522,21 @@ function status(): void {
 }
 
 async function main(): Promise<void> {
-  const [command, ...rest] = process.argv.slice(2);
+  const rawArgv = process.argv.slice(2);
+  let globalIdentity: string | null = null;
+  let offset = 0;
+  try {
+    while (offset < rawArgv.length && rawArgv[offset] === '--identity') {
+      const value = rawArgv[offset + 1];
+      if (value === undefined) throw new Error('--identity needs a value');
+      globalIdentity = mergeIdentity(globalIdentity, validateIdentityName(value));
+      offset += 2;
+    }
+  } catch (error) {
+    fail(core.errorMessage(error));
+    return;
+  }
+  const [command, ...rest] = rawArgv.slice(offset);
   if (!command || command === '--help' || command === '-h' || command === 'help') {
     const topic = command === 'help' ? rest[0] : undefined;
     if (topic && HELP[topic]) return void process.stdout.write(HELP[topic] + '\n');
@@ -409,13 +544,13 @@ async function main(): Promise<void> {
   }
   if (rest.includes('--help') && HELP[command] && !rest.includes('--')) return void process.stdout.write(HELP[command] + '\n');
   try {
-    if (command === 'run') return await run(rest);
-    if (command === 'create') return await create(rest);
+    if (command === 'run') return await run(rest, globalIdentity);
+    if (command === 'create') return await create(rest, globalIdentity);
     if (command === INJECT) return inject(rest);
-    if (command === 'pair') return pair(rest[0]);
-    if (command === 'search') return search(rest);
-    if (command === 'sync') return sync();
-    if (command === 'status') return status();
+    if (command === 'pair') return pair(rest, globalIdentity);
+    if (command === 'search') return search(rest, globalIdentity);
+    if (command === 'sync') return sync(rest, globalIdentity);
+    if (command === 'status') return status(rest, globalIdentity);
     fail(`unknown command: ${command} (run --help for the command list)`);
   } catch (error) {
     fail(core.errorMessage(error));

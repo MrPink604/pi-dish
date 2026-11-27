@@ -80,6 +80,8 @@ export interface VaultRequest {
     readonly folder: string | null;
     /** Optional target origin (`scheme://host[:port]`) for origin-checked requests. */
     readonly origin: string | null;
+    /** Optional top-level page origin when the target form lives inside a cross-origin frame. */
+    readonly topOrigin: string | null;
     /** Whether `origin` matched an `https:` stored URI of the item. */
     readonly originMatch: VaultOriginMatch;
     /** False for `create` or when device policy disables 15-minute windows. */
